@@ -27,6 +27,10 @@ label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px}
 textarea,input[type=text]{width:100%;background:#08101a;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font:inherit}
 textarea{min-height:120px;resize:vertical}
 textarea:focus,input:focus{outline:none;border-color:#34507a}
+.roles{display:grid;gap:6px}
+.rr{display:grid;grid-template-columns:44px 1fr;align-items:center}
+.rr small{color:var(--dim);font-size:12px}
+select{width:100%;background:#08101a;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 8px;font:inherit}
 .row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 button{font:inherit;font-weight:700;border:1px solid var(--line);background:#12202f;color:var(--text);padding:9px 16px;border-radius:9px;cursor:pointer}
 button:hover:not(:disabled){border-color:#3a5b88}
@@ -62,8 +66,13 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 .node.active .orb::after{animation:spin 6s linear infinite}
 @keyframes pulse{50%{transform:scale(1.06)}} @keyframes spin{to{transform:rotate(360deg)}}
 .node .role{margin-top:12px;font-size:11px;letter-spacing:.16em;color:var(--dim);font-weight:700}
-.node .who{font-size:20px;font-weight:800;color:var(--c)}
+.node .who{font-size:20px;font-weight:800;color:var(--c);margin-top:16px}
 .node .st{font-size:12px;color:var(--dim)}
+.node .roles-of{font-size:12px;color:var(--text);margin-top:2px}
+.node.idle .orb{opacity:.45;filter:saturate(.6)}
+.node.missing .orb{opacity:.25;filter:grayscale(1)}
+.node.missing .orb::after{border-color:#6b2a36}
+.node.quota .orb{box-shadow:0 0 26px #ff6b6b66}
 .pool{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px}
 .chip{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;color:var(--dim);background:#0b141f}
 .chip b{color:var(--text)} .chip.bad{border-color:#6b2a36;color:#ffb3bd} .chip.ghost{border-style:dashed;color:var(--faint)}
@@ -87,7 +96,7 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 </head>
 <body>
 <header>
-  <div class="brand">SOLOMON<small>두 AI가 서로 검증하며 만듭니다</small></div>
+  <div class="brand">SOLOMON<small>여러 AI가 서로 검증하며 만듭니다</small></div>
   <div class="spacer"></div>
   <div><span class="dot" id="dot"></span><span id="conn">연결 중…</span></div>
 </header>
@@ -101,6 +110,13 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
       <label for="project">프로젝트 폴더 (git 저장소, 커밋이 1개 이상)</label>
       <input type="text" id="project" list="projects" placeholder="/Users/…/프로젝트" autocomplete="off">
       <datalist id="projects"></datalist>
+      <label>역할 배정 — 어느 AI가 무엇을 맡을까요</label>
+      <div class="roles">
+        <div class="rr"><small>계획</small><select id="r-planner"></select></div>
+        <div class="rr"><small>구현</small><select id="r-builder"></select></div>
+        <div class="rr"><small>검수</small><select id="r-reviewer"></select></div>
+      </div>
+      <div class="hint" id="rolehint">구현과 검수는 서로 다른 AI여야 교차 검증이 됩니다.</div>
       <details>
         <summary>프로젝트 설정: 테스트 명령</summary>
         <label for="testcmd">이 프로젝트의 테스트 명령 (비우면 기본 설정, '없음'이면 테스트 없이)</label>
@@ -129,14 +145,7 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 
   <section class="col">
     <div class="stage" id="stage">
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-        <path class="edge" id="e-pb" d="M50 26 L22 70"/>
-        <path class="edge" id="e-br" d="M22 70 L78 70"/>
-        <path class="edge" id="e-rp" d="M78 70 L50 26"/>
-      </svg>
-      <div class="node" id="n-planner" style="left:50%;top:26%"></div>
-      <div class="node" id="n-builder" style="left:22%;top:70%"></div>
-      <div class="node" id="n-reviewer" style="left:78%;top:70%"></div>
+      <svg id="edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
     </div>
     <div class="pool" id="pool"></div>
     <div class="bar" id="bar"></div>
@@ -211,8 +220,26 @@ function clip(t, n){ return t.length > n ? t.slice(0, n) + "…" : t; }
 function fmt(sec){ if (sec == null) return "--:--"; sec = Math.max(0, Math.floor(sec)); const m = Math.floor(sec / 60), s = sec % 60; return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0"); }
 function num(n){ return Number(n || 0).toLocaleString("ko-KR"); }
 
+let rolesDirty = false;
+function fillRoleSelects(cur){
+  const want = (cur && cur.roles && Object.keys(cur.roles).length) ? cur.roles : state.roles;
+  ["planner", "builder", "reviewer"].forEach(role => {
+    const sel = $("r-" + role), keep = sel.value;
+    clear(sel);
+    state.providers.forEach(p => {
+      const o = el("option", "", pname(p.name) + (p.installed ? "" : " (미설치)") + (role === "builder" && !p.supports_write ? " (구현 불가)" : ""));
+      o.value = p.name; o.disabled = !p.installed || (role === "builder" && !p.supports_write); sel.appendChild(o);
+    });
+    const target = rolesDirty && keep ? keep : want[role];
+    if ([...sel.options].some(o => o.value === target && !o.disabled)) sel.value = target;
+    else { const first = [...sel.options].find(o => !o.disabled); if (first) sel.value = first.value; }
+  });
+  const b = $("r-builder").value, r = $("r-reviewer").value;
+  $("rolehint").textContent = b === r ? "⚠ 구현과 검수가 같은 AI입니다. 교차 검증이 되지 않으니 다르게 고르세요." : "구현과 검수는 서로 다른 AI여야 교차 검증이 됩니다.";
+}
 function render(){
   const cur = state.current, job = state.job;
+  fillRoleSelects(cur);
   // command card
   const dl = $("projects"); clear(dl); state.projects.forEach(p => { const o = el("option"); o.value = p; dl.appendChild(o); });
   const pi = $("project");
@@ -264,23 +291,47 @@ function render(){
   tick();
 }
 
+const nodeEls = {}, edgeEls = {};
+function layout(n){  // positions in % of the stage: 1 centre, 2 side by side, 3+ on a circle starting at the top
+  if (n === 1) return [[50, 50]];
+  if (n === 2) return [[28, 52], [72, 52]];
+  return Array.from({length: n}, (_, i) => { const a = (-90 + i * 360 / n) * Math.PI / 180; return [50 + 32 * Math.cos(a), 52 + 30 * Math.sin(a)]; });
+}
+function currentRoles(cur){
+  if (cur && cur.roles && Object.keys(cur.roles).length && (cur.live || selectedRun || !rolesDirty)) return cur.roles;
+  return {planner: $("r-planner").value, builder: $("r-builder").value, reviewer: $("r-reviewer").value};
+}
 function renderStage(cur){
-  const roles = (cur && cur.roles && Object.keys(cur.roles).length) ? cur.roles : state.roles;
-  const active = cur && cur.live && cur.active ? cur.active.role : null;
-  ["planner", "builder", "reviewer"].forEach(role => {
-    const n = $("n-" + role), prov = roles[role] || "?";
-    clear(n); n.className = "node" + (role === active ? " active" : ""); n.style.setProperty("--c", pcolor(prov));
-    n.appendChild(el("div", "orb"));
-    n.appendChild(el("div", "role", ROLE_LABEL[role]));
-    n.appendChild(el("div", "who", pname(prov)));
-    const done = cur ? cur.calls.filter(c => c.role === role && c.ok).length : 0;
-    n.appendChild(el("div", "st", role === active ? "작업 중" : done ? done + "회 완료" : "대기"));
+  const roles = currentRoles(cur);
+  const active = cur && cur.live && cur.active ? cur.active : null;
+  const provs = state.providers, pos = layout(provs.length), stage = $("stage"), edges = $("edges");
+  const live = new Set(provs.map(p => p.name));
+  Object.keys(nodeEls).forEach(k => { if (!live.has(k)){ nodeEls[k].remove(); delete nodeEls[k]; } });
+  provs.forEach((p, i) => {
+    let n = nodeEls[p.name];
+    if (!n){ n = el("div", "node"); n.appendChild(el("div", "orb")); n.appendChild(el("div", "who")); n.appendChild(el("div", "roles-of")); n.appendChild(el("div", "st")); stage.appendChild(n); nodeEls[p.name] = n; }
+    n.style.left = pos[i][0] + "%"; n.style.top = pos[i][1] + "%"; n.style.setProperty("--c", pcolor(p.name));
+    const mine = ["planner", "builder", "reviewer"].filter(r => roles[r] === p.name);
+    const quota = cur && cur.quota_providers.includes(p.name);
+    const isActive = active && active.provider === p.name;
+    const calls = cur ? cur.calls.filter(c => c.provider === p.name && c.ok).length : 0;
+    n.className = "node" + (isActive ? " active" : "") + (!p.installed ? " missing" : (!mine.length && !calls && !isActive ? " idle" : "")) + (quota ? " quota" : "");
+    n.children[1].textContent = pname(p.name);
+    n.children[2].textContent = mine.length ? mine.map(r => ROLE_KO[r]).join(" · ") : "역할 없음";
+    n.children[3].textContent = !p.installed ? "설치 안 됨" : quota ? "한도 소진" : isActive ? ROLE_KO[active.role] + " 작업 중" : calls ? calls + "회 완료" : "대기";
   });
-  const hot = {planner:["e-pb","e-rp"], builder:["e-pb","e-br"], reviewer:["e-br","e-rp"]}[active] || [];
-  ["e-pb","e-br","e-rp"].forEach(id => $(id).setAttribute("class", "edge" + (hot.includes(id) ? " hot" : "")));
+  // edges between every pair of AIs; the ones touching the working AI flow
+  while (edges.firstChild) edges.removeChild(edges.firstChild);
+  for (let i = 0; i < provs.length; i++) for (let j = i + 1; j < provs.length; j++){
+    const hot = active && (active.provider === provs[i].name || active.provider === provs[j].name);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M" + pos[i][0] + " " + pos[i][1] + " L" + pos[j][0] + " " + pos[j][1]);
+    path.setAttribute("class", "edge" + (hot ? " hot" : ""));
+    edges.appendChild(path);
+  }
 
   const pool = $("pool"); clear(pool);
-  state.providers.forEach(p => {
+  provs.forEach(p => {
     const bad = cur && cur.quota_providers.includes(p.name);
     const c = el("span", "chip" + (bad || !p.installed ? " bad" : ""));
     c.appendChild(el("b", "", pname(p.name)));
@@ -346,7 +397,8 @@ $("run").onclick = async () => {
   if (!goal) return toast("목표를 입력하세요.", true);
   if (!project) return toast("프로젝트 폴더를 입력하세요.", true);
   busy = true; $("run").disabled = true;
-  try { await api("/api/run", {goal, project}); selectedProject = project; selectedRun = null; toast("실행을 시작했습니다."); }
+  const roles = {planner: $("r-planner").value, builder: $("r-builder").value, reviewer: $("r-reviewer").value};
+  try { await api("/api/run", {goal, project, roles}); rolesDirty = false; selectedProject = project; selectedRun = null; toast("실행을 시작했습니다."); }
   catch (e) { toast(e.message, true); }
   busy = false; poll();
 };
@@ -367,6 +419,7 @@ $("savetest").onclick = async () => {
   catch (e) { toast(e.message, true); }
   poll();
 };
+["r-planner", "r-builder", "r-reviewer"].forEach(id => $(id).addEventListener("change", () => { rolesDirty = true; if (state) render(); }));
 $("project").addEventListener("change", () => { const v = $("project").value.trim(); if (state && state.projects.includes(v)){ selectedProject = v; selectedRun = null; poll(); } });
 
 poll(); setInterval(poll, 1500); setInterval(tick, 1000);

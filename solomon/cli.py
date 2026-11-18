@@ -52,6 +52,10 @@ def _run(args: argparse.Namespace) -> int:
     if args.on_quota:
         settings.on_quota = args.on_quota
         settings.validate()
+    for role in ("planner", "builder", "reviewer"):
+        chosen = getattr(args, role, None)
+        if chosen:
+            settings.roles[role] = chosen  # validated by the Orchestrator (known AI, builder can write, independence)
     if args.no_tests:
         settings.test_command = None
     elif args.test_command:
@@ -145,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--apply", action="store_true", help="apply the passed patch to the working tree")
     run.add_argument("--keep-worktree", action="store_true", help="keep the isolated worktree for inspection")
     run.add_argument("--on-quota", choices=["stop", "wait"], help="override loop.on_quota")
+    for role in ("planner", "builder", "reviewer"):
+        run.add_argument(f"--{role}", help=f"which AI takes the {role} role for this run (overrides the config)")
     run.add_argument("--test-command", help="test command for this run, e.g. 'npm test' (overrides the config)")
     run.add_argument("--no-tests", action="store_true", help="run without automatic tests (the result is UNVERIFIED)")
     run.set_defaults(func=_run)

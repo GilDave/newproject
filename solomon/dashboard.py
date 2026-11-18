@@ -139,7 +139,11 @@ class DashboardApp:
         now = time.time()
         if now - self._providers_cache[0] > 20:
             providers = build_providers(self.settings)
-            info = [{"name": n, "installed": bool(providers[n].locate())} for n in PROVIDER_CLASSES]  # type: ignore[attr-defined]
+            info = [
+                {"name": n, "installed": bool(providers[n].locate()),  # type: ignore[attr-defined]
+                 "supports_write": bool(PROVIDER_CLASSES[n].supports_write)}
+                for n in PROVIDER_CLASSES
+            ]
             self._providers_cache = (now, info)
         return self._providers_cache[1]
 
@@ -199,12 +203,35 @@ class DashboardApp:
         return state
 
     # ------------------------------------------------------------- commands
-    def start_run(self, goal: str, project: str) -> dict:
+    def _role_args(self, roles: Optional[dict]) -> list[str]:
+        """Validate the roles chosen on the page and turn them into `solomon run` flags."""
+        if not roles:
+            return []
+        if not isinstance(roles, dict):
+            raise ApiError(400, "역할 배정 형식이 올바르지 않습니다.")
+        args: list[str] = []
+        effective = dict(self.settings.roles)
+        for role in ("planner", "builder", "reviewer"):
+            name = roles.get(role)
+            if name is None:
+                continue
+            if name not in PROVIDER_CLASSES:
+                raise ApiError(400, f"알 수 없는 AI입니다: {name}")
+            effective[role] = name
+            args += [f"--{role}", name]
+        if not PROVIDER_CLASSES[effective["builder"]].supports_write:
+            raise ApiError(400, f"{effective['builder']}은(는) 구현을 맡을 수 없습니다 (계획·검수만 가능). 구현은 다른 AI로 고르세요.")
+        if effective["builder"] == effective["reviewer"] and not self.settings.allow_same_provider:
+            raise ApiError(400, "구현과 검수는 서로 다른 AI여야 합니다 (같은 AI가 자기 코드를 검수하면 교차 검증이 되지 않습니다).")
+        return args
+
+    def start_run(self, goal: str, project: str, roles: Optional[dict] = None) -> dict:
         goal = (goal or "").strip()
         if not goal:
             raise ApiError(400, "목표를 입력하세요.")
         if len(goal) > MAX_GOAL:
             raise ApiError(400, f"목표가 너무 깁니다 ({MAX_GOAL}자 이하).")
+        role_args = self._role_args(roles)
         if (project or "") not in self._projects:
             try:
                 project = self.add_project(project or "")
@@ -216,6 +243,7 @@ class DashboardApp:
             args = [sys.executable, "-m", "solomon", "run", goal, "--project", project]
             if self.config_path:
                 args += ["--config", self.config_path]
+            args += role_args
             cfg = self._projects[project]
             if "test_command" in cfg:
                 args += ["--test-command", shlex.join(cfg["test_command"])] if cfg["test_command"] else ["--no-tests"]
@@ -340,7 +368,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
             try:
                 path = urlparse(self.path).path
                 if path == "/api/run":
-                    return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")))})
+                    return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"))})
                 if path == "/api/stop":
                     return self._json(200, {"job": app.stop_run()})
                 if path == "/api/apply":

@@ -45,11 +45,21 @@ solomon run "..." --project ~/work/my-app --apply           # 통과한 패치�
 결과는 `<project>/.solomon/runs/<run_id>/` 에 남습니다: `events.jsonl`(단계별 로그), `result.json`, `result.patch`(통과 시), `last_attempt.patch`(마지막 실패 시도).
 
 ## 대시보드 (명령을 내리고 진행을 보는 웹 화면)
+**한 번에 띄우기** (가상환경 켜기, 경로 설정, AI CLI 점검을 알아서 합니다):
+```bash
+bash scripts/start_dashboard.sh                         # 기억해 둔 프로젝트로 시작, 브라우저가 열림
+bash scripts/start_dashboard.sh --project ~/work/ena-bot
+bash scripts/start_dashboard.sh --pull                  # git pull 한 뒤 시작
+```
+Finder에서 **`Start-Solomon.command`를 더블클릭**해도 터미널이 열리며 같은 일을 합니다 (실행 권한이 없다는 안내가 나오면 `chmod +x Start-Solomon.command scripts/start_dashboard.sh`). 터미널 창을 닫으면 대시보드도 종료됩니다.
+프로젝트는 한 번 지정하면 `~/.solomon/dashboard.json`에 기억합니다.
+
+직접 실행하려면:
 ```bash
 solomon dashboard --project /Users/dave_gil/00.Claud/my-app
 ```
 터미널에 `http://127.0.0.1:8765/?t=...` 주소가 나오고 브라우저가 열립니다. 이 컴퓨터에서만 열리며, 주소의 `t=` 값이 접속 키입니다.
-- **명령:** 목표(에러 로그를 통째로 붙여 넣어도 됨)와 프로젝트 폴더를 넣고 ▶ 실행. ■ 중지는 돌고 있는 AI 호출까지 끝내고 `STOPPED`로 기록합니다.
+- **명령:** 목표(에러 로그를 통째로 붙여 넣어도 됨)와 프로젝트 폴더를 넣고 ▶ 실행. **역할 배정**(계획·구현·검수를 어느 AI가 맡을지)은 화면의 선택창에서 실행마다 고릅니다. 설치된 AI는 모두 가운데에 나타나고, 구현은 같은 AI가 검수까지 하는 조합과 쓰기가 안 되는 AI(Antigravity)는 막힙니다. 명령줄에서는 `solomon run ... --planner claude --builder codex --reviewer antigravity`. ■ 중지는 돌고 있는 AI 호출까지 끝내고 `STOPPED`로 기록합니다.
 - **보는 것:** 지금 누가 무엇을 하는지, 세 역할(계획·구현·검수)과 담당 AI, 단계 바, AI별 호출·시간·토큰, 진행 기록, 최근 호출, 결과 요약.
 - **원본 보호:** 작업은 격리된 복사본에서만 이뤄집니다. 통과한 패치는 **원본에 적용** 버튼을 눌러야 반영되며 커밋은 하지 않습니다.
 - **프로젝트별 테스트 명령:** 화면의 "프로젝트 설정"에서 지정합니다 (예: `npm test`). `없음`이면 테스트 없이 실행하고 결과는 미검증으로 표시됩니다.
