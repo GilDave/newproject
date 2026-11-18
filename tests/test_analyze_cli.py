@@ -26,8 +26,12 @@ def test_analyze_command_prints_a_summary_and_writes_the_report(tmp_path, monkey
 
 
 def test_analyze_command_rejects_bad_input_with_a_message(tmp_path, capsys):
-    assert cli.main(["analyze", "--project", str(tmp_path)]) == 2  # not a git repository
-    assert "not a git repository" in capsys.readouterr().err
+    assert cli.main(["analyze", "--project", str(tmp_path / "nope")]) == 2
+    assert "does not exist" in capsys.readouterr().err
+    empty = tmp_path / "empty-folder"
+    empty.mkdir()
+    assert cli.main(["analyze", "--project", str(empty)]) == 1  # a folder with nothing to read is a failed analysis, not a crash
+    assert "텍스트 파일이 없습니다" in capsys.readouterr().out
     repo = make_bot_repo(tmp_path)
     assert cli.main(["analyze", "--project", str(repo), "--ais", "nope"]) == 2
     assert "unknown AI" in capsys.readouterr().err
@@ -64,3 +68,12 @@ def test_sigterm_stops_an_analysis_cleanly_and_leaves_no_ai_process(tmp_path):
     finally:
         if proc.poll() is None:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+
+
+def test_analyze_command_works_on_a_folder_that_is_not_a_git_repository(tmp_path, monkeypatch, capsys):
+    from test_analysis import make_plain_project
+
+    root = make_plain_project(tmp_path)
+    monkeypatch.setattr(analysis, "build_providers", lambda settings: {"claude": Fake("claude", [good(file="main.py", quote='print("hi")', line=2)])})
+    assert cli.main(["analyze", "--project", str(root), "--ais", "claude"]) == 0
+    assert "(folder)" in capsys.readouterr().out

@@ -77,7 +77,8 @@ solomon dashboard --project /Users/dave_gil/00.Claud/my-app
 solomon analyze --project /Users/dave_gil/00.Claud/01.ena-bot --focus "시작할 때 죽을 수 있는 곳 위주로"
 solomon analyze --project ~/work/app --ais claude,codex      # 참여 AI 고르기 (기본: 설치된 모두)
 ```
-- **원본은 절대 바뀌지 않습니다.** Claude는 도구 없이, Codex는 읽기 전용 샌드박스에서, Antigravity는 빈 폴더에서 실행하고, 파일 내용은 프롬프트에 담아 보냅니다.
+- **git 저장소가 아니어도 됩니다.** 분석은 아무 폴더나 읽습니다(git 저장소면 `.gitignore`를 따르고, 아니면 `node_modules`·숨김 폴더·심볼릭 링크를 건너뜁니다). 코드를 고치는 **개선은 git 저장소(커밋 1개 이상)가 필요**합니다. 분석 기록은 프로젝트 안의 `.solomon/` 폴더에 남습니다.
+- **원본은 절대 바뀌지 않습니다.** 파일 내용은 프롬프트에 담아 보내고, **모든 AI를 프로젝트가 아닌 빈 임시 폴더에서** 실행하므로 AI가 프로젝트의 다른 파일(`.env` 등)을 직접 열어 볼 수 없습니다. 그 위에 Claude는 도구 없이, Codex는 읽기 전용 샌드박스에서, Antigravity는 전용 빈 폴더에서 실행합니다.
 - **비밀은 보내지 않습니다.** `.env`, `*.pem`, `*.key` 같은 파일은 내용 없이 이름만 남기고, 토큰·API 키·비밀번호처럼 보이는 값(텔레그램·디스코드·OpenAI·GitHub·AWS·슬랙 토큰, 비공개 키, `TOKEN = "..."` 형태)은 `<redacted>`로 가립니다. 가린 개수는 보고서에 적힙니다.
 - **큰 프로젝트는 예산 안에서 고릅니다** (README·설정·진입점 먼저, 테스트는 나중). 분석한 파일 수와 **제외된 파일과 이유**가 보고서에 적힙니다.
 - AI는 **각자 독립적으로 병렬 분석**하고, 같은 위치를 여러 AI가 지적하면 "N/M 동의"로 묶어 보여줍니다.

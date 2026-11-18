@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -78,8 +79,12 @@ class SourceFile:
     truncated: bool = False
 
 
+MAX_SCAN = 20_000  # a plain folder this big is probably not a project (a home folder?): stop looking
+
+
 @dataclass
 class Collected:
+    mode: str = "git"  # git | folder | folder-truncated
     files: list[SourceFile] = field(default_factory=list)
     excluded: list[tuple[str, str]] = field(default_factory=list)  # (path, reason)
     total_files: int = 0
@@ -110,10 +115,36 @@ def _rank(path: str, size: int) -> tuple:
     return (2, 0, depth, size)
 
 
+def _list_files(project: Path) -> tuple[list[str], str, list[str]]:
+    """The project's files. In a git repository: tracked plus untracked-but-not-ignored (so .gitignore is respected).
+    In a plain folder: a walk that skips dependency/build/hidden folders and symlinks."""
+    inside = gitops.git(["rev-parse", "--is-inside-work-tree"], project, check=False)
+    if inside.returncode == 0 and inside.stdout.strip() == "true":
+        listed = gitops.git(["ls-files", "--cached", "--others", "--exclude-standard"], project).stdout.splitlines()
+        return sorted({p for p in listed if p}), "git", []
+    files: list[str] = []
+    skipped: list[str] = []  # whole folders left out, so the report can say so instead of hiding them
+    for root, dirs, names in os.walk(project):
+        for d in dirs:
+            if d in SKIP_DIRS or d.startswith("."):
+                skipped.append((Path(root) / d).relative_to(project).as_posix() + "/")
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+        for name in sorted(names):
+            full = Path(root) / name
+            if full.is_symlink():
+                continue  # never follow a link out of the project
+            files.append(full.relative_to(project).as_posix())
+            if len(files) >= MAX_SCAN:
+                return files, "folder-truncated", skipped
+    return sorted(files), "folder", skipped
+
+
 def collect_project(project: Path, budget_chars: int = 150_000, max_file_chars: int = 24_000) -> Collected:
-    gitops.ensure_repo(project)
-    tracked = [p for p in gitops.git(["ls-files"], project).stdout.splitlines() if p]
-    out = Collected(total_files=len(tracked))
+    if not project.is_dir():
+        raise ValueError(f"project folder does not exist: {project}")
+    tracked, mode, skipped_dirs = _list_files(project)
+    out = Collected(mode=mode, total_files=len(tracked))
+    out.excluded.extend((d, "폴더 통째로 제외 (의존성·빌드 산출물·숨김 폴더)") for d in skipped_dirs)
     shown = tracked[:400]
     out.tree = "\n".join(shown) + (f"\n... ({len(tracked) - 400} more files)" if len(tracked) > 400 else "")
 
@@ -396,7 +427,8 @@ def render_report(result: AnalysisResult) -> str:
         f"- 프로젝트: `{result.project}`",
         f"- 분석 요청: {result.focus or '전반 분석'}",
         f"- 참여 AI: " + ", ".join(f"{a}({'완료' if v.get('ok') else '실패'})" for a, v in result.ais.items()),
-        f"- 분석한 파일: {cov.get('included', 0)}개 / 전체 {cov.get('total', 0)}개 (제외 {cov.get('excluded', 0)}개)",
+        f"- 분석한 파일: {cov.get('included', 0)}개 / 전체 {cov.get('total', 0)}개 (제외 {cov.get('excluded', 0)}개)"
+        + {"git": " · git 저장소", "folder": " · 일반 폴더(git 아님)", "folder-truncated": " · 일반 폴더, 파일이 너무 많아 일부만 확인"}.get(cov.get("source", ""), ""),
         f"- 비밀 의심 값 {cov.get('redactions', 0)}개를 AI에게 보내기 전에 가렸습니다.", "",
         "> 각 발견의 '근거'는 AI가 인용한 코드가 실제 파일에 있는지 자동으로 대조한 결과입니다. "
         "'확인됨'이 아니면 AI가 지어냈을 수 있으니 직접 확인하세요.", "",
@@ -439,7 +471,8 @@ def run_analysis(
     providers: Optional[dict[str, Provider]] = None,
 ) -> AnalysisResult:
     project = project.resolve()
-    gitops.ensure_repo(project)
+    if not project.is_dir():
+        raise ValueError(f"project folder does not exist: {project}")
     providers = providers if providers is not None else build_providers(settings)
     chosen = ais or [n for n in providers if getattr(providers[n], "locate", lambda: True)()]
     unknown = [a for a in chosen if a not in providers]
@@ -451,7 +484,8 @@ def run_analysis(
     aid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     adir = project / settings.state_dir / "analyses" / aid
     adir.mkdir(parents=True)
-    gitops.exclude_from_git(project, settings.state_dir)
+    if gitops.git(["rev-parse", "--is-inside-work-tree"], project, check=False).returncode == 0:
+        gitops.exclude_from_git(project, settings.state_dir)  # keep our notes out of `git status`
     log = _Log(adir / "events.jsonl")
     result = AnalysisResult(analysis_id=aid, status="FAILED", project=str(project), focus=focus, analysis_dir=str(adir))
 
@@ -459,12 +493,12 @@ def run_analysis(
     log.event("collect_start")
     collected = collect_project(project)
     result.coverage = {
-        "included": len(collected.files), "total": collected.total_files, "excluded": len(collected.excluded),
+        "source": collected.mode, "included": len(collected.files), "total": collected.total_files, "excluded": len(collected.excluded),
         "chars": collected.chars, "redactions": collected.redactions,
         "truncated": [f.path for f in collected.files if f.truncated],
         "excluded_list": collected.excluded[:200],
     }
-    log.event("collect_end", included=len(collected.files), total=collected.total_files,
+    log.event("collect_end", source=collected.mode, included=len(collected.files), total=collected.total_files,
               excluded=len(collected.excluded), redactions=collected.redactions, chars=collected.chars)
     if not collected.files:
         result.summary = "분석할 수 있는 텍스트 파일이 없습니다."
@@ -476,6 +510,9 @@ def run_analysis(
     files = collected.by_path()
     timeout = float(settings.timeouts.get("analysis", 900.0))
 
+    sandbox = tempfile.TemporaryDirectory(prefix="solomon-analysis-")
+    gitops.git(["init", "-q"], sandbox.name)  # some CLIs refuse to run outside a repository
+
     def ask(name: str) -> dict:
         provider = providers[name]
         log.event("ai_start", provider=name, prompt_chars=len(prompt))
@@ -484,7 +521,7 @@ def run_analysis(
         for attempt in (1, 2):
             try:
                 # no no-output timeout: print-mode CLIs say nothing until the whole answer is ready
-                res = provider.run(prompt + feedback, cwd=str(project), write=False, timeout=timeout, no_output_timeout=None)
+                res = provider.run(prompt + feedback, cwd=sandbox.name, write=False, timeout=timeout, no_output_timeout=None)
             except QuotaExhausted as exc:
                 return {"ok": False, "error": f"구독 한도 소진: {exc}"[:300], "state": "quota"}
             except ProviderError as exc:
@@ -520,6 +557,7 @@ def run_analysis(
     except KeyboardInterrupt:
         kill_active()  # every CLI process of this run
         executor.shutdown(wait=False, cancel_futures=True)
+        sandbox.cleanup()
         result.status = "STOPPED"
         result.summary = "사용자가 중지했습니다"
         for n in chosen:
@@ -530,6 +568,7 @@ def run_analysis(
         _write(result, adir)
         return result
     executor.shutdown(wait=True)
+    sandbox.cleanup()
 
     log.event("verify_start")
     all_findings: list[Finding] = []
@@ -603,7 +642,7 @@ def analysis_view(events: list[dict], result: Optional[dict] = None, analysis_id
             view["timeline"].append(f"{clock}  분석 시작 · AI {len(view['ais'])}개: {', '.join(view['ais'])}")
         elif kind == "collect_end":
             view["stage_key"], view["stage"] = "ai", "AI 분석"
-            view["coverage"].update(included=ev.get("included"), total=ev.get("total"), excluded=ev.get("excluded"),
+            view["coverage"].update(source=ev.get("source"), included=ev.get("included"), total=ev.get("total"), excluded=ev.get("excluded"),
                                     redactions=ev.get("redactions"))
             view["timeline"].append(f"{clock}  파일 수집: {ev.get('total')}개 중 {ev.get('included')}개 분석"
                                     f"{', 비밀 의심 값 %d개 가림' % ev['redactions'] if ev.get('redactions') else ''}")

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -121,9 +122,76 @@ def test_budget_and_truncation_are_reported_not_hidden(tmp_path):
     assert not big or big[0].truncated
 
 
-def test_non_repository_is_refused(tmp_path):
-    with pytest.raises(GitError):
-        collect_project(tmp_path)
+def make_plain_project(tmp_path: Path) -> Path:
+    """A folder that is NOT a git repository (like a hand-made bot project)."""
+    root = tmp_path / "plain-bot"
+    for rel, text in {
+        "main.py": f'TOKEN = "{TELEGRAM}"\nprint("hi")\n',
+        "src/handler.py": "def on_message(msg):\n    return msg['text']\n",
+        ".env": "BOT_TOKEN=plain-secret-value-1234\n",
+        "node_modules/dep/index.js": "module.exports = 1;\n",
+        ".hidden/notes.txt": "hidden folder\n",
+        "README.md": "# plain bot\n",
+    }.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    (root / "link.py").symlink_to(tmp_path / "outside.py")  # a link pointing out of the project
+    (tmp_path / "outside.py").write_text("OUTSIDE = 1\n")
+    return root
+
+
+def test_a_plain_folder_without_git_can_be_collected(tmp_path):
+    root = make_plain_project(tmp_path)
+    c = collect_project(root)
+    paths = [f.path for f in c.files]
+    assert c.mode == "folder" and paths[0] == "README.md" and set(paths) == {"README.md", "main.py", "src/handler.py"}
+    excluded = dict(c.excluded)
+    assert ".env" in excluded
+    assert "node_modules/" in excluded and ".hidden/" in excluded and "통째로" in excluded["node_modules/"]  # said, not hidden
+    assert "link.py" not in paths and "link.py" not in excluded  # a link out of the project is never followed
+    assert TELEGRAM not in build_prompt(c, "") and "plain-secret-value-1234" not in build_prompt(c, "")
+
+
+def test_in_a_git_repo_untracked_files_count_but_ignored_ones_do_not(tmp_path):
+    repo = make_bot_repo(tmp_path)
+    (repo / "src" / "fresh.py").write_text("x = 1\n")  # new, not committed
+    (repo / ".gitignore").write_text("src/ignored.py\n")
+    (repo / "src" / "ignored.py").write_text("y = 1\n")
+    paths = [f.path for f in collect_project(repo).files]
+    assert "src/fresh.py" in paths and "src/ignored.py" not in paths
+
+
+def test_a_missing_folder_is_reported_not_crashed_on(tmp_path):
+    with pytest.raises(ValueError, match="does not exist"):
+        collect_project(tmp_path / "nope")
+    with pytest.raises(ValueError, match="does not exist"):
+        run_analysis(Settings(), tmp_path / "nope", providers={"claude": Fake("claude", [])})
+
+
+def test_a_plain_folder_can_be_analysed_and_the_project_stays_untouched(tmp_path):
+    root = make_plain_project(tmp_path)
+    before = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if ".solomon" not in p.parts)
+    res = run_analysis(Settings(), root, providers={"claude": Fake("claude", [good(file="main.py", quote='print("hi")', line=2)])})
+    assert res.status == "DONE" and res.coverage["source"] == "folder"
+    assert res.clusters[0]["verified"] is True
+    assert "일반 폴더(git 아님)" in Path(res.report_path).read_text()
+    assert not (root / ".git").exists()  # we did not turn their folder into a repository
+    after = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if ".solomon" not in p.parts)
+    assert after == before  # the only footprint is the .solomon notes folder
+
+
+def test_every_ai_runs_in_an_empty_throwaway_repo_not_in_the_project(tmp_path):
+    repo = make_bot_repo(tmp_path)
+    seen = {}
+
+    class Spy(Fake):
+        def run(self, prompt, cwd, write, timeout, no_output_timeout=None):
+            seen["cwd"], seen["listing"] = cwd, sorted(os.listdir(cwd))
+            return super().run(prompt, cwd, write, timeout, no_output_timeout)
+
+    run_analysis(Settings(), repo, providers={"codex": Spy("codex", [good()])})
+    assert seen["cwd"] != str(repo) and seen["listing"] == [".git"]  # empty apart from the repo marker: no .env to peek at
+    assert not os.path.exists(seen["cwd"])  # and it is cleaned up afterwards
 
 
 def test_prompt_has_line_numbers_tree_focus_and_the_data_warning(tmp_path):

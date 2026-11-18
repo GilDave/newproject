@@ -139,12 +139,19 @@ def test_project_given_to_an_already_running_dashboard_is_registered_not_ignored
     assert str(other.resolve()) in _projects(box)
 
 
-def test_a_bad_project_for_a_running_dashboard_says_so(box):
+def test_a_missing_project_for_a_running_dashboard_says_so(box):
+    box.start()
+    missing = box.tmp / "missing"
+    res = box.start("--project", str(missing))
+    assert "프로젝트를 추가하지 못했습니다" in res.stdout and str(missing) not in "".join(_projects(box))
+
+
+def test_a_plain_folder_without_git_is_accepted_for_a_running_dashboard(box):
     box.start()
     plain = box.tmp / "plain"
     plain.mkdir()
     res = box.start("--project", str(plain))
-    assert "프로젝트를 추가하지 못했습니다" in res.stdout and str(plain.resolve()) not in _projects(box)
+    assert "프로젝트를 추가했습니다" in res.stdout and str(plain.resolve()) in _projects(box)
 
 
 def test_options_that_only_apply_at_startup_are_reported_as_ignored(box):

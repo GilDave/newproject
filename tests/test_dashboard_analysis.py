@@ -62,9 +62,7 @@ def test_analyze_rejects_bad_requests_before_launching(env, body, fragment):
 def test_analyze_refuses_a_missing_ai_a_non_repository_and_a_second_job(env, tmp_path):
     env.app._providers_cache = (time.time() + 10**6, [{**ALL[0]}, {**ALL[1], "installed": False}, {**ALL[2], "installed": False}])
     assert env.call("POST", "/api/analyze", {"project": env.project, "ais": ["codex"]})[1]["error"].startswith("설치되지 않은 AI")
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    assert env.call("POST", "/api/analyze", {"project": str(plain)})[0] == 400
+    assert env.call("POST", "/api/analyze", {"project": str(tmp_path / "missing")})[0] == 400
     assert env.call("POST", "/api/analyze", {"project": env.project})[0] == 200
     assert env.call("POST", "/api/analyze", {"project": env.project})[0] == 409  # one job at a time
     assert env.call("POST", "/api/run", {"goal": "x", "project": env.project})[0] == 409  # also across kinds
@@ -169,3 +167,19 @@ def test_provider_cards_and_pending_applies(env):
 def test_provider_card_reports_a_missing_cli(env):
     env.app._providers_cache = (time.time() + 10**6, [{**ALL[0], "installed": False}, ALL[1], ALL[2]])
     assert {c["name"]: c["status"] for c in env.state()[1]["provider_cards"]}["claude"] == "설치 안 됨"
+
+
+def test_a_plain_folder_can_be_analysed_but_not_changed(env, tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "main.py").write_text("print(1)\n")
+    status, _, _ = env.call("POST", "/api/analyze", {"project": str(plain)})
+    assert status == 200 and sleeper.calls[-1][3] == "analyze" and str(plain.resolve()) in sleeper.calls[-1]
+    env.call("POST", "/api/stop", {})
+    deadline = time.time() + 8
+    while time.time() < deadline and env.state()[1]["job"]["state"] == "running":
+        time.sleep(0.2)
+    sleeper.calls.clear()
+    status, body, _ = env.call("POST", "/api/run", {"goal": "fix it", "project": str(plain)})
+    assert status == 400 and "git 저장소가 필요" in body["error"] and "분석은 git 없이도" in body["error"]
+    assert not sleeper.calls  # nothing was launched

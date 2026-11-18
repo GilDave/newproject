@@ -71,6 +71,7 @@ class DashboardApp:
         self._projects: dict[str, dict] = {}  # path -> {"test_command": [...]} (key absent = use the config default)
         self.job: Optional[dict] = None
         self._providers_cache: tuple[float, list[dict]] = (0.0, [])
+        self._git_cache: dict[str, tuple[float, bool]] = {}
         self._load_store()
         for p in list(projects or []) + ([settings.project_path] if settings.project_path else []):
             try:
@@ -95,9 +96,25 @@ class DashboardApp:
         except OSError:
             pass  # remembering projects is a convenience, never a requirement
 
+    def is_git(self, project: str) -> bool:
+        """Whether code can be changed there (needs a repository with a commit). Cached for a few seconds."""
+        now = time.time()
+        hit = self._git_cache.get(project)
+        if hit and now - hit[0] < 5:
+            return hit[1]
+        try:
+            gitops.ensure_repo(Path(project))
+            ok = True
+        except gitops.GitError:
+            ok = False
+        self._git_cache[project] = (now, ok)
+        return ok
+
     def add_project(self, path: str) -> str:
+        """Register a folder. Any folder works for analysis; changing code additionally needs git (checked at run)."""
         p = Path(path).expanduser().resolve()
-        gitops.ensure_repo(p)
+        if not p.is_dir():
+            raise gitops.GitError(f"project folder does not exist: {p}")
         key = str(p)
         with self._lock:
             if key not in self._projects:
@@ -175,6 +192,7 @@ class DashboardApp:
         if not project:
             return state
         self._add_analysis_state(state, Path(project), project, analysis_id, job)
+        state["project_git"] = self.is_git(project)
         cmd, source = self.effective_test_command(project)
         state["test_command"] = {"text": " ".join(cmd) if cmd else "없음", "source": source}
         runs = load_runs(Path(project), self.settings.state_dir)
@@ -286,6 +304,9 @@ class DashboardApp:
                 project = self.add_project(project or "")
             except gitops.GitError as exc:
                 raise ApiError(400, str(exc)) from exc
+        if not self.is_git(project):
+            raise ApiError(400, "개선(코드 수정)에는 git 저장소가 필요합니다 (커밋이 1개 이상). 분석은 git 없이도 됩니다. "
+                                "고치려면 프로젝트 폴더에서 git init 후 첫 커밋을 만드세요.")
         args = [sys.executable, "-m", "solomon", "run", goal, "--project", project]
         if self.config_path:
             args += ["--config", self.config_path]

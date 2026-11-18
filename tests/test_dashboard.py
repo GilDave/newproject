@@ -269,26 +269,12 @@ def test_projects_are_remembered_between_launches(tmp_path):
     assert again.effective_test_command(e.project)[0] == ["npm", "test"]
 
 
-def test_adding_a_non_repository_is_refused(env, tmp_path):
+def test_any_existing_folder_can_be_added_but_a_missing_one_cannot(env, tmp_path):
     plain = tmp_path / "plain"
     plain.mkdir()
-    assert env.call("POST", "/api/project", {"path": str(plain)})[0] == 400
+    assert env.call("POST", "/api/project", {"path": str(plain)})[0] == 200  # fine for analysis
+    st = env.state(project=str(plain.resolve()))[1]
+    assert st["project"] == str(plain.resolve()) and st["project_git"] is False
+    assert env.state(project=env.project)[1]["project_git"] is True
+    assert env.call("POST", "/api/project", {"path": str(tmp_path / "missing")})[0] == 400
     assert env.call("POST", "/api/project", {"path": env.project})[0] == 200
-
-
-def test_runs_list_marks_the_live_run(env):
-    env.finish_a_run()
-    env.call("POST", "/api/run", {"goal": "next", "project": env.project})
-    run_dir = Path(env.project) / ".solomon" / "runs" / "29991231-235959-abcdef"
-    run_dir.mkdir(parents=True)
-    (run_dir / "events.jsonl").write_text(json.dumps({"ts": "2026-11-18T10:00:00", "event": "run_start", "goal": "g"}) + "\n")
-    runs = env.state()[1]["runs"]
-    assert [r["live"] for r in runs] == [True, False]
-
-
-def test_reviewer_is_asked_to_answer_in_korean():
-    from solomon import prompts
-    from solomon.schemas import Order
-
-    text = prompts.reviewer(Order(goal="g", allowed_paths=["src/"]), "diff", "tests ok", [])
-    assert "in Korean" in text

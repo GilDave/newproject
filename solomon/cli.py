@@ -100,7 +100,7 @@ def _analyze(args: argparse.Namespace) -> int:
     print(f"summary:  {result.summary}")
     cov = result.coverage
     if cov:
-        print(f"files:    {cov.get('included')} of {cov.get('total')} analysed, {cov.get('redactions')} secret-like values hidden")
+        print(f"files:    {cov.get('included')} of {cov.get('total')} analysed ({cov.get('source')}), {cov.get('redactions')} secret-like values hidden")
     for name, info in result.ais.items():
         print(f"  {name:<12} {'ok' if info.get('ok') else 'FAILED: ' + str(info.get('error', ''))}")
     for c in result.clusters[:10]:
