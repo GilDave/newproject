@@ -49,6 +49,7 @@ class Settings:
     allow_same_provider: bool = False
     state_dir: str = ".solomon"
     project_path: Optional[str] = None  # default target repository (local folder)
+    projects_root: str = "~/Solomon-Projects"  # where the dashboard creates new project folders
 
     def validate(self) -> None:
         for role in ROLES:
@@ -117,6 +118,7 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
     s.quota_max_waits = int(loop.get("quota_max_waits", s.quota_max_waits))
     s.allow_same_provider = bool(loop.get("allow_same_provider", s.allow_same_provider))
     s.state_dir = str(data.get("state_dir", s.state_dir))
+    s.projects_root = str(data.get("projects_root", s.projects_root))
     if data.get("project"):
         s.project_path = str(data["project"])
 

@@ -62,6 +62,8 @@ def _run(args: argparse.Namespace) -> int:
         settings.max_tokens = args.max_tokens
     if args.no_double_check:
         settings.double_check_tests = False
+    if args.no_baseline:
+        settings.baseline_check = False
     settings.validate()
     for role in ("planner", "builder", "reviewer", "reviewer2"):
         chosen = getattr(args, role, None)
@@ -245,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--max-attempts", type=int, help="attempt limit (0 = none)")
     run.add_argument("--max-minutes", type=float, help="wall-clock budget of the run in minutes")
     run.add_argument("--max-tokens", type=int, help="token budget of the run")
+    run.add_argument("--no-baseline", action="store_true", help="skip the test run on the untouched code (for a brand-new project)")
     run.add_argument("--no-double-check", action="store_true", help="do not re-run the tests before declaring a pass")
     run.add_argument("--no-tests", action="store_true", help="run without automatic tests (the result is UNVERIFIED)")
     run.set_defaults(func=_run)

@@ -333,14 +333,36 @@ def perform(project: Path, state_dir: str, key: str, action: str, message: str =
             if state != "pending":
                 raise ManageError(409, "적용 전의 항목만 폐기할 수 있습니다. 적용한 것은 먼저 되돌리세요.")
             _set(project, state_dir, key, {"state": "discarded", "at": _now()})
-            extra = ""
+            return {"ok": True, "message": "폐기함으로 옮겼습니다. 언제든 '복원'할 수 있고, 원본은 바뀌지 않았습니다."}
+
+        if action == "restore":
+            if state != "discarded":
+                raise ManageError(409, "폐기한 항목만 복원할 수 있습니다.")
             if kind == "batch":
                 b = _read_json(project / state_dir / "batches" / ident / "batch.json")
                 br = b.get("branch", "")
-                if re.match(r"^solomon/autofix-[0-9a-zA-Z-]+$", br):
-                    gitops.git(["branch", "-D", br], project, check=False)
-                    extra = " 수정 브랜치도 지웠습니다."
-            return {"ok": True, "message": "폐기했습니다." + extra + " 원본은 바뀌지 않았습니다."}
+                if br and gitops.git(["rev-parse", "--verify", "-q", f"refs/heads/{br}"], project, check=False).returncode != 0:
+                    raise ManageError(409, "이 배치의 수정 브랜치가 없어 복원할 수 없습니다 (직접 삭제했을 수 있습니다).")
+            _set(project, state_dir, key, None)
+            return {"ok": True, "message": "복원했습니다. 다시 결과함에서 적용할 수 있습니다."}
+
+        if action == "revert_commit":
+            mark = _load_marks(project, state_dir).get(key) or {}
+            sha = mark.get("sha", "")
+            if state != "committed" or not sha:
+                raise ManageError(409, "이 대시보드에서 커밋한 항목만 커밋을 취소할 수 있습니다 (직접 커밋한 것은 git으로 되돌리세요).")
+            if gitops.git(["merge-base", "--is-ancestor", sha, "HEAD"], project, check=False).returncode != 0:
+                raise ManageError(409, "그 커밋이 현재 브랜치에 없습니다 (브랜치를 바꿨거나 이미 되돌렸을 수 있습니다).")
+            p = gitops.git(["revert", "--no-edit", sha], project, check=False)
+            if p.returncode != 0:
+                gitops.git(["revert", "--abort"], project, check=False)
+                raise ManageError(409, "커밋을 취소하지 못했습니다 (그 뒤에 같은 파일이 더 바뀌었거나 작업 폴더에 겹치는 변경이 있습니다): "
+                                       + (p.stderr.strip().splitlines() or [""])[-1][:200])
+            _set(project, state_dir, key, None)
+            marker = _legacy_marker(project, state_dir, key)
+            if marker and marker.exists():
+                marker.unlink()
+            return {"ok": True, "message": "커밋을 취소했습니다 (취소 커밋이 새로 생겼고 기록은 지워지지 않습니다). 항목은 다시 '적용 전'입니다."}
     raise ManageError(400, "알 수 없는 동작입니다.")
 
 
@@ -431,7 +453,14 @@ def _describe_run(project: Path, state_dir: str, run_id: str, marks: dict) -> di
                         + ("테스트 " + ("통과" if v.get("passed") else "실패") + " · " if v else "")
                         + ("검수 " + str(r.get("verdict")) if r else "검수 전"))
     warn = list(run.warnings)
-    return {"kind": "run", "id": run_id, "status": status, "status_ko": STATUS_KO.get(status, status or "진행 중"),
+    process = build_process(events)
+    dirty = set(_dirty(project)) if (project / ".git").exists() or gitops.git(["rev-parse", "--git-dir"], project, check=False).returncode == 0 else set()
+    overlap = sorted(set(files) & dirty) if mark.get("state") not in ("applied", "committed") else []
+    applicable, reason = (None, "")
+    if text and mark.get("state") not in ("applied", "committed", "discarded") and not (d / "applied.json").exists():
+        applicable, reason = _check(project, patch)
+    assessment = build_assessment(process, status, files, added, removed, overlap, applicable, reason, run.roles)
+    return {"live": process["live"], "process": process, "assessment": assessment, "kind": "run", "id": run_id, "status": status, "status_ko": STATUS_KO.get(status, status or "진행 중"),
             "headline": f"{STATUS_KO.get(status, status or '진행 중')} — {short_goal(run.goal)[:90]}",
             "sections": {
                 "who": _section("누가", [["역할 배정", " · ".join(f"{ROLE_KO.get(r, r)}={a}" for r, a in run.roles.items())]],
@@ -479,7 +508,24 @@ def _describe_batch(project: Path, state_dir: str, batch_id: str, marks: dict, k
     files, (added, removed) = patch_files(text), patch_stats(text)
     ok = sum(1 for i in items if i.get("status") == "PASSED")
     status = b.get("status", "RUNNING")
-    return {"kind": "batch", "id": batch_id, "status": status, "status_ko": STATUS_KO.get(status, status),
+    checks = [{"label": f"항목 {n}", "status": "ok" if i.get("status") == "PASSED" else "warn",
+               "text": f"{i.get('title', '')} — {STATUS_KO.get(i.get('status', ''), i.get('status', ''))}"} for n, i in enumerate(items, 1)]
+    dirty = set(_dirty(project))
+    overlap = sorted(set(files) & dirty) if mark.get("state") not in ("applied", "committed") else []
+    if overlap:
+        checks.append({"label": "작업 폴더 충돌", "status": "warn", "text": "이미 바뀐 파일과 겹칩니다: " + ", ".join(overlap[:5])})
+    if text and mark.get("state") not in ("applied", "committed", "discarded"):
+        okp, why = _check(project, patch)
+        if not okp:
+            checks.append({"label": "적용 가능 여부", "status": "fail", "text": "지금은 적용할 수 없습니다: " + why})
+    if len(files) > 8 or added + removed > 400:
+        checks.append({"label": "변경 규모", "status": "warn", "text": f"파일 {len(files)}개 · +{added} −{removed}줄 — 큰 변경입니다"})
+    rec = "block" if any(c["status"] == "fail" for c in checks) or not ok else "caution" if any(c["status"] == "warn" for c in checks) else "recommend"
+    assessment = {"recommendation": rec, "checks": checks,
+                  "headline": {"block": "전체 적용을 권하지 않습니다 (항목별로 판단하세요)", "caution": "확인할 점이 있습니다 — 항목별로 살펴보세요",
+                               "recommend": "모든 항목이 점검을 통과했습니다"}[rec]}
+    return {"live": not b, "process": {"prelude": [], "attempts": [], "live": not b}, "assessment": assessment,
+            "kind": "batch", "id": batch_id, "status": status, "status_ko": STATUS_KO.get(status, status),
             "headline": f"{STATUS_KO.get(status, status)} — {len(items)}건 중 {ok}건 수정",
             "sections": {
                 "who": _section("누가", [["수정 주체", "Solomon (AI 구현 + 교차 검수)"], ["커밋 작성자", "Solomon <solomon@localhost>" if b.get("branch") else ""]]),
@@ -567,3 +613,136 @@ def list_history(project: Path, state_dir: str, limit: int = 40) -> list[dict]:
                          "status": status, "status_ko": STATUS_KO.get(status, status)})
     rows.sort(key=lambda r: r["when"], reverse=True)
     return rows[:limit]
+
+
+# ------------------------------------------------------------------ step-by-step process and apply assessment
+def _tail(text: object, n: int = 500) -> str:
+    return str(text or "").strip()[-n:]
+
+
+def build_process(events: list[dict]) -> dict:
+    """The run as a person would narrate it: plan, then per attempt build / changes / scope / tests / reviews / re-check."""
+    prelude: list[dict] = []
+    attempts: list[dict] = []
+    cur: Optional[dict] = None
+    live = True
+    pending_scope: Optional[dict] = None
+
+    def step(target: list, name: str, status: str, text: str = "", lines: Optional[list] = None, ts: str = "") -> dict:
+        d = {"name": name, "status": status, "text": text, "lines": lines or [], "at": str(ts)[11:19]}
+        target.append(d)
+        return d
+
+    for e in events:
+        k, ts = e.get("event"), e.get("ts", "")
+        tgt = cur["steps"] if cur else prelude
+        if k == "call_end":
+            role = str(e.get("role"))
+            sec = f"{float(e.get('duration_sec') or 0):.0f}초"
+            if role == "planner":
+                step(prelude, "계획", "ok", f"{e.get('provider')}가 작업 지시서를 만들었습니다 ({sec})", ts=ts)
+            elif role == "builder" and cur is not None:
+                step(cur["steps"], "구현", "ok", f"{e.get('provider')}가 코드를 작성했습니다 ({sec})", ts=ts)
+        elif k == "call_error":
+            step(tgt, "AI 호출 실패", "fail", f"{e.get('role')} · {e.get('provider')}: {_tail(e.get('error'), 160)}", ts=ts)
+        elif k == "quota":
+            step(tgt, "구독 한도", "warn", f"{e.get('provider')}의 사용 한도에 도달했습니다", ts=ts)
+        elif k == "order":
+            o = e.get("order") or {}
+            lines = [f"수정 가능: {', '.join(o.get('allowed_paths', []))}"]
+            if o.get("protected_paths"):
+                lines.append(f"보호 경로: {', '.join(o['protected_paths'])}")
+            lines += [f"완료 기준: {c}" for c in o.get("acceptance_criteria", [])]
+            lines.append(f"한도: 파일 {o.get('max_files_changed')}개 · {o.get('max_diff_lines')}줄")
+            step(prelude, "작업 지시서", "info", "무엇을 어디까지 고칠지 정했습니다", lines, ts)
+        elif k == "baseline":
+            step(prelude, "시작 전 점검", "ok" if e.get("passed") else "fail",
+                 "수정 전 코드의 테스트 " + ("통과" if e.get("passed") else "실패 → AI를 부르지 않고 멈춤"),
+                 [_tail(e.get("output_tail"), 300)] if not e.get("passed") else [], ts)
+        elif k == "attempt_start":
+            cur = {"n": e.get("attempt"), "steps": [], "result": "진행 중"}
+            attempts.append(cur)
+            pending_scope = None
+        elif k == "changes" and cur is not None:
+            files = e.get("files") or []
+            step(cur["steps"], "바뀐 파일", "info", f"{e.get('count', len(files))}개",
+                 [f"{f.get('status')} {f.get('path')} (+{f.get('added')} −{f.get('removed')})" for f in files[:25]], ts)
+            pending_scope = step(cur["steps"], "범위 검사", "ok", "지시서 범위 안에서 수정했습니다", ts=ts)
+        elif k == "scope_violation" and cur is not None:
+            if pending_scope:
+                pending_scope.update(status="fail", text="범위를 벗어난 수정을 버렸습니다", lines=[str(v) for v in e.get("violations", [])])
+            cur["result"] = "범위 위반 → 되돌리고 재시도"
+        elif k == "verify" and cur is not None:
+            st = "warn" if e.get("skipped") else "ok" if e.get("passed") else "fail"
+            m = re.search(r"(\d+) passed", str(e.get("output_tail", "")))
+            txt = "테스트 명령이 없어 건너뜀 (검증 안 됨)" if e.get("skipped") else ("통과" if e.get("passed") else f"실패 (종료 코드 {e.get('exit_code')})")
+            step(cur["steps"], "테스트", st, txt + (f" · {m.group(1)}개 통과" if m else ""),
+                 ([f"명령: {e.get('command')}"] if e.get("command") else []) + ([_tail(e.get("output_tail"), 600)] if st == "fail" else []), ts)
+        elif k == "review_role" and cur is not None:
+            v = str(e.get("verdict"))
+            step(cur["steps"], f"검수 · {e.get('provider')}", "fail" if e.get("error") else "ok" if v == "PASS" else "fail",
+                 "판정 없음(오류)" if e.get("error") else v, [str(i) for i in (e.get("issues") or [])][:10], ts)
+        elif k == "review_retry" and cur is not None:
+            step(cur["steps"], "검수 재요청", "warn", f"{e.get('role')}가 판정을 못 내 같은 코드로 다시 물었습니다", [_tail(e.get("reason"), 160)], ts)
+        elif k == "double_check" and cur is not None:
+            step(cur["steps"], "테스트 재확인", "ok" if e.get("passed") else "fail",
+                 "한 번 더 실행해도 통과" if e.get("passed") else "다시 실행하니 실패 (불안정한 테스트)", ts=ts)
+        elif k == "stagnation":
+            step(tgt, "접근 변경", "warn", "같은 실패가 반복돼 코드를 처음 상태로 되돌리고 다른 방식으로 시도합니다", ts=ts)
+        elif k == "review" and cur is not None:
+            cur["result"] = {"PASS": "검수 통과", "FAIL": "검수 불합격 → 지적을 반영해 재시도", "ERROR": "검수 판정 불가"}.get(str(e.get("verdict")), "")
+        elif k == "run_end":
+            live = False
+            end = e
+            if cur is not None and e.get("status") == "PASSED":
+                cur["result"] = "통과 → 결과 확정"
+    return {"prelude": prelude, "attempts": attempts, "live": live}
+
+
+def build_assessment(process: dict, status: str, files: list, added: int, removed: int, overlap: list, applicable: Optional[bool],
+                     reason: str, roles: Optional[dict] = None) -> dict:
+    """A plain checklist behind 'should I apply this?'. Facts only: every line is something the pipeline measured."""
+    checks: list[dict] = []
+
+    def add(label: str, st: str, text: str) -> None:
+        checks.append({"label": label, "status": st, "text": text})
+
+    if status != "PASSED":
+        add("실행 결과", "fail" if status else "warn", "아직 끝나지 않았거나 통과하지 못한 실행입니다" if not status else f"결과가 통과가 아닙니다 ({STATUS_KO.get(status, status)})")
+        return {"recommendation": "block", "headline": "적용할 수 없는 결과입니다", "checks": checks}
+    last = process["attempts"][-1]["steps"] if process["attempts"] else []
+    by = lambda name: [s for s in last if s["name"].startswith(name)]
+    sc = by("범위 검사")
+    add("범위 검사", "ok" if sc and sc[-1]["status"] == "ok" else "warn", "지시서 범위 안에서만 수정했고 보호 경로를 건드리지 않았습니다" if sc and sc[-1]["status"] == "ok" else "기록 없음")
+    t = by("테스트")
+    t = [x for x in t if x["name"] == "테스트"]
+    if t:
+        add("테스트", t[-1]["status"], t[-1]["text"])
+    else:
+        add("테스트", "warn", "기록 없음")
+    rc = by("테스트 재확인")
+    if rc:
+        add("테스트 재확인", rc[-1]["status"], rc[-1]["text"])
+    revs = [x for x in last if x["name"].startswith("검수 ·")]
+    if revs:
+        for r in revs:
+            add(r["name"].replace("검수 · ", "교차 검수 (") + ")", r["status"], r["text"])
+    else:
+        add("교차 검수", "warn", "기록 없음")
+    if roles and roles.get("builder"):
+        same = [r for r in ("reviewer", "reviewer2") if roles.get(r) == roles["builder"]]
+        add("작성자와 검수자", "warn" if same else "ok",
+            "작성한 AI가 직접 검수했습니다 (독립성 낮음)" if same else f"구현 {roles['builder']} ≠ 검수 " + ", ".join(roles[r] for r in ("reviewer", "reviewer2") if roles.get(r)) + " (서로 다른 AI)")
+    size = f"파일 {len(files)}개 · +{added} −{removed}줄"
+    add("변경 규모", "warn" if len(files) > 8 or added + removed > 400 else "ok", size + (" — 큰 변경이니 내용을 꼼꼼히 보세요" if len(files) > 8 or added + removed > 400 else ""))
+    if overlap:
+        add("작업 폴더 충돌", "warn", "지금 작업 폴더에서 이미 바뀐 파일과 겹칩니다: " + ", ".join(overlap[:5]))
+    if applicable is False:
+        add("적용 가능 여부", "fail", "지금은 적용할 수 없습니다: " + (reason or "충돌"))
+    bad = [c for c in checks if c["status"] == "fail"]
+    warn = [c for c in checks if c["status"] == "warn"]
+    if bad:
+        return {"recommendation": "block", "headline": "적용을 권하지 않습니다", "checks": checks}
+    if warn:
+        return {"recommendation": "caution", "headline": "확인할 점이 있습니다", "checks": checks}
+    return {"recommendation": "recommend", "headline": "모든 점검을 통과했습니다 — 변경 내용만 훑어보고 적용하세요", "checks": checks}

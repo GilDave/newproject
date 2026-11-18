@@ -36,9 +36,9 @@ def crasher(args, log_path):
 
 
 class Env:
-    def __init__(self, tmp_path, launcher=sleeper):
+    def __init__(self, tmp_path, launcher=sleeper, settings=None):
         self.repo = make_repo(tmp_path)
-        self.app = DashboardApp(Settings(), [str(self.repo)], store_path=tmp_path / "store.json", launcher=launcher)
+        self.app = DashboardApp(settings or Settings(), [str(self.repo)], store_path=tmp_path / "store.json", launcher=launcher)
         hosts: set = set()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.app, TOKEN, hosts))
         self.port = self.server.server_address[1]

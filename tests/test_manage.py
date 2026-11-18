@@ -111,14 +111,93 @@ def test_batch_items_whole_batch_and_discard(env):
     assert git(env.repo, "log", "--format=%s", "-2").split("\n")[:2] == ["fix 2", "fix 1"]
 
 
-def test_discarding_a_batch_deletes_only_its_branch(env):
+def test_discard_is_not_destructive_and_can_be_restored(env):
     b = make_batch(env)
-    assert b.branch in git(env.repo, "branch", "--list")
-    act(env, f"batch:{b.batch_id}", "discard")
-    assert b.branch not in git(env.repo, "branch", "--list")
-    assert "main" in git(env.repo, "branch", "--list") or "master" in git(env.repo, "branch", "--list")
-    items = next(x for x in inbox(env)["entries"] if x["kind"] == "batch")["items"]
-    assert all(i["state"] == "discarded" for i in items)
+    key = f"batch:{b.batch_id}"
+    act(env, key, "discard")
+    assert b.branch in git(env.repo, "branch", "--list")  # nothing deleted
+    ent = next(x for x in inbox(env)["entries"] if x["kind"] == "batch")
+    assert ent["state"] == "discarded" and all(i["state"] == "discarded" for i in ent["items"])
+    act(env, key, "apply", expect=409)
+    act(env, key, "restore")
+    ent = next(x for x in inbox(env)["entries"] if x["kind"] == "batch")
+    assert ent["state"] == "pending" and [i["state"] for i in ent["items"]] == ["pending", "pending"]
+    act(env, key, "restore", expect=409)  # not discarded any more
+    act(env, key, "apply")
+    assert (env.repo / "src" / "two.py").exists()
+
+
+def test_restore_fails_cleanly_when_the_batch_branch_is_gone(env):
+    b = make_batch(env)
+    key = f"batch:{b.batch_id}"
+    act(env, key, "discard")
+    git(env.repo, "branch", "-D", b.branch)
+    assert "브랜치가 없어" in act(env, key, "restore", expect=409)["error"]
+
+
+def test_a_commit_made_here_can_be_undone_and_the_item_is_pending_again(env):
+    res = env.finish_a_run()
+    key = f"run:{res.run_id}"
+    act(env, key, "apply")
+    act(env, key, "commit", message="add module")
+    assert (env.repo / "src" / "new.py").exists()
+    out = act(env, key, "revert_commit")
+    assert "취소" in out["message"] and not (env.repo / "src" / "new.py").exists()
+    assert git(env.repo, "log", "-1", "--format=%s").startswith('Revert "add module"')
+    assert next(x for x in inbox(env)["entries"] if x["key"] == key)["state"] == "pending"
+    act(env, key, "apply")  # and it can be applied again
+    assert (env.repo / "src" / "new.py").exists()
+
+
+def test_undoing_a_commit_is_refused_for_hand_made_commits(env):
+    res = env.finish_a_run()
+    key = f"run:{res.run_id}"
+    env.call("POST", "/api/apply", {"project": env.project, "run_id": res.run_id})
+    git(env.repo, "add", "-A")
+    git(env.repo, "commit", "-q", "-m", "by hand")
+    assert "직접 커밋" in act(env, key, "revert_commit", expect=409)["error"]
+
+
+def test_undoing_a_commit_is_refused_when_the_file_changed_afterwards_and_nothing_breaks(env):
+    res = env.finish_a_run()
+    key = f"run:{res.run_id}"
+    act(env, key, "apply")
+    act(env, key, "commit", message="add module")
+    (env.repo / "src" / "new.py").write_text("x = 'later edit'\n")
+    git(env.repo, "commit", "-q", "-am", "later edit")
+    head = git(env.repo, "rev-parse", "HEAD").strip()
+    assert "취소하지 못했습니다" in act(env, key, "revert_commit", expect=409)["error"]
+    assert git(env.repo, "rev-parse", "HEAD").strip() == head and git(env.repo, "status", "--porcelain").strip() == ""
+    assert next(x for x in inbox(env)["entries"] if x["key"] == key)["state"] == "committed"
+
+
+def test_process_and_assessment_for_a_passed_run(env):
+    res = env.finish_a_run()
+    d = env.call("GET", f"/api/describe?project={quote(env.project)}&key=run:{res.run_id}")[1]
+    steps = [s["name"] for s in d["process"]["attempts"][0]["steps"]]
+    assert steps[:4] == ["구현", "바뀐 파일", "범위 검사", "테스트"] and any(n.startswith("검수 ·") for n in steps)
+    assert [s["name"] for s in d["process"]["prelude"]][:2] == ["계획", "작업 지시서"]
+    assert d["live"] is False
+    a = d["assessment"]
+    assert a["recommendation"] == "recommend" and {c["label"] for c in a["checks"]} >= {"범위 검사", "테스트", "변경 규모", "작성자와 검수자"}
+    # an unrelated edit in the same file makes the same item a 'caution'
+    (env.repo / "src" / "new.py").write_text("conflict\n")
+    a2 = env.call("GET", f"/api/describe?project={quote(env.project)}&key=run:{res.run_id}")[1]["assessment"]
+    assert a2["recommendation"] == "block" and any(c["label"] == "적용 가능 여부" for c in a2["checks"])
+
+
+def test_a_failed_attempt_shows_why_in_the_process(env):
+    s = make_settings(max_attempts=1)
+    o = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json("FAIL", ["missing test"])]),
+                         "codex": ScriptedProvider("codex", [write_file("src/other.py")])})
+    r = o.run("goal", env.repo)
+    key = f"run:{r.run_id}"
+    d = env.call("GET", f"/api/describe?project={quote(env.project)}&key={key}")[1]
+    names = {s["name"]: s for s in d["process"]["attempts"][0]["steps"]}
+    assert names["테스트"]["status"] == "fail"
+    rev = next(v for k, v in names.items() if k.startswith("검수 ·"))
+    assert rev["status"] == "fail" and "missing test" in rev["lines"][0]
+    assert d["assessment"]["recommendation"] == "block"
 
 
 def test_whole_batch_applies_in_one_click(env):

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage
+from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage, projects as projects_mod
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import Settings
 from .status import load_runs
@@ -83,6 +83,7 @@ class DashboardApp:
         self.config_path = config_path
         self.store_path = store_path if store_path is not None else Path.home() / ".solomon" / "dashboard.json"
         self._launcher = launcher or _default_launcher
+        self.trash_dir = self.store_path.parent / "trash"
         self._lock = threading.Lock()
         self._projects: dict[str, dict] = {}  # path -> {"test_command": [...]} (key absent = use the config default)
         self.job: Optional[dict] = None
@@ -137,6 +138,74 @@ class DashboardApp:
                 self._projects[key] = {}
                 self._save_store()
         return key
+
+    # ------------------------------------------------------- project folders
+    def projects_root(self) -> Path:
+        return Path(self.settings.projects_root).expanduser().resolve()
+
+    def projects_overview(self) -> dict:
+        rows = []
+        for path in sorted(self._projects):
+            cmd, source = self.effective_test_command(path)
+            rows.append({"path": path, "name": Path(path).name, "managed": projects_mod.is_managed(Path(path), self.projects_root()),
+                         "git": self.is_git(path), "test_command": " ".join(cmd) if cmd else "", "busy": self._busy_here(path)})
+        return {"projects": rows, "trash": projects_mod.list_trash(self.trash_dir), "root": str(self.projects_root()),
+                "stacks": {k: v["label"] for k, v in projects_mod.STACKS.items()}}
+
+    def create_project(self, body: dict) -> dict:
+        if str(body.get("goal", "")).strip():
+            self._role_args(body.get("roles"))  # a bad role choice must fail before a folder is created
+        try:
+            made = projects_mod.create_project(self.projects_root(), str(body.get("name", "")), str(body.get("stack", "python")),
+                                               str(body.get("goal", ""))[:2000])
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        path = self.add_project(made["path"])
+        with self._lock:
+            self._projects[path]["test_command"] = made["test_command"] or []
+            self._save_store()
+        goal = str(body.get("goal", "")).strip()
+        job = None
+        if goal:
+            job = self.start_run(goal, path, body.get("roles"), bool(body.get("persist")), fresh=True)
+        return {"project": path, "job": job, "message": f"프로젝트 폴더를 만들었습니다: {path}" + (" · 첫 구현을 시작했습니다." if job else "")}
+
+    def remove_project(self, path: str) -> dict:
+        path = self._known(path)
+        if self._busy_here(path):
+            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다.")
+        with self._lock:
+            self._projects.pop(path, None)
+            self._save_store()
+        return {"ok": True, "message": "목록에서 제거했습니다. 폴더와 파일은 그대로입니다."}
+
+    def delete_project(self, path: str, confirm: str) -> dict:
+        path = self._known(path)
+        if self._busy_here(path):
+            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝나거나 중지한 뒤 삭제하세요.")
+        try:
+            row = projects_mod.trash_project(Path(path), self.projects_root(), self.trash_dir, confirm)
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        with self._lock:
+            self._projects.pop(path, None)
+            self._save_store()
+        return {"ok": True, "message": f"휴지통으로 옮겼습니다 ({row['name']}). 휴지통에서 복원할 수 있습니다."}
+
+    def restore_project(self, entry_id: str) -> dict:
+        try:
+            path = projects_mod.restore_project(self.trash_dir, entry_id, self.projects_root())
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        self.add_project(str(path))
+        return {"ok": True, "message": f"복원했습니다: {path}", "project": str(path)}
+
+    def purge_trash(self, entry_id: str, confirm: str) -> dict:
+        try:
+            projects_mod.purge_trash(self.trash_dir, entry_id, confirm)
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        return {"ok": True, "message": "영구 삭제했습니다."}
 
     def _known(self, path: Optional[str]) -> str:
         if not path or path not in self._projects:
@@ -312,7 +381,7 @@ class DashboardApp:
             raise ApiError(400, "2차 검수 AI는 구현 AI와 달라야 합니다.")
         return args
 
-    def start_run(self, goal: str, project: str, roles: Optional[dict] = None, persist: bool = False) -> dict:
+    def start_run(self, goal: str, project: str, roles: Optional[dict] = None, persist: bool = False, fresh: bool = False) -> dict:
         goal = (goal or "").strip()
         if not goal:
             raise ApiError(400, "목표를 입력하세요.")
@@ -333,6 +402,8 @@ class DashboardApp:
         args += role_args
         if persist:
             args += ["--persist", "--max-minutes", str(PERSIST_MINUTES)]
+        if fresh:
+            args += ["--no-baseline"]  # a brand-new project has nothing to be 'healthy' yet
         cfg = self._projects[project]
         if "test_command" in cfg:
             args += ["--test-command", shlex.join(cfg["test_command"])] if cfg["test_command"] else ["--no-tests"]
@@ -534,6 +605,10 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 state = app.build_state((query.get("project") or [None])[0], (query.get("run") or [None])[0],
                                         (query.get("analysis") or [None])[0])
                 return self._json(200, state)
+            if url.path == "/api/projects":
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                return self._json(200, app.projects_overview())
             if url.path in ("/api/inbox", "/api/diff", "/api/describe"):
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -582,6 +657,16 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 if path == "/api/inbox/action":
                     return self._json(200, app.act(str(body.get("project", "")), str(body.get("key", "")),
                                                    str(body.get("action", "")), str(body.get("message", ""))))
+                if path == "/api/projects/create":
+                    return self._json(200, app.create_project(body))
+                if path == "/api/projects/remove":
+                    return self._json(200, app.remove_project(str(body.get("path", ""))))
+                if path == "/api/projects/delete":
+                    return self._json(200, app.delete_project(str(body.get("path", "")), str(body.get("confirm", ""))))
+                if path == "/api/projects/restore":
+                    return self._json(200, app.restore_project(str(body.get("id", ""))))
+                if path == "/api/projects/purge":
+                    return self._json(200, app.purge_trash(str(body.get("id", "")), str(body.get("confirm", ""))))
                 if path == "/api/tests":
                     return self._json(200, {"job": app.start_tests(str(body.get("project", "")))})
                 if path == "/api/stop":
