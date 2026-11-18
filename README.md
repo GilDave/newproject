@@ -156,3 +156,20 @@ tests/    가짜 공급자(ScriptedProvider)로 전 단계 검증
 - **시작 전 점검**: 수정 전 코드에서도 테스트가 실패하면 AI를 호출하지 않고 멈춥니다 (환경 문제로 토큰 낭비 방지).
 - **이중 검증**: 테스트는 검수 통과 뒤 한 번 더 실행합니다 (불안정한 테스트 차단). `--reviewer2 <ai>`를 주면 2차 검수 AI도 통과시켜야 합니다 (1차가 통과한 코드만 2차에 보냄). `--no-double-check`로 끌 수 있습니다.
 - solomon.toml `[loop]`: `max_attempts`(0=무제한), `max_run_minutes`, `max_tokens`, `stagnation_limit`, `max_restarts`, `double_check_tests`, `baseline_check`.
+
+## 밤샘 자동 수정 (overnight autofix)
+
+분석 결과의 문제를 **차례대로 알아서** 고칩니다. 자는 동안 돌리고 아침에 확인하세요.
+
+```
+solomon autofix --project /경로 --min-severity medium --max-fixes 5 --budget-minutes 360
+```
+(대시보드: 작업 대시보드 → "밤샘 자동 수정" 카드. 맥은 작업 중 잠자기를 막습니다(caffeinate).)
+
+- 대상: 가장 최근 분석(또는 `--analysis ID`)에서 심각도·근거 확인·AI 동의 기준을 넘은 항목만. 근거가 확인되지 않은 항목은 기본 제외(`--include-unverified`).
+- 각 수정은 일반 실행과 같은 파이프라인(계획→구현→범위 검사→테스트→교차 검수→테스트 재확인)을 거치며, **앞 수정 결과 위에서** 다음 수정을 합니다. 항목당 파일 8개·400줄 제한.
+- 통과한 수정은 새 브랜치 `solomon/autofix-<id>`에 "Solomon" 이름으로 커밋됩니다. **현재 브랜치와 작업 폴더는 건드리지 않습니다.**
+- 멈추는 조건: 시간 예산, 구독 한도 소진, 3건 연속 실패, 수정 전 테스트 실패, 중지 버튼. 실패한 항목은 건너뛰고 계속합니다.
+- 테스트 명령이 없으면 시작하지 않습니다 (`--allow-untested`로 해제).
+- 결과: `<프로젝트>/.solomon/batches/<id>/report.md` (아침에 확인하는 명령 포함), `combined.patch`, `events.jsonl`. 대시보드의 "원본에 적용"은 커밋 없이 패치만 적용합니다.
+- 라이브로 돌아가는 프로그램(예: 자동매매 봇)은 적용 전에 직접 테스트하고, 장이 닫힌 뒤에 반영하세요.

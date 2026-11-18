@@ -123,6 +123,42 @@ def _analyze(args: argparse.Namespace) -> int:
     return {"DONE": 0, "FAILED": 1, "STOPPED": 130}.get(result.status, 2)
 
 
+def _autofix(args: argparse.Namespace) -> int:
+    from . import autofix as autofix_mod
+
+    settings = load_settings(args.config)
+    if args.no_tests:
+        settings.test_command = None
+    elif args.test_command:
+        settings.test_command = shlex.split(args.test_command)
+    for role in ("planner", "builder", "reviewer", "reviewer2"):
+        chosen = getattr(args, role, None)
+        if chosen:
+            settings.roles[role] = chosen
+    settings.validate()
+    project = Path(args.project or settings.project_path or ".").expanduser()
+
+    def _stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        res = autofix_mod.run_autofix(
+            settings, project, args.analysis, min_severity=args.min_severity, min_agreement=args.min_agreement,
+            verified_only=not args.include_unverified, max_fixes=args.max_fixes, budget_minutes=args.budget_minutes,
+            allow_untested=args.allow_untested)
+    except (autofix_mod.AutofixError, ConfigError, gitops.GitError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"batch:   {res.batch_id}\nstatus:  {res.status}\nsummary: {res.summary}")
+    for i, it in enumerate(res.items, 1):
+        print(f"  {i}. {it.status:<13} [{it.severity}] {it.title}")
+    if res.branch and res.patch_path:
+        print(f"branch:  {res.branch}")
+    print(f"report:  {res.report_path}")
+    return {"DONE": 0, "NOTHING": 0, "PARTIAL": 1, "FAILED": 1, "STOPPED": 130}.get(res.status, 2)
+
+
 def _status(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     project = Path(args.project or settings.project_path or ".").expanduser().resolve()
@@ -208,6 +244,22 @@ def main(argv: list[str] | None = None) -> int:
     an.add_argument("--ais", help="comma-separated AIs to use (default: every installed one)")
     an.add_argument("--config", help="path to solomon.toml")
     an.set_defaults(func=_analyze)
+
+    af = sub.add_parser("autofix", help="fix the findings of an analysis one after another, unattended (own branch, original untouched)")
+    af.add_argument("--project")
+    af.add_argument("--config")
+    af.add_argument("--analysis", help="analysis id (default: the latest)")
+    af.add_argument("--min-severity", choices=["low", "medium", "high"], default="medium")
+    af.add_argument("--min-agreement", type=int, default=1, help="how many AIs must have reported the finding")
+    af.add_argument("--include-unverified", action="store_true", help="also fix findings whose quoted evidence was not found")
+    af.add_argument("--max-fixes", type=int, default=5)
+    af.add_argument("--budget-minutes", type=float, default=360.0)
+    af.add_argument("--test-command")
+    af.add_argument("--no-tests", action="store_true")
+    af.add_argument("--allow-untested", action="store_true")
+    for role in ("planner", "builder", "reviewer", "reviewer2"):
+        af.add_argument(f"--{role}")
+    af.set_defaults(func=_autofix)
 
     st = sub.add_parser("status", help="show progress of recent runs (read-only)")
     st.add_argument("--project", help="local path of the project (default: `project` in solomon.toml, else the current folder)")

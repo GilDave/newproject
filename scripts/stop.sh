@@ -30,7 +30,7 @@ fi
 # `solomon run` processes started from the dashboard are its children
 runs=()
 for c in $(pgrep -P "$pid" 2>/dev/null); do
-  if ps -p "$c" -o command= 2>/dev/null | grep -q "solomon run"; then runs+=("$c"); fi
+  if ps -p "$c" -o command= 2>/dev/null | grep -Eq "solomon (run|analyze|autofix)"; then runs+=("$c"); fi
 done
 if [ "${#runs[@]}" -gt 0 ]; then
   if [ "$WITH_RUNS" = "1" ]; then

@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 import re
+import shutil
 import secrets
 import shlex
 import signal
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analysis as analysis_mod, gitops
+from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import Settings
 from .status import load_runs
@@ -50,9 +51,23 @@ class ApiError(Exception):
 def _default_launcher(args: list[str], log_path: Path) -> subprocess.Popen:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = open(log_path, "w", encoding="utf-8")
-    return subprocess.Popen(
+    popen = subprocess.Popen(
         args, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True
     )
+    keep_awake(popen.pid)
+    return popen
+
+
+def keep_awake(pid: int) -> None:
+    """macOS: stop the Mac from idle-sleeping while the job runs (an overnight batch must not be put to sleep).
+    caffeinate exits by itself when the job does. Best effort: no caffeinate, no problem."""
+    exe = shutil.which("caffeinate") if sys.platform == "darwin" else None
+    if exe:
+        try:
+            subprocess.Popen([exe, "-i", "-w", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            pass
 
 
 class DashboardApp:
@@ -188,12 +203,13 @@ class DashboardApp:
         state: dict = {
             "version": __version__, "projects": projects, "project": project, "roles": self.settings.roles,
             "providers": self.providers_info(), "job": job, "runs": [], "current": None,
-            "apply": {"possible": False, "applied": False}, "analyses": [], "analysis": None,
+            "apply": {"possible": False, "applied": False}, "analyses": [], "analysis": None, "batches": [],
         }
         if not project:
             return state
         self._add_analysis_state(state, Path(project), project, analysis_id, job)
         state["project_git"] = self.is_git(project)
+        state["batches"] = autofix_mod.list_batches(Path(project), self.settings.state_dir)
         cmd, source = self.effective_test_command(project)
         state["test_command"] = {"text": " ".join(cmd) if cmd else "없음", "source": source}
         runs = load_runs(Path(project), self.settings.state_dir)
@@ -350,6 +366,55 @@ class DashboardApp:
             args += ["--config", self.config_path]
         return self._spawn("analyze", args, project, focus or "전반 분석")
 
+    def start_autofix(self, project: str, opts: Optional[dict] = None) -> dict:
+        opts = opts or {}
+        if (project or "") not in self._projects:
+            try:
+                project = self.add_project(project or "")
+            except gitops.GitError as exc:
+                raise ApiError(400, str(exc)) from exc
+        if not self.is_git(project):
+            raise ApiError(400, "자동 수정에는 git 저장소가 필요합니다 (커밋이 1개 이상).")
+        sev = str(opts.get("min_severity", "medium"))
+        if sev not in ("low", "medium", "high"):
+            raise ApiError(400, "심각도 값이 올바르지 않습니다.")
+        try:
+            fixes = int(opts.get("max_fixes", 5))
+            hours = float(opts.get("budget_hours", 6))
+        except (TypeError, ValueError):
+            raise ApiError(400, "숫자 값이 올바르지 않습니다.") from None
+        if not (1 <= fixes <= 30) or not (0.25 <= hours <= 24):
+            raise ApiError(400, "수정 개수는 1~30, 시간은 0.25~24시간이어야 합니다.")
+        cfg = self._projects[project]
+        cmd, _ = self.effective_test_command(project)
+        if not cmd:
+            raise ApiError(400, "테스트 명령이 없으면 밤새 자동 수정을 하지 않습니다. 프로젝트 설정에서 테스트 명령을 정하세요.")
+        args = [sys.executable, "-m", "solomon", "autofix", "--project", project, "--min-severity", sev,
+                "--max-fixes", str(fixes), "--budget-minutes", str(int(hours * 60)), "--test-command", shlex.join(cmd)]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        args += self._role_args(opts.get("roles"))
+        return self._spawn("autofix", args, project, f"밤샘 자동 수정 ({sev} 이상 · 최대 {fixes}건)")
+
+    def apply_batch(self, project: str, batch_id: str) -> dict:
+        project = self._known(project)
+        if not re.match(r"^\d{8}-\d{6}-[0-9a-f]{4}$", batch_id or ""):
+            raise ApiError(400, "배치 번호가 올바르지 않습니다.")
+        bdir = Path(project) / self.settings.state_dir / "batches" / batch_id
+        patch = bdir / "combined.patch"
+        if not patch.is_file():
+            raise ApiError(404, "적용할 패치가 없습니다 (수정이 통과한 배치에만 만들어집니다).")
+        if (bdir / "applied.json").exists():
+            raise ApiError(409, "이미 적용한 배치입니다.")
+        if self.job and self.job["popen"].poll() is None and self.job.get("project") == project:
+            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝난 뒤 적용하세요.")
+        try:
+            gitops.apply_patch(Path(project), patch)
+        except gitops.GitError as exc:
+            raise ApiError(409, f"패치를 적용하지 못했습니다 (원본이 그사이 바뀌었을 수 있습니다): {exc}") from exc
+        (bdir / "applied.json").write_text(json.dumps({"applied_at": time.strftime("%Y-%m-%dT%H:%M:%S")}), encoding="utf-8")
+        return {"ok": True, "message": "원본 작업 폴더에 적용했습니다. 커밋은 하지 않았습니다. git diff로 확인하고, 라이브 프로그램이면 테스트 후 반영하세요."}
+
     def _spawn(self, kind: str, args: list[str], project: str, label: str) -> dict:
         with self._lock:
             if self.job and self.job["popen"].poll() is None:
@@ -479,6 +544,10 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"), bool(body.get("persist")))})
                 if path == "/api/analyze":
                     return self._json(200, {"job": app.start_analysis(str(body.get("project", "")), str(body.get("focus", "")), body.get("ais"))})
+                if path == "/api/autofix":
+                    return self._json(200, {"job": app.start_autofix(str(body.get("project", "")), body)})
+                if path == "/api/apply-batch":
+                    return self._json(200, app.apply_batch(str(body.get("project", "")), str(body.get("batch_id", ""))))
                 if path == "/api/stop":
                     return self._json(200, {"job": app.stop_run()})
                 if path == "/api/apply":

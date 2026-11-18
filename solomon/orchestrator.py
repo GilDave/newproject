@@ -201,6 +201,7 @@ class Orchestrator:
         """base_ref: start from this commit or branch (a batch builds each fix on the previous one).
         on_pass(worktree, result) runs while the passed worktree still exists and may return a commit id."""
         self._on_pass = on_pass
+        self._tokens = 0
         project = Path(project).resolve()
         gitops.ensure_repo(project)
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]

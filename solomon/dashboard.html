@@ -210,6 +210,17 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
     <div class="pool" id="pool"></div>
     <div class="bar" id="bar"></div>
     <div class="card" id="report" hidden></div>
+    <div class="card" id="batchCard">
+      <h2>밤샘 자동 수정</h2>
+      <div class="hint">가장 최근 분석에서 근거가 확인된 문제를 하나씩 차례로 고칩니다. 별도 브랜치에만 저장되고 원본은 그대로입니다. 아침에 결과를 보고 적용하세요.</div>
+      <div class="roles" style="margin-top:8px">
+        <div class="rr"><small>최소 심각도</small><select id="bf-sev"><option value="high">높음</option><option value="medium" selected>보통 이상</option><option value="low">전부</option></select></div>
+        <div class="rr"><small>최대 수정 개수</small><select id="bf-n"><option>3</option><option selected>5</option><option>10</option><option>20</option></select></div>
+        <div class="rr"><small>제한 시간</small><select id="bf-h"><option value="2">2시간</option><option value="6" selected>6시간</option><option value="10">10시간</option></select></div>
+      </div>
+      <div class="row" style="margin-top:8px"><button id="bf-go" class="good">밤샘 자동 수정 시작</button></div>
+      <div id="batches" style="margin-top:10px"></div>
+    </div>
   </section>
 
   <section class="col">
@@ -372,8 +383,34 @@ function renderCommand(){
   $("run").disabled = running || busy; $("stop").disabled = !running;
 }
 
+function renderBatches(){
+  const box = $("batches"); clear(box);
+  const BK = {PASSED: "✅", FAILED: "❌", ERROR: "⚠", SKIPPED: "⏭", BLOCKED_QUOTA: "⛔", STOPPED: "⏹", PENDING: "…", RUNNING: "🔄"};
+  (state.batches || []).slice(0, 3).forEach(b => {
+    const c = el("div", "card"); c.style.margin = "6px 0";
+    c.appendChild(el("div", "", (b.finished ? "" : "🔄 진행 중 · ") + b.batch_id + (b.summary ? " — " + b.summary : "")));
+    (b.items || []).forEach(it => c.appendChild(el("div", "hint", (BK[it.status] || "…") + " " + (it.severity || "") + " · " + clip(it.title, 60) + (it.summary && it.status !== "PASSED" ? " — " + clip(String(it.summary).split("\n")[0], 80) : ""))));
+    if (b.branch && b.finished) c.appendChild(el("div", "hint", "브랜치: " + b.branch));
+    if (b.has_patch){
+      const r = el("div", "row"), btn = el("button", "good", b.applied ? "적용됨" : "원본에 적용 (커밋 안 함)"); btn.disabled = !!b.applied;
+      btn.onclick = async () => { if (!confirm("통과한 수정 전부를 작업 폴더에 적용할까요? 커밋은 하지 않습니다.")) return; try { const r2 = await api("/api/apply-batch", {project: state.project, batch_id: b.batch_id}); toast(r2.message); poll(); } catch (e) { toast(e.message, true); } };
+      r.appendChild(btn); c.appendChild(r);
+    }
+    box.appendChild(c);
+  });
+  if (!(state.batches || []).length) box.appendChild(el("div", "hint", "아직 밤샘 수정 기록이 없습니다. 먼저 분석을 실행하세요."));
+  $("bf-go").disabled = state.job.state === "running";
+}
+$("bf-go").onclick = async () => {
+  if (!state || !state.project) return toast("프로젝트를 먼저 선택하세요.", true);
+  const roles = {planner: $("r-planner").value, builder: $("r-builder").value, reviewer: $("r-reviewer").value};
+  if ($("r-reviewer2").value) roles.reviewer2 = $("r-reviewer2").value;
+  try { await api("/api/autofix", {project: state.project, min_severity: $("bf-sev").value, max_fixes: +$("bf-n").value, budget_hours: +$("bf-h").value, roles}); toast("밤샘 자동 수정을 시작했습니다. 컴퓨터를 켜두세요."); poll(); } catch (e) { toast(e.message, true); }
+};
+
 function render(){
   renderCommand();
+  renderBatches();
   if (tab === "dash") renderDash(); else renderWork();
   tick();
 }
