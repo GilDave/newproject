@@ -203,6 +203,7 @@ class Orchestrator:
                 continue
 
             verification = verify(self.s, wt)
+            gitops.clean_untracked(wt)
             log.event("verify", passed=verification.passed, skipped=verification.skipped, exit_code=verification.exit_code)
             warnings = ["tests were not run: result is UNVERIFIED"] if verification.skipped else []
             review = self._review(order, wt, verification, warnings, log)

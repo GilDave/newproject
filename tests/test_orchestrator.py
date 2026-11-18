@@ -177,3 +177,25 @@ def test_project_is_left_clean_and_state_dir_is_excluded(tmp_path):
     orch.run("add new module", repo)
     status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
     assert status.strip() == ""
+
+
+def test_test_run_leftovers_do_not_leak_into_the_patch_or_scope_check(tmp_path):
+    repo = make_repo(tmp_path)
+    settings = make_settings()
+    # the test command leaves junk behind (like __pycache__) and passes only if src/new.py exists
+    settings.test_command = [
+        "python3",
+        "-c",
+        "import pathlib,sys; pathlib.Path('junk.tmp').write_text('x'); "
+        "sys.exit(0 if pathlib.Path('src/new.py').exists() else 1)",
+    ]
+    orch, *_ = build(
+        settings,
+        [order_json(), review_json("FAIL", ["add a docstring"]), review_json()],
+        [write_file("src/new.py"), write_file("src/new.py", '"""doc"""\nx = 1\n')],
+    )
+    result = orch.run("add new module", repo)
+
+    assert result.status == "PASSED"
+    assert result.attempts == 2
+    assert "junk.tmp" not in Path(result.patch_path).read_text()

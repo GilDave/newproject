@@ -68,6 +68,12 @@ def reset_worktree(wt: Path) -> None:
     git(["clean", "-fd"], wt)
 
 
+def clean_untracked(wt: Path) -> None:
+    """Drop files created by the test run (e.g. __pycache__). collect_changes() staged the
+    builder's work first, so only verification leftovers are still untracked here."""
+    git(["clean", "-fdq"], wt, check=False)
+
+
 def list_files(wt: Path, limit: int = 300) -> list[str]:
     files = git(["ls-files"], wt).stdout.splitlines()
     return files[:limit]
