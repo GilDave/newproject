@@ -23,7 +23,7 @@ def test_argv_and_stdin_shape():
     p = AntigravityProvider()
     argv = p.build_argv("agy", False)
     assert argv == ["agy", "--input-format", "stream-json", "--output-format", "stream-json", "--sandbox",
-                    "--model", "gemini-3.8-flash-high"]
+                    "--model", "gemini-3.8-flash-medium"]
     assert argv[-2:] != ["--model", "auto"]
     assert "--mode" not in argv and "accept-edits" not in argv  # no write mode exists in this adapter
     stdin = p.prepare_stdin("한글 프롬프트 \"quoted\"\nsecond line")
@@ -186,3 +186,19 @@ def test_agy_is_found_in_its_own_install_folder(tmp_path, monkeypatch):
 def test_a_configured_model_replaces_the_pinned_default():
     argv = AntigravityProvider(extra_args=["--model", "gemini-3.8-flash-low"]).build_argv("agy", False)
     assert argv.count("--model") == 1 and argv[-2:] == ["--model", "gemini-3.8-flash-low"]
+
+
+def test_a_silent_thinking_agy_is_not_killed_for_silence_nor_by_a_short_role_timeout(tmp_path):
+    slow = tmp_path / "slow"
+    slow.mkdir()
+    script = slow / "agy"
+    script.write_text(f"""#!{sys.executable}
+import json, sys, time
+sys.stdin.read()
+time.sleep(2.5)
+print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response": "late but fine"}}}}))
+""")
+    script.chmod(0o755)
+    # a 1 s silence limit and a 1 s hard limit would both have killed it
+    res = AntigravityProvider(executable=str(script)).run("x", cwd=str(tmp_path), write=False, timeout=1.0, no_output_timeout=1.0)
+    assert res.text == "late but fine"

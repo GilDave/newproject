@@ -31,7 +31,11 @@ NO_TOOLS = "Do not use tools. Use only the evidence supplied in this message.\n"
 # `agy models` on a signed-in account also lists Claude and GPT-OSS models, and "auto" may pick any of them.
 # A Claude model behind agy would review Claude's own work and silently void the cross-review, so a Google
 # model is pinned unless the config names one (extra_args.antigravity = ["--model", "<id from `agy models`>"]).
-DEFAULT_MODEL = "gemini-3.8-flash-high"
+DEFAULT_MODEL = "gemini-3.8-flash-medium"  # "high" thought for minutes in practice and hit the silence limit
+
+# agy can think silently for minutes before its first event, so it is never killed for silence, and its hard
+# limit is at least this long whatever the role's default is.
+MIN_HARD_TIMEOUT = 600.0
 
 
 class TransientStreamError(ProviderError):
@@ -83,7 +87,7 @@ class AntigravityProvider(CliProvider):
         with tempfile.TemporaryDirectory(prefix="solomon-agy-") as empty:
             for attempt in (1, 2):
                 try:
-                    return super().run(prompt, cwd=empty, write=False, timeout=timeout, no_output_timeout=no_output_timeout)
+                    return super().run(prompt, cwd=empty, write=False, timeout=max(timeout, MIN_HARD_TIMEOUT), no_output_timeout=None)
                 except TransientStreamError:
                     if attempt == 2:
                         raise

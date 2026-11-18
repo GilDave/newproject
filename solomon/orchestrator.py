@@ -24,6 +24,9 @@ from .settings import ROLES, ConfigError, Settings
 from .verifier import VerifyResult, verify
 
 
+REVIEW_RETRIES = 2  # extra asks when the reviewer gives no verdict at all
+
+
 class BlockedByQuota(Exception):
     def __init__(self, provider: str, detail: str):
         super().__init__(f"{provider}: subscription usage limit reached ({detail})")
@@ -141,11 +144,11 @@ class Orchestrator:
         except BlockedByQuota:
             raise
         except ProviderError as exc:
-            return ReviewResult("FAIL", [f"reviewer unavailable, treated as FAIL: {exc}"])
+            return ReviewResult("FAIL", [f"reviewer unavailable, treated as FAIL: {exc}"], error=True)
         try:
             return ReviewResult.from_dict(extract_json(res.text))
         except ValueError as exc:
-            return ReviewResult("FAIL", [f"unparseable review, treated as FAIL: {exc}"])
+            return ReviewResult("FAIL", [f"unparseable review, treated as FAIL: {exc}"], error=True)
 
     # -------------------------------------------------------------------- run
     def run(self, goal: str, project: str | Path, keep_worktree: bool = False) -> RunResult:
@@ -224,6 +227,21 @@ class Orchestrator:
                       command=verification.command, output_tail=verification.output_tail[-1500:])
             warnings = ["tests were not run: result is UNVERIFIED"] if verification.skipped else []
             review = self._review(order, wt, verification, warnings, log)
+            retries = 0
+            while review.error and retries < REVIEW_RETRIES:
+                # No verdict is not a verdict. Ask the reviewer again about the SAME code instead of paying the
+                # builder to redo work that nobody found fault with.
+                retries += 1
+                log.event("review_retry", attempt=attempt, retry=retries, reason=review.issues[0] if review.issues else "")
+                review = self._review(order, wt, verification, warnings, log)
+            if review.error:
+                (run_dir / "last_attempt.patch").write_text(gitops.full_diff(wt, binary=True), encoding="utf-8")
+                reviewer = self.s.roles["reviewer"]
+                result.status = "ERROR"
+                result.summary = (f"검수 AI({reviewer})가 {1 + REVIEW_RETRIES}번 모두 판정을 내지 못해 중단했습니다. "
+                                  f"구현은 다시 시키지 않았습니다 (마지막 코드는 last_attempt.patch). 원인: {review.issues[0] if review.issues else '?'}")
+                log.event("review", verdict="ERROR", issues=review.issues)
+                return
             log.event("review", verdict=review.verdict, issues=review.issues)
 
             if verification.passed and review.verdict == "PASS":

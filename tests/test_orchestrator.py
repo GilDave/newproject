@@ -65,18 +65,42 @@ def test_reviewer_fail_feeds_issues_back_to_builder(tmp_path):
     assert "missing edge case test" in codex.calls[1]["prompt"]
 
 
-def test_unparseable_review_fails_closed(tmp_path):
+def test_unparseable_review_is_never_a_pass_and_never_sends_the_builder_back(tmp_path):
     repo = make_repo(tmp_path)
-    settings = make_settings(max_attempts=2)
-    orch, *_ = build(
-        settings,
-        [order_json(), "looks good to me", "still fine"],
-        [write_file("src/new.py"), write_file("src/new.py")],
-    )
+    settings = make_settings(max_attempts=3)
+    orch, claude, codex = build(settings, [order_json(), "looks good to me", "still fine", "no json at all"], [write_file("src/new.py")])
     result = orch.run("add new module", repo)
 
-    assert result.status == "FAILED"
-    assert result.patch_path is None
+    assert result.status == "ERROR" and result.patch_path is None  # fail-closed: no verdict, no PASS
+    assert len(codex.calls) == 1  # the builder was NOT asked to redo anything
+    assert len(claude.calls) == 4  # planner + the reviewer asked three times about the same code
+    assert "판정을 내지 못해" in result.summary and "last_attempt.patch" in result.summary
+    assert (Path(result.run_dir) / "last_attempt.patch").is_file()
+
+
+def test_reviewer_that_times_out_is_asked_again_instead_of_rebuilding(tmp_path):
+    repo = make_repo(tmp_path)
+    orch, claude, codex = build(
+        make_settings(),
+        [order_json(), ProviderError("claude: NO_OUTPUT_TIMEOUT: no output for 180.0s"), review_json()],
+        [write_file("src/new.py")],
+    )
+    result = orch.run("add new module", repo)
+    assert result.status == "PASSED" and result.attempts == 1
+    assert len(codex.calls) == 1 and len(claude.calls) == 3
+    kinds = [json.loads(l)["event"] for l in (Path(result.run_dir) / "events.jsonl").read_text().splitlines()]
+    assert "review_retry" in kinds
+
+
+def test_a_real_fail_verdict_still_sends_the_builder_back(tmp_path):
+    repo = make_repo(tmp_path)
+    orch, claude, codex = build(
+        make_settings(), [order_json(), review_json("FAIL", ["real problem"]), review_json()],
+        [write_file("src/new.py"), write_file("src/new.py", "x = 2\n")],
+    )
+    result = orch.run("add new module", repo)
+    assert result.status == "PASSED" and result.attempts == 2 and len(codex.calls) == 2
+    assert "real problem" in codex.calls[1]["prompt"]
 
 
 def test_failing_tests_block_a_passing_review(tmp_path):

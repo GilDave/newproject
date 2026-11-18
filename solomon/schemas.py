@@ -86,6 +86,7 @@ class ReviewResult:
     verdict: str  # "PASS" or "FAIL"
     issues: list[str] = field(default_factory=list)
     summary: str = ""
+    error: bool = False  # True: the reviewer never gave a verdict (timeout, crash, garbage). Not a real FAIL.
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ReviewResult":
