@@ -113,7 +113,7 @@ def _bench(args: argparse.Namespace) -> int:
         print(f"{len(tasks)} task(s) checked, {len(problems)} problem(s).")
         return 1 if problems else 0
     settings = load_settings(args.config)
-    names = [c for c in (args.configs or ",".join(bench_mod.CONFIGS)).split(",") if c]
+    names = [c for c in (args.configs or ",".join(bench_mod.DEFAULT_CONFIGS)).split(",") if c]
     for name in names:  # fail early on a typo, before any quota is spent
         bench_mod.settings_for(settings, name)
     problems = bench_mod.validate_tasks(tasks, Path(tempfile.mkdtemp()))
@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     bn.add_argument("action", choices=["validate", "run", "report"])
     bn.add_argument("--tasks", default="bench/tasks", help="folder with the experiment tasks")
     bn.add_argument("--only", help="comma-separated task ids or prefixes (default: all)")
-    bn.add_argument("--configs", help=f"comma-separated, default all: {', '.join(bench_mod.CONFIGS)}")
+    bn.add_argument("--configs", help=f"comma-separated, default: {', '.join(bench_mod.DEFAULT_CONFIGS)}; also: {', '.join(c for c in bench_mod.CONFIGS if c not in bench_mod.DEFAULT_CONFIGS)}")
     bn.add_argument("--repeat", type=int, default=1, help="repetitions of every task and config")
     bn.add_argument("--out", default="bench_results", help="folder for results.jsonl and run logs")
     bn.add_argument("--keep", action="store_true", help="keep each working repository for inspection")

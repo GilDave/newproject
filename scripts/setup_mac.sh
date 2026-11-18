@@ -53,7 +53,7 @@ echo "== 5. AI CLIs =="
 "$VENV_DIR/bin/python" -m solomon doctor || need_manual+=("install the missing CLI(s) shown above and sign in")
 
 echo "== 6. API keys in this shell (Solomon strips them, but know they exist) =="
-found="$(env | grep -E '^(OPENAI_API_KEY|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|GEMINI_API_KEY|GOOGLE_API_KEY|AZURE_OPENAI_API_KEY)=' | sed 's/=.*/=<hidden>/')"
+found="$(env | grep -E '^(OPENAI_API_KEY|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|GEMINI_API_KEY|GOOGLE_API_KEY|GOOGLE_GENAI_USE_VERTEXAI|AZURE_OPENAI_API_KEY)=' | sed 's/=.*/=<hidden>/')"
 if [ -n "$found" ]; then
   printf '%s\n' "$found"
   warn "the variables above are set in this shell"

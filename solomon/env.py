@@ -15,6 +15,7 @@ FORBIDDEN_API_KEYS = (
     "ANTHROPIC_AUTH_TOKEN",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
+    "GOOGLE_GENAI_USE_VERTEXAI",  # switches Gemini CLI to billed Vertex AI
     "AZURE_OPENAI_API_KEY",
 )
 

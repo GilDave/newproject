@@ -45,3 +45,26 @@ def codex_usage(stdout: str, stderr: str) -> Optional[dict]:
     if not match:
         return None
     return {"in": None, "out": None, "total": int(match.group(1).replace(",", ""))}
+
+
+def gemini_usage(stdout: str) -> Optional[dict]:
+    """Gemini CLI json output: stats.models.<model>.tokens = {prompt, candidates, total, cached, ...}.
+    Anything unexpected returns None so the call is shown as an estimate instead of a wrong exact number."""
+    try:
+        models = (json.loads(stdout).get("stats") or {}).get("models") or {}
+        tin = tout = total = cached = 0
+        for info in models.values():
+            tokens = info.get("tokens") or {}
+            prompt, cand = int(tokens.get("prompt") or 0), int(tokens.get("candidates") or 0)
+            tin += prompt
+            tout += cand
+            cached += int(tokens.get("cached") or 0)
+            total += int(tokens.get("total") or (prompt + cand))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if not total:
+        return None
+    result = {"in": tin, "out": tout, "total": total}
+    if cached:
+        result["cache_read"] = cached
+    return result

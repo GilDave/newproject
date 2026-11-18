@@ -12,11 +12,13 @@ from .base import (
 )
 from .claude import ClaudeProvider
 from .codex import CodexProvider
+from .gemini import GeminiProvider
 
-# To add Gemini later: write providers/gemini.py (a CliProvider subclass) and add it here.
+# To add another AI: write providers/<name>.py (a CliProvider subclass) and add it here.
 PROVIDER_CLASSES: dict[str, type[CliProvider]] = {
     "claude": ClaudeProvider,
     "codex": CodexProvider,
+    "gemini": GeminiProvider,
 }
 
 

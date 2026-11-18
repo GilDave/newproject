@@ -89,8 +89,23 @@ solomon bench report --out bench_results             # 구성별 비교표
 - worktree는 커밋된 HEAD 기준이라, 작업 폴더의 미커밋 변경은 포함되지 않습니다 (경고 표시).
 - 웹 대시보드, 미션, 토론 모드, Gemini는 MVP 범위 밖입니다.
 
-## Gemini 등 확장
-`solomon/providers/gemini.py`에 `CliProvider` 하위 클래스를 만들고 `providers/__init__.py`의 `PROVIDER_CLASSES`에 한 줄 추가하면, 설정의 `[roles]`에서 바로 배정할 수 있습니다.
+## Gemini
+`gemini`(Google Gemini CLI)가 세 번째 공급자로 등록돼 있습니다. 설치 후 **구독/계정 로그인**(Google 계정)으로 한 번 직접 실행해 로그인해 두세요.
+`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`는 실행 전에 환경에서 제거되므로 API 과금으로는 돌지 않습니다.
+```toml
+# solomon.toml: 예) 검수를 Gemini에게
+[roles]
+planner  = "claude"
+builder  = "codex"
+reviewer = "gemini"
+
+[extra_args]
+gemini = ["-m", "gemini-2.5-pro"]   # 모델 지정이 필요하면
+```
+**주의:** Gemini 어댑터의 옵션(`--output-format json`, `-p`, `--approval-mode auto_edit`)은 문서상의 형태를 기준으로 만들었고 **실제 Gemini CLI로는 아직 실행해 보지 않았습니다.** `solomon doctor`와 `gemini --help`로 확인하고, 다르면 `providers/gemini.py`의 `build_argv`를 고치세요. 토큰 값을 못 읽으면 `~` 추정으로 표시됩니다.
+Gemini 구성의 비교 실험은 `solomon bench run --configs gemini_solo,codex_build_gemini_review,gemini_build_claude_review`처럼 이름으로 고릅니다(기본 4구성에는 포함되지 않음).
+
+다른 AI를 더 붙이려면 `providers/<이름>.py`에 `CliProvider` 하위 클래스를 만들고 `providers/__init__.py`의 `PROVIDER_CLASSES`에 한 줄 추가합니다.
 
 ## 구조
 ```

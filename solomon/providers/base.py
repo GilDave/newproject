@@ -49,6 +49,8 @@ _QUOTA_PHRASES = (
     "subscription limit",
     "limit reached",
     "too many requests",
+    "resource_exhausted",
+    "exhausted your",
     "429",
     "resets at",
     "try again later",
