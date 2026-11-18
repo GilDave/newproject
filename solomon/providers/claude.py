@@ -6,14 +6,23 @@ from ..tokens import claude_usage
 from .base import CliProvider, ProviderError, QuotaExhausted, looks_like_quota, parse_json_envelope
 
 
+# Planner and reviewer get everything they need inside the prompt, so read-only calls run without
+# tools (no file-hunting turns, smaller context) and without any MCP servers. NEVER add --bare:
+# it skips the subscription (OAuth/keychain) login and would bill per token.
+DEFAULT_READONLY_ARGS = ["--tools", "", "--strict-mcp-config"]
+
+
 class ClaudeProvider(CliProvider):
     name = "claude"
     cli_name = "claude"
 
+    def __init__(self, executable=None, extra_args=None, readonly_args=None):
+        super().__init__(executable=executable, extra_args=extra_args)
+        self.readonly_args = list(DEFAULT_READONLY_ARGS if readonly_args is None else readonly_args)
+
     def build_argv(self, exe: str, write: bool) -> list[str]:
         argv = [exe, "--print", "--output-format", "json"]
-        if write:
-            argv += ["--permission-mode", "acceptEdits"]
+        argv += ["--permission-mode", "acceptEdits"] if write else self.readonly_args
         return argv + self.extra_args
 
     def parse_output(self, stdout: str) -> str:

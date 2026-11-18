@@ -80,8 +80,13 @@ def test_api_keys_are_stripped(monkeypatch):
 
 
 def test_cli_argv_shapes():
-    assert ClaudeProvider().build_argv("claude", False) == ["claude", "--print", "--output-format", "json"]
-    assert "acceptEdits" in ClaudeProvider().build_argv("claude", True)
+    assert ClaudeProvider().build_argv("claude", False) == [
+        "claude", "--print", "--output-format", "json", "--tools", "", "--strict-mcp-config"
+    ]
+    write_argv = ClaudeProvider().build_argv("claude", True)
+    assert "acceptEdits" in write_argv and "--tools" not in write_argv  # a claude builder keeps its tools
+    assert ClaudeProvider(readonly_args=[]).build_argv("claude", False) == ["claude", "--print", "--output-format", "json"]
+    assert "--bare" not in ClaudeProvider().build_argv("claude", False)
     assert CodexProvider().build_argv("codex", False) == ["codex", "exec", "--sandbox", "read-only", "-"]
     assert CodexProvider().build_argv("codex", True)[3] == "workspace-write"
 
@@ -172,3 +177,13 @@ def test_cli_uses_configured_project_when_flag_is_missing(tmp_path, monkeypatch)
     assert str(seen["project"]) == str(tmp_path)
     cli.main(["run", "goal", "--config", str(cfg), "--project", "/elsewhere"])
     assert str(seen["project"]) == "/elsewhere"
+
+
+def test_readonly_args_can_be_overridden_from_config(tmp_path):
+    from solomon.providers import build_providers
+
+    cfg = tmp_path / "solomon.toml"
+    cfg.write_text("[extra_args]\nclaude_readonly = []\n", encoding="utf-8")
+    providers = build_providers(load_settings(cfg))
+    assert providers["claude"].build_argv("claude", False) == ["claude", "--print", "--output-format", "json"]
+    assert build_providers(load_settings(None))["claude"].readonly_args == ["--tools", "", "--strict-mcp-config"]

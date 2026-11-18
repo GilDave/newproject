@@ -16,6 +16,9 @@ reviewer = "claude"              # must differ from builder unless loop.allow_sa
 [extra_args]                     # appended to each CLI call, e.g. to pin a model
 # claude = ["--model", "sonnet"]
 # codex  = ["--model", "gpt-5"]
+# Arguments for Claude's read-only calls (planner, reviewer). Default: no tools and no MCP servers,
+# which keeps those calls to one small turn. Set to [] to turn it off. Never use --bare (breaks subscription login).
+# claude_readonly = ["--tools", "", "--strict-mcp-config"]
 
 [timeouts]                       # seconds
 planner   = 300

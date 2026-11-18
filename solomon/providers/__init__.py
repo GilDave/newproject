@@ -21,10 +21,13 @@ PROVIDER_CLASSES: dict[str, type[CliProvider]] = {
 
 
 def build_providers(settings: Settings) -> dict[str, Provider]:
-    return {
-        name: cls(executable=settings.executables.get(name), extra_args=settings.extra_args.get(name))
-        for name, cls in PROVIDER_CLASSES.items()
-    }
+    providers: dict[str, Provider] = {}
+    for name, cls in PROVIDER_CLASSES.items():
+        provider = cls(executable=settings.executables.get(name), extra_args=settings.extra_args.get(name))
+        if name == "claude" and "claude_readonly" in settings.extra_args:
+            provider.readonly_args = list(settings.extra_args["claude_readonly"])  # [] turns the default off
+        providers[name] = provider
+    return providers
 
 
 __all__ = [
