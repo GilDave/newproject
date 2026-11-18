@@ -16,13 +16,16 @@ class ClaudeProvider(CliProvider):
     name = "claude"
     cli_name = "claude"
 
-    def __init__(self, executable=None, extra_args=None, readonly_args=None):
+    def __init__(self, executable=None, extra_args=None, readonly_args=None, write_args=None):
         super().__init__(executable=executable, extra_args=extra_args)
         self.readonly_args = list(DEFAULT_READONLY_ARGS if readonly_args is None else readonly_args)
+        # Extra arguments for write (builder) calls, e.g. ["--tools", "Read,Edit,Write,Glob,Grep"] to keep
+        # the builder to file tools. Off by default until its saving is measured on your machine.
+        self.write_args = list(write_args or [])
 
     def build_argv(self, exe: str, write: bool) -> list[str]:
         argv = [exe, "--print", "--output-format", "json"]
-        argv += ["--permission-mode", "acceptEdits"] if write else self.readonly_args
+        argv += ["--permission-mode", "acceptEdits", *self.write_args] if write else self.readonly_args
         return argv + self.extra_args
 
     def parse_output(self, stdout: str) -> str:

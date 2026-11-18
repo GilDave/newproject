@@ -26,6 +26,8 @@ def build_providers(settings: Settings) -> dict[str, Provider]:
         provider = cls(executable=settings.executables.get(name), extra_args=settings.extra_args.get(name))
         if name == "claude" and "claude_readonly" in settings.extra_args:
             provider.readonly_args = list(settings.extra_args["claude_readonly"])  # [] turns the default off
+        if name == "claude" and "claude_write" in settings.extra_args:
+            provider.write_args = list(settings.extra_args["claude_write"])
         providers[name] = provider
     return providers
 

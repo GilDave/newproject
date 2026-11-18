@@ -187,3 +187,15 @@ def test_readonly_args_can_be_overridden_from_config(tmp_path):
     providers = build_providers(load_settings(cfg))
     assert providers["claude"].build_argv("claude", False) == ["claude", "--print", "--output-format", "json"]
     assert build_providers(load_settings(None))["claude"].readonly_args == ["--tools", "", "--strict-mcp-config"]
+
+
+def test_claude_write_args_are_off_by_default_and_configurable(tmp_path):
+    from solomon.providers import build_providers
+
+    assert "--tools" not in ClaudeProvider().build_argv("claude", True)
+    cfg = tmp_path / "solomon.toml"
+    cfg.write_text('[extra_args]\nclaude_write = ["--tools", "Read,Edit,Write"]\n', encoding="utf-8")
+    argv = build_providers(load_settings(cfg))["claude"].build_argv("claude", True)
+    assert argv[-2:] == ["--tools", "Read,Edit,Write"] and "acceptEdits" in argv
+    assert "--tools" in argv and argv.count("--tools") == 1
+    assert build_providers(load_settings(cfg))["claude"].build_argv("claude", False)[4:6] == ["--tools", ""]  # read-only unchanged
