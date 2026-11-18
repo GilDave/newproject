@@ -7,6 +7,7 @@
 #   bash scripts/start.sh --no-browser          # start without opening the browser
 # Stop it with:  bash scripts/stop.sh
 # Other options (--config, --port, --project ...) are passed to `solomon dashboard`.
+# If the dashboard is already running, --project is handed to it; other options only apply at start-up.
 # State lives in ~/.solomon (override with SOLOMON_HOME): dashboard.pid, dashboard.url, dashboard.log
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,9 +42,57 @@ running_pid() {  # prints the pid only if it is alive AND really is our dashboar
   echo "$pid"
 }
 
+resolve_py() {  # the project's virtual environment, else a python3 that can already import solomon
+  PY="${SOLOMON_PYTHON:-}"
+  [ -n "$PY" ] && return 0
+  if [ -x "$ROOT/.venv/bin/python" ]; then PY="$ROOT/.venv/bin/python"
+  elif python3 -c 'import solomon' >/dev/null 2>&1; then PY="$(command -v python3)"
+  else return 1
+  fi
+}
+
+register_project() {  # register_project <dashboard url> <path>: hand a --project to the running dashboard
+  "$PY" - "$1" "$2" <<'PYREG'
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+url, path = sys.argv[1], os.path.expanduser(sys.argv[2])
+u = urllib.parse.urlparse(url)
+token = urllib.parse.parse_qs(u.query)["t"][0]
+req = urllib.request.Request(f"http://{u.netloc}/api/project", data=json.dumps({"path": path}).encode(), method="POST",
+                             headers={"X-Solomon-Token": token, "Content-Type": "application/json"})
+try:
+    with urllib.request.urlopen(req, timeout=10) as r:
+        print("  프로젝트를 추가했습니다:", json.load(r)["project"])
+except urllib.error.HTTPError as e:
+    print("  프로젝트를 추가하지 못했습니다:", json.load(e).get("error", e.code))
+    sys.exit(1)
+except Exception as e:
+    print("  프로젝트를 추가하지 못했습니다:", e)
+    sys.exit(1)
+PYREG
+}
+
 if pid="$(running_pid)"; then
   echo "대시보드가 이미 실행 중입니다 (pid $pid)."
-  if [ -f "$URLF" ]; then url="$(cat "$URLF")"; echo "주소: $url"; open_browser "$url"; fi
+  if [ -f "$URLF" ]; then
+    url="$(cat "$URLF")"; echo "주소: $url"
+    ignored=(); i=0
+    while [ "$i" -lt "${#ARGS[@]}" ]; do
+      a="${ARGS[$i]}"
+      case "$a" in
+        --project)
+          i=$((i + 1))
+          if resolve_py; then register_project "$url" "${ARGS[$i]:-}"; else echo "  (Solomon 설정이 안 되어 프로젝트를 추가하지 못했습니다)"; fi ;;
+        --project=*)
+          if resolve_py; then register_project "$url" "${a#--project=}"; fi ;;
+        *) ignored+=("$a") ;;
+      esac
+      i=$((i + 1))
+    done
+    if [ "${#ignored[@]}" -gt 0 ]; then
+      echo "참고: 이미 실행 중이라 ${ignored[*]} 옵션은 적용되지 않았습니다. 적용하려면  bash scripts/stop.sh  후 다시 시작하세요."
+    fi
+    open_browser "$url"
+  fi
   echo "멈추려면:  bash scripts/stop.sh"
   exit 0
 fi
@@ -54,13 +103,7 @@ if [ "$PULL" = "1" ]; then
   if git pull --ff-only; then :; else echo "  (pull failed: starting with the code you already have)"; fi
 fi
 
-PY="${SOLOMON_PYTHON:-}"
-if [ -z "$PY" ]; then
-  if [ -x "$ROOT/.venv/bin/python" ]; then PY="$ROOT/.venv/bin/python"
-  elif python3 -c 'import solomon' >/dev/null 2>&1; then PY="$(command -v python3)"
-  else echo "Solomon is not set up yet. Run this once:  bash scripts/setup_mac.sh"; exit 1
-  fi
-fi
+resolve_py || { echo "Solomon is not set up yet. Run this once:  bash scripts/setup_mac.sh"; exit 1; }
 
 echo "== AI CLIs (installed? login state is not checked here) =="
 for c in claude codex agy; do

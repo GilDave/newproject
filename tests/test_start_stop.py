@@ -118,3 +118,36 @@ def test_stop_with_runs_flag_is_accepted_when_nothing_is_running(box):
     box.start()
     res = box.stop("--with-runs")
     assert res.returncode == 0 and "종료했습니다" in res.stdout
+
+
+def _projects(box):
+    import json as _json
+
+    url = box.urlf.read_text().strip()
+    req = urllib.request.Request(url.split("?")[0] + "api/state?t=" + url.split("t=")[1])
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return _json.load(r)["projects"]
+
+
+def test_project_given_to_an_already_running_dashboard_is_registered_not_ignored(box):
+    from helpers import make_repo
+
+    box.start()
+    other = make_repo(box.tmp / "other")
+    res = box.start("--project", str(other))
+    assert res.returncode == 0 and "이미 실행 중" in res.stdout and "프로젝트를 추가했습니다" in res.stdout
+    assert str(other.resolve()) in _projects(box)
+
+
+def test_a_bad_project_for_a_running_dashboard_says_so(box):
+    box.start()
+    plain = box.tmp / "plain"
+    plain.mkdir()
+    res = box.start("--project", str(plain))
+    assert "프로젝트를 추가하지 못했습니다" in res.stdout and str(plain.resolve()) not in _projects(box)
+
+
+def test_options_that_only_apply_at_startup_are_reported_as_ignored(box):
+    box.start()
+    res = box.start("--port", "9999")
+    assert "적용되지 않았습니다" in res.stdout and "--port" in res.stdout
