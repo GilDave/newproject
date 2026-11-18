@@ -148,3 +148,11 @@ solomon/  cli.py  orchestrator.py  settings.py  schemas.py  scope_guard.py  gito
           providers/{base,claude,codex}.py
 tests/    가짜 공급자(ScriptedProvider)로 전 단계 검증
 ```
+
+## 끈질기게 시도 (persistent loop) · 교차·이중 검증
+
+- 기본은 3번 시도 후 실패입니다. `solomon run --persist` (대시보드: "끈질기게 시도", 기본 켜짐·최대 180분)는 횟수 제한 없이 **통과할 때까지** 반복합니다. 멈추는 조건: 통과, `--max-minutes`, `--max-tokens`, 구독 한도 소진(BLOCKED_QUOTA), 같은 실패가 반복돼 접근을 바꿔도 진전이 없을 때, 사용자의 중지.
+- 같은 실패가 `stagnation_limit`(기본 3)번 연속이면 코드를 깨끗한 상태로 되돌리고 "완전히 다른 접근"을 지시합니다 (`max_restarts` 기본 2회).
+- **시작 전 점검**: 수정 전 코드에서도 테스트가 실패하면 AI를 호출하지 않고 멈춥니다 (환경 문제로 토큰 낭비 방지).
+- **이중 검증**: 테스트는 검수 통과 뒤 한 번 더 실행합니다 (불안정한 테스트 차단). `--reviewer2 <ai>`를 주면 2차 검수 AI도 통과시켜야 합니다 (1차가 통과한 코드만 2차에 보냄). `--no-double-check`로 끌 수 있습니다.
+- solomon.toml `[loop]`: `max_attempts`(0=무제한), `max_run_minutes`, `max_tokens`, `stagnation_limit`, `max_restarts`, `double_check_tests`, `baseline_check`.

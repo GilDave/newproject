@@ -84,3 +84,38 @@ def test_bad_role_choices_are_rejected_before_anything_is_launched(env, roles, f
 
 def test_roles_must_be_an_object(env):
     assert env.call("POST", "/api/run", {"goal": "x", "project": env.project, "roles": ["claude"]})[0] == 400
+
+
+# --------------------------------------------------- persistence and second reviewer
+def test_cli_persist_flags_set_the_loop_budgets(monkeypatch, tmp_path):
+    seen = {}
+
+    class FakeOrch:
+        def __init__(self, settings):
+            seen["s"] = settings
+
+        def run(self, goal, project, keep_worktree=False):
+            from solomon.orchestrator import RunResult
+
+            return RunResult(run_id="r", status="PASSED", summary="ok", run_dir=str(tmp_path))
+
+    monkeypatch.setattr(cli, "Orchestrator", FakeOrch)
+    cli.main(["run", "g", "--project", str(tmp_path), "--persist", "--max-minutes", "90", "--max-tokens", "300000",
+              "--reviewer2", "antigravity", "--no-double-check"])
+    s = seen["s"]
+    assert (s.max_attempts, s.max_run_minutes, s.max_tokens) == (0, 90.0, 300000)
+    assert s.roles["reviewer2"] == "antigravity" and s.double_check_tests is False
+
+
+def test_cli_rejects_reviewer2_equal_to_builder(capsys, tmp_path):
+    assert cli.main(["run", "g", "--project", str(tmp_path), "--reviewer2", "codex"]) == 2
+
+
+def test_dashboard_persist_and_reviewer2_become_flags(env):
+    body = run_body(env, reviewer2="antigravity")
+    body["persist"] = True
+    assert env.call("POST", "/api/run", body)[0] == 200
+    args = sleeper.calls[-1]
+    assert "--persist" in args and args[args.index("--max-minutes") + 1] == "180"
+    assert args[args.index("--reviewer2") + 1] == "antigravity"
+    assert env.call("POST", "/api/run", run_body(env, reviewer2="codex"))[0] == 400  # builder is codex by default

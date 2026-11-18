@@ -29,6 +29,7 @@ textarea,input[type=text]{width:100%;background:#08101a;color:var(--text);border
 textarea{min-height:120px;resize:vertical}
 textarea:focus,input:focus{outline:none;border-color:#34507a}
 .roles{display:grid;gap:6px}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:12px;margin-top:8px}
 .rr{display:grid;grid-template-columns:44px 1fr;align-items:center}
 .rr small{color:var(--dim);font-size:12px}
 select{width:100%;background:#08101a;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 8px;font:inherit}
@@ -167,7 +168,9 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
           <div class="rr"><small>계획</small><select id="r-planner"></select></div>
           <div class="rr"><small>구현</small><select id="r-builder"></select></div>
           <div class="rr"><small>검수</small><select id="r-reviewer"></select></div>
+          <div class="rr"><small>2차 검수</small><select id="r-reviewer2"></select></div>
         </div>
+        <label class="chk"><input type="checkbox" id="persist" checked> 끈질기게 시도 — 통과할 때까지 반복 (최대 3시간·구독 한도 내, 같은 실패 반복 시 접근 변경)</label>
         <div class="hint" id="rolehint">구현과 검수는 서로 다른 AI여야 교차 검증이 됩니다.</div>
       </div>
       <div id="anBlock" hidden>
@@ -244,7 +247,7 @@ const $ = (id) => document.getElementById(id);
 function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 function clear(n){ while (n.firstChild) n.removeChild(n.firstChild); }
 
-const ROLE_KO = {planner:"계획", builder:"구현", reviewer:"검수", analysis:"분석"};
+const ROLE_KO = {planner:"계획", builder:"구현", reviewer:"검수", reviewer2:"2차 검수", analysis:"분석"};
 const ROLE_LABEL = {planner:"PLANNER · 계획", builder:"BUILDER · 구현", reviewer:"REVIEWER · 검수"};
 const ROLE_CARD = {planner:"PLANNER (계획)", builder:"BUILDER (코드 작성)", reviewer:"REVIEWER (검수)"};
 const NAMES = {claude:"Claude", codex:"Codex", antigravity:"Antigravity", gemini:"Gemini"};
@@ -315,6 +318,11 @@ function fillRoleSelects(cur){
     if ([...sel.options].some(o => o.value === target && !o.disabled)) sel.value = target;
     else { const first = [...sel.options].find(o => !o.disabled); if (first) sel.value = first.value; }
   });
+  const sel2 = $("r-reviewer2"), keep2 = sel2.value;
+  clear(sel2);
+  const none = el("option", "", "없음"); none.value = ""; sel2.appendChild(none);
+  state.providers.forEach(p => { const o = el("option", "", pname(p.name) + (p.installed ? "" : " (미설치)")); o.value = p.name; o.disabled = !p.installed; sel2.appendChild(o); });
+  sel2.value = [...sel2.options].some(o => o.value === keep2 && !o.disabled) ? keep2 : "";
   const b = $("r-builder").value, r = $("r-reviewer").value;
   $("rolehint").textContent = b === r ? "⚠ 구현과 검수가 같은 AI입니다. 교차 검증이 되지 않으니 다르게 고르세요." : "구현과 검수는 서로 다른 AI여야 교차 검증이 됩니다.";
 }
@@ -771,7 +779,8 @@ $("run").onclick = async () => {
       await api("/api/analyze", {project, focus: goal, ais}); selectedProject = project; selectedAnalysis = null; toast("분석을 시작했습니다.");
     } else {
       const roles = {planner: $("r-planner").value, builder: $("r-builder").value, reviewer: $("r-reviewer").value};
-      await api("/api/run", {goal, project, roles}); rolesDirty = false; selectedProject = project; selectedRun = null; toast("실행을 시작했습니다.");
+      if ($("r-reviewer2").value) roles.reviewer2 = $("r-reviewer2").value;
+      await api("/api/run", {goal, project, roles, persist: $("persist").checked}); rolesDirty = false; selectedProject = project; selectedRun = null; toast("실행을 시작했습니다.");
     }
   } catch (e) { toast(e.message, true); }
   busy = false; poll();
@@ -793,7 +802,7 @@ $("savetest").onclick = async () => {
   catch (e) { toast(e.message, true); }
   poll();
 };
-["r-planner", "r-builder", "r-reviewer"].forEach(id => $(id).addEventListener("change", () => { rolesDirty = true; if (state) render(); }));
+["r-planner", "r-builder", "r-reviewer", "r-reviewer2"].forEach(id => $(id).addEventListener("change", () => { rolesDirty = true; if (state) render(); }));
 $("project").addEventListener("change", () => { const v = $("project").value.trim(); if (state && state.projects.includes(v)){ selectedProject = v; selectedRun = null; selectedAnalysis = null; poll(); } });
 $("tab-dash").onclick = () => setTab("dash"); $("tab-work").onclick = () => setTab("work");
 $("m-run").onclick = () => setMode("run"); $("m-an").onclick = () => setMode("analyze");

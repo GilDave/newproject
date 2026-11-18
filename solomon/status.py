@@ -17,8 +17,8 @@ _STAGE_BY_EVENT = {
     "review": "판정",
     "quota": "한도 소진",
 }
-_STAGE_BY_ROLE_START = {"planner": "계획", "builder": "구현", "reviewer": "검수"}
-_STAGE_BY_ROLE_END = {"planner": "계획 완료", "builder": "범위 검사와 테스트", "reviewer": "판정"}
+_STAGE_BY_ROLE_START = {"planner": "계획", "builder": "구현", "reviewer": "검수", "reviewer2": "2차 검수"}
+_STAGE_BY_ROLE_END = {"planner": "계획 완료", "builder": "범위 검사와 테스트", "reviewer": "판정", "reviewer2": "2차 판정"}
 
 
 @dataclass
@@ -110,7 +110,7 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             pending[role] = ev
             run.active = {"role": role, "provider": str(ev.get("provider")), "since": str(ev.get("ts"))}
             run.stage = _STAGE_BY_ROLE_START.get(role, run.stage)
-            run.stage_key = {"planner": "plan", "builder": "build", "reviewer": "review"}.get(role, run.stage_key)
+            run.stage_key = {"planner": "plan", "builder": "build", "reviewer": "review", "reviewer2": "review"}.get(role, run.stage_key)
         elif kind == "call_end":
             role, provider = str(ev.get("role")), str(ev.get("provider"))
             st = _stats(run, provider)

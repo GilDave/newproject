@@ -52,7 +52,18 @@ def _run(args: argparse.Namespace) -> int:
     if args.on_quota:
         settings.on_quota = args.on_quota
         settings.validate()
-    for role in ("planner", "builder", "reviewer"):
+    if args.persist:
+        settings.max_attempts = 0  # keep going until it passes or a budget / the subscription runs out
+    if args.max_attempts is not None:
+        settings.max_attempts = args.max_attempts
+    if args.max_minutes is not None:
+        settings.max_run_minutes = args.max_minutes
+    if args.max_tokens is not None:
+        settings.max_tokens = args.max_tokens
+    if args.no_double_check:
+        settings.double_check_tests = False
+    settings.validate()
+    for role in ("planner", "builder", "reviewer", "reviewer2"):
         chosen = getattr(args, role, None)
         if chosen:
             settings.roles[role] = chosen  # validated by the Orchestrator (known AI, builder can write, independence)
@@ -176,9 +187,14 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--apply", action="store_true", help="apply the passed patch to the working tree")
     run.add_argument("--keep-worktree", action="store_true", help="keep the isolated worktree for inspection")
     run.add_argument("--on-quota", choices=["stop", "wait"], help="override loop.on_quota")
-    for role in ("planner", "builder", "reviewer"):
+    for role in ("planner", "builder", "reviewer", "reviewer2"):
         run.add_argument(f"--{role}", help=f"which AI takes the {role} role for this run (overrides the config)")
     run.add_argument("--test-command", help="test command for this run, e.g. 'npm test' (overrides the config)")
+    run.add_argument("--persist", action="store_true", help="no attempt limit: keep trying until it passes or a budget runs out")
+    run.add_argument("--max-attempts", type=int, help="attempt limit (0 = none)")
+    run.add_argument("--max-minutes", type=float, help="wall-clock budget of the run in minutes")
+    run.add_argument("--max-tokens", type=int, help="token budget of the run")
+    run.add_argument("--no-double-check", action="store_true", help="do not re-run the tests before declaring a pass")
     run.add_argument("--no-tests", action="store_true", help="run without automatic tests (the result is UNVERIFIED)")
     run.set_defaults(func=_run)
 

@@ -33,6 +33,7 @@ from .settings import Settings
 from .status import load_runs
 
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+PERSIST_MINUTES = 180  # the dashboard's 'keep trying' stops after this long
 MAX_GOAL = 20000  # long enough to paste a stack trace
 MAX_BODY = 64 * 1024
 HTML_PATH = Path(__file__).with_name("dashboard.html")
@@ -278,7 +279,7 @@ class DashboardApp:
             raise ApiError(400, "역할 배정 형식이 올바르지 않습니다.")
         args: list[str] = []
         effective = dict(self.settings.roles)
-        for role in ("planner", "builder", "reviewer"):
+        for role in ("planner", "builder", "reviewer", "reviewer2"):
             name = roles.get(role)
             if name is None:
                 continue
@@ -290,9 +291,12 @@ class DashboardApp:
             raise ApiError(400, f"{effective['builder']}은(는) 구현을 맡을 수 없습니다 (계획·검수만 가능). 구현은 다른 AI로 고르세요.")
         if effective["builder"] == effective["reviewer"] and not self.settings.allow_same_provider:
             raise ApiError(400, "구현과 검수는 서로 다른 AI여야 합니다 (같은 AI가 자기 코드를 검수하면 교차 검증이 되지 않습니다).")
+        second = effective.get("reviewer2")
+        if second and second == effective["builder"]:
+            raise ApiError(400, "2차 검수 AI는 구현 AI와 달라야 합니다.")
         return args
 
-    def start_run(self, goal: str, project: str, roles: Optional[dict] = None) -> dict:
+    def start_run(self, goal: str, project: str, roles: Optional[dict] = None, persist: bool = False) -> dict:
         goal = (goal or "").strip()
         if not goal:
             raise ApiError(400, "목표를 입력하세요.")
@@ -311,6 +315,8 @@ class DashboardApp:
         if self.config_path:
             args += ["--config", self.config_path]
         args += role_args
+        if persist:
+            args += ["--persist", "--max-minutes", str(PERSIST_MINUTES)]
         cfg = self._projects[project]
         if "test_command" in cfg:
             args += ["--test-command", shlex.join(cfg["test_command"])] if cfg["test_command"] else ["--no-tests"]
@@ -470,7 +476,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
             try:
                 path = urlparse(self.path).path
                 if path == "/api/run":
-                    return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"))})
+                    return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"), bool(body.get("persist")))})
                 if path == "/api/analyze":
                     return self._json(200, {"job": app.start_analysis(str(body.get("project", "")), str(body.get("focus", "")), body.get("ais"))})
                 if path == "/api/stop":
