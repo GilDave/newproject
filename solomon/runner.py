@@ -135,6 +135,9 @@ def run_process(
             time.sleep(0.05)
         if timed_out:
             kill_tree(proc)
+    except BaseException:  # e.g. the user pressed stop: never leave the CLI running behind us
+        kill_tree(proc)
+        raise
     finally:
         with _LOCK:
             _ACTIVE.pop(proc.pid, None)

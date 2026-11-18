@@ -45,11 +45,31 @@ class RunSummary:
     providers: dict[str, ProviderStats] = field(default_factory=dict)
     timeline: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    stage_key: str = "start"  # start | plan | build | scope | test | review | decide | quota | done
+    roles: dict = field(default_factory=dict)
+    calls: list[dict] = field(default_factory=list)  # one entry per finished or failed AI call
+    active: Optional[dict] = None  # the call in flight right now: {role, provider, since}
+    quota_providers: list[str] = field(default_factory=list)
 
     def elapsed_sec(self, now: Optional[datetime] = None) -> Optional[float]:
         if not self.started:
             return None
         return ((self.ended or now or datetime.now()) - self.started).total_seconds()
+
+    def to_dict(self) -> dict:
+        return {
+            "run_id": self.run_id, "goal": self.goal, "status": self.status, "finished": self.finished,
+            "summary": self.summary, "attempts": self.attempts, "stage": self.stage, "stage_key": self.stage_key,
+            "started": self.started.isoformat() if self.started else None,
+            "elapsed_sec": self.elapsed_sec(), "roles": self.roles, "warnings": self.warnings,
+            "timeline": self.timeline, "calls": self.calls, "active": self.active,
+            "quota_providers": self.quota_providers,
+            "providers": {
+                name: {"calls": st.calls, "failures": st.failures, "cli_sec": round(st.cli_sec, 1), "tokens": st.tokens,
+                       "cache_read": st.cache_read, "estimated_calls": st.estimated_calls}
+                for name, st in self.providers.items()
+            },
+        }
 
 
 def _parse_ts(value: object) -> Optional[datetime]:
@@ -66,6 +86,7 @@ def _stats(run: RunSummary, name: str) -> ProviderStats:
 def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
     run = RunSummary(run_id=run_id)
     last_start: dict[str, dict] = {}
+    pending: dict[str, dict] = {}
     for ev in events:
         kind = ev.get("event")
         ts = _parse_ts(ev.get("ts"))
@@ -74,6 +95,7 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.goal = str(ev.get("goal", ""))
             run.started = ts
             run.warnings = [str(w) for w in ev.get("warnings", [])]
+            run.roles = dict(ev.get("roles") or {})
             run.timeline.append(f"{clock}  시작")
         elif kind == "attempt_start":
             run.attempts = int(ev.get("attempt", run.attempts + 1))
@@ -81,7 +103,10 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
         elif kind == "call_start":
             role = str(ev.get("role"))
             last_start[role] = ev
+            pending[role] = ev
+            run.active = {"role": role, "provider": str(ev.get("provider")), "since": str(ev.get("ts"))}
             run.stage = _STAGE_BY_ROLE_START.get(role, run.stage)
+            run.stage_key = {"planner": "plan", "builder": "build", "reviewer": "review"}.get(role, run.stage_key)
         elif kind == "call_end":
             role, provider = str(ev.get("role")), str(ev.get("provider"))
             st = _stats(run, provider)
@@ -106,23 +131,45 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                 call_tokens = " · 토큰 추정"
             run.stage = _STAGE_BY_ROLE_END.get(role, run.stage)
             run.timeline.append(f"{clock}  {role} · {provider} · {float(ev.get('duration_sec') or 0):.0f}초{call_tokens}")
+            pending.pop(role, None)
+            run.active = None
+            if role == "builder":
+                run.stage_key = "test"
+            run.calls.append({
+                "at": clock, "role": role, "provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),
+                "tokens": int(exact["total"]) if isinstance(exact, dict) and exact.get("total") else None,
+                "turns": int(exact["turns"]) if isinstance(exact, dict) and exact.get("turns") else None,
+                "estimated": not (isinstance(exact, dict) and exact.get("total")), "ok": True,
+            })
         elif kind == "call_error":
+            pending.pop(str(ev.get("role")), None)
+            run.active = None
+            run.calls.append({"at": clock, "role": str(ev.get("role")), "provider": str(ev.get("provider")), "sec": 0,
+                              "tokens": None, "turns": None, "estimated": False, "ok": False,
+                              "error": str(ev.get("error", ""))[:140]})
             _stats(run, str(ev.get("provider"))).failures += 1
             run.timeline.append(f"{clock}  {ev.get('role')} 호출 실패 · {str(ev.get('error', ''))[:60]}")
         elif kind == "quota":
+            run.stage_key = "quota"
+            if str(ev.get("provider")) not in run.quota_providers:
+                run.quota_providers.append(str(ev.get("provider")))
             run.stage = _STAGE_BY_EVENT["quota"]
             run.timeline.append(f"{clock}  한도 소진 · {ev.get('provider')}")
         elif kind == "scope_violation":
+            run.stage_key = "scope"
             run.stage = _STAGE_BY_EVENT[kind]
             run.timeline.append(f"{clock}  범위 위반 {len(ev.get('violations', []))}건")
         elif kind == "verify":
+            run.stage_key = "review"
             run.stage = _STAGE_BY_EVENT[kind]
             label = "생략" if ev.get("skipped") else ("통과" if ev.get("passed") else "실패")
             run.timeline.append(f"{clock}  테스트 {label}")
         elif kind == "review":
+            run.stage_key = "decide"
             run.stage = _STAGE_BY_EVENT[kind]
             run.timeline.append(f"{clock}  검수 {ev.get('verdict')}")
         elif kind == "order":
+            run.stage_key = "plan"
             run.stage = _STAGE_BY_EVENT[kind]
             run.timeline.append(f"{clock}  작업 지시서 생성")
         elif kind == "run_end":
@@ -132,6 +179,8 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.attempts = int(ev.get("attempts", run.attempts))
             run.ended = ts
             run.stage = "완료"
+            run.stage_key = "done"
+            run.active = None
             run.timeline.append(f"{clock}  종료 {run.status}")
     return run
 

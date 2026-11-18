@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import gitops, prompts, scope_guard
+from . import context, gitops, prompts, scope_guard
 from .jsonutil import extract_json
 from .providers import Provider, ProviderError, ProviderResult, QuotaExhausted, build_providers
 from .runlog import RunLog
@@ -37,7 +37,7 @@ class PlanError(ValueError):
 @dataclass
 class RunResult:
     run_id: str
-    status: str  # PASSED | FAILED | BLOCKED_QUOTA | ERROR
+    status: str  # PASSED | FAILED | BLOCKED_QUOTA | STOPPED | ERROR
     summary: str
     run_dir: str
     attempts: int = 0
@@ -105,7 +105,11 @@ class Orchestrator:
 
     # ------------------------------------------------------------------- plan
     def _plan(self, goal: str, project: Path, log: RunLog) -> Order:
-        base = prompts.planner(goal, gitops.list_files(project), self.s.max_files_changed, self.s.max_diff_lines)
+        every = gitops.list_files(project, limit=5000)
+        base = prompts.planner(
+            goal, every[:300], self.s.max_files_changed, self.s.max_diff_lines,
+            referenced=context.referenced_files(goal, every, project),
+        )
         error: Optional[str] = None
         for _ in range(2):
             prompt = base if error is None else f"{base}\nYour previous answer was invalid: {error}\nReturn only valid JSON."
@@ -165,6 +169,8 @@ class Orchestrator:
             gitops.create_worktree(project, wt)
             created = True
             self._build_loop(order, wt, run_dir, result, log)
+        except KeyboardInterrupt:
+            result.status, result.summary = "STOPPED", "사용자가 중지했습니다"
         except BlockedByQuota as exc:
             result.status, result.summary = "BLOCKED_QUOTA", str(exc)
         except (PlanError, ProviderError, gitops.GitError) as exc:

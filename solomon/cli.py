@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import shlex
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -16,7 +18,7 @@ from .status import load_runs, render
 from . import bench as bench_mod
 from .settings import ConfigError, load_settings
 
-EXIT = {"PASSED": 0, "FAILED": 1, "BLOCKED_QUOTA": 3, "ERROR": 2}
+EXIT = {"PASSED": 0, "FAILED": 1, "BLOCKED_QUOTA": 3, "ERROR": 2, "STOPPED": 130}
 
 
 def _doctor(args: argparse.Namespace) -> int:
@@ -50,8 +52,17 @@ def _run(args: argparse.Namespace) -> int:
     if args.on_quota:
         settings.on_quota = args.on_quota
         settings.validate()
+    if args.no_tests:
+        settings.test_command = None
+    elif args.test_command:
+        settings.test_command = shlex.split(args.test_command)
     orch = Orchestrator(settings)
     project = Path(args.project or settings.project_path or ".").expanduser()
+
+    def _stop(signum, frame):  # the dashboard's stop button sends SIGTERM
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop)
     result = orch.run(args.goal, project, keep_worktree=args.keep_worktree)
     print(f"run:      {result.run_id}")
     print(f"status:   {result.status}")
@@ -115,6 +126,13 @@ def _bench(args: argparse.Namespace) -> int:
     return 3 if any(r["status"] == "BLOCKED_QUOTA" for r in records) else 0
 
 
+def _dashboard(args: argparse.Namespace) -> int:
+    from . import dashboard
+
+    settings = load_settings(args.config)
+    return dashboard.serve(settings, args.project or [], args.config, args.port, not args.no_open)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="solomon", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -127,6 +145,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--apply", action="store_true", help="apply the passed patch to the working tree")
     run.add_argument("--keep-worktree", action="store_true", help="keep the isolated worktree for inspection")
     run.add_argument("--on-quota", choices=["stop", "wait"], help="override loop.on_quota")
+    run.add_argument("--test-command", help="test command for this run, e.g. 'npm test' (overrides the config)")
+    run.add_argument("--no-tests", action="store_true", help="run without automatic tests (the result is UNVERIFIED)")
     run.set_defaults(func=_run)
 
     doc = sub.add_parser("doctor", help="check that the CLIs are installed")
@@ -139,6 +159,13 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--run", help="show the run whose id starts with this text")
     st.add_argument("--limit", type=int, default=5, help="how many recent runs to list")
     st.set_defaults(func=_status)
+
+    db = sub.add_parser("dashboard", help="open the local web dashboard (watch runs and give commands)")
+    db.add_argument("--project", action="append", help="project folder to show (repeatable)")
+    db.add_argument("--port", type=int, default=8765)
+    db.add_argument("--no-open", action="store_true", help="do not open the browser")
+    db.add_argument("--config", help="path to solomon.toml")
+    db.set_defaults(func=_dashboard)
 
     bn = sub.add_parser("bench", help="G2 experiment: compare single-model and cross-review configurations")
     bn.add_argument("action", choices=["validate", "run", "report"])

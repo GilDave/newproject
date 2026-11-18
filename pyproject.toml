@@ -18,5 +18,8 @@ solomon = "solomon.cli:main"
 [tool.setuptools]
 packages = ["solomon", "solomon.providers"]
 
+[tool.setuptools.package-data]
+solomon = ["dashboard.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
