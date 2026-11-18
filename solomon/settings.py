@@ -41,6 +41,7 @@ class Settings:
     quota_max_waits: int = 8
     allow_same_provider: bool = False
     state_dir: str = ".solomon"
+    project_path: Optional[str] = None  # default target repository (local folder)
 
     def validate(self) -> None:
         for role in ROLES:
@@ -97,6 +98,8 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
     s.quota_max_waits = int(loop.get("quota_max_waits", s.quota_max_waits))
     s.allow_same_provider = bool(loop.get("allow_same_provider", s.allow_same_provider))
     s.state_dir = str(data.get("state_dir", s.state_dir))
+    if data.get("project"):
+        s.project_path = str(data["project"])
 
     s.validate()
     return s

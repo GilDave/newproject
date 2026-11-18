@@ -48,7 +48,7 @@ def _run(args: argparse.Namespace) -> int:
         settings.on_quota = args.on_quota
         settings.validate()
     orch = Orchestrator(settings)
-    project = Path(args.project)
+    project = Path(args.project or settings.project_path or ".").expanduser()
     result = orch.run(args.goal, project, keep_worktree=args.keep_worktree)
     print(f"run:      {result.run_id}")
     print(f"status:   {result.status}")
@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("run", help="run the cross-verified pipeline for one goal")
     run.add_argument("goal", help="one-line goal")
-    run.add_argument("--project", default=".", help="path of the git project (default: current folder)")
+    run.add_argument("--project", help="local path of the git project (default: `project` in solomon.toml, else the current folder)")
     run.add_argument("--config", help="path to solomon.toml")
     run.add_argument("--apply", action="store_true", help="apply the passed patch to the working tree")
     run.add_argument("--keep-worktree", action="store_true", help="keep the isolated worktree for inspection")

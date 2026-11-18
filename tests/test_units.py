@@ -141,3 +141,34 @@ def test_bad_config_is_rejected(tmp_path):
         load_settings(cfg)
     with pytest.raises(ConfigError):
         load_settings(tmp_path / "missing.toml")
+
+
+# ---- local project path
+def test_project_path_from_toml(tmp_path):
+    cfg = tmp_path / "solomon.toml"
+    cfg.write_text('project = "~/work/app"\n', encoding="utf-8")
+    assert load_settings(cfg).project_path == "~/work/app"
+    assert load_settings(None).project_path is None
+
+
+def test_cli_uses_configured_project_when_flag_is_missing(tmp_path, monkeypatch):
+    from solomon import cli
+    from solomon.orchestrator import RunResult
+
+    seen = {}
+
+    class FakeOrch:
+        def __init__(self, settings):
+            pass
+
+        def run(self, goal, project, keep_worktree=False):
+            seen["project"] = project
+            return RunResult(run_id="r", status="FAILED", summary="x", run_dir=str(tmp_path))
+
+    cfg = tmp_path / "solomon.toml"
+    cfg.write_text(f'project = "{tmp_path}"\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "Orchestrator", FakeOrch)
+    assert cli.main(["run", "goal", "--config", str(cfg)]) == 1
+    assert str(seen["project"]) == str(tmp_path)
+    cli.main(["run", "goal", "--config", str(cfg), "--project", "/elsewhere"])
+    assert str(seen["project"]) == "/elsewhere"

@@ -2,6 +2,7 @@
 # Every key is optional; these are the defaults.
 
 state_dir = ".solomon"          # run logs and worktrees live in <project>/.solomon
+# project = "/Users/dave_gil/00.Claud/my-app"   # default target repository: a LOCAL folder, no GitHub needed
 
 [roles]                          # who does what. Starting hypothesis, change after your own experiment.
 planner  = "claude"
