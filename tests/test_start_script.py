@@ -80,6 +80,8 @@ def test_missing_setup_gives_a_clear_message(tmp_path):
 
 
 def test_double_click_launcher_is_executable_and_wraps_the_script():
-    cmd = ROOT / "Start-Solomon.command"
-    assert os.access(cmd, os.X_OK) and os.access(ROOT / "scripts" / "start_dashboard.sh", os.X_OK)
-    assert "scripts/start_dashboard.sh" in cmd.read_text()
+    for name, script in (("Start-Solomon.command", "scripts/start.sh"), ("Stop-Solomon.command", "scripts/stop.sh")):
+        cmd = ROOT / name
+        assert os.access(cmd, os.X_OK) and script in cmd.read_text()
+    for script in ("start.sh", "stop.sh", "start_dashboard.sh"):
+        assert os.access(ROOT / "scripts" / script, os.X_OK)

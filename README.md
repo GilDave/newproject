@@ -45,14 +45,19 @@ solomon run "..." --project ~/work/my-app --apply           # 통과한 패치�
 결과는 `<project>/.solomon/runs/<run_id>/` 에 남습니다: `events.jsonl`(단계별 로그), `result.json`, `result.patch`(통과 시), `last_attempt.patch`(마지막 실패 시도).
 
 ## 대시보드 (명령을 내리고 진행을 보는 웹 화면)
-**한 번에 띄우기** (가상환경 켜기, 경로 설정, AI CLI 점검을 알아서 합니다):
+**시작과 종료 (백그라운드, 터미널을 돌려줍니다)**
 ```bash
-bash scripts/start_dashboard.sh                         # 기억해 둔 프로젝트로 시작, 브라우저가 열림
-bash scripts/start_dashboard.sh --project ~/work/ena-bot
-bash scripts/start_dashboard.sh --pull                  # git pull 한 뒤 시작
+bash scripts/start.sh                              # 시작하고 브라우저를 엽니다. 이미 실행 중이면 그 화면을 다시 엽니다
+bash scripts/start.sh --project ~/work/ena-bot     # 프로젝트 지정 (한 번 지정하면 기억)
+bash scripts/start.sh --pull                       # git pull 한 뒤 시작
+bash scripts/stop.sh                               # 대시보드 종료 (진행 중인 작업은 계속됩니다)
+bash scripts/stop.sh --with-runs                   # 대시보드가 시작한 작업도 함께 중지 (STOPPED로 기록)
 ```
-Finder에서 **`Start-Solomon.command`를 더블클릭**해도 터미널이 열리며 같은 일을 합니다 (실행 권한이 없다는 안내가 나오면 `chmod +x Start-Solomon.command scripts/start_dashboard.sh`). 터미널 창을 닫으면 대시보드도 종료됩니다.
-프로젝트는 한 번 지정하면 `~/.solomon/dashboard.json`에 기억합니다.
+Finder에서 **`Start-Solomon.command` / `Stop-Solomon.command`를 더블클릭**해도 됩니다 (실행 권한이 없다는 안내가 나오면 `chmod +x *.command scripts/*.sh`).
+- 시작하면 터미널은 바로 돌아오고 창을 닫아도 대시보드는 계속 실행됩니다. 접속 주소(접속 키 포함)는 `~/.solomon/dashboard.url`에 저장되고(본인만 읽을 수 있음), 로그는 `~/.solomon/dashboard.log`입니다.
+- 프로젝트는 한 번 지정하면 `~/.solomon/dashboard.json`에 기억합니다.
+- `stop.sh`는 기록된 pid가 실제 Solomon 대시보드일 때만 종료합니다 (pid가 재사용돼도 다른 프로그램을 죽이지 않습니다).
+- 창을 열어 둔 채 보면서 쓰고 싶다면 `bash scripts/start_dashboard.sh` (포그라운드, Ctrl+C로 종료).
 
 직접 실행하려면:
 ```bash

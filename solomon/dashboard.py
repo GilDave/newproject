@@ -410,8 +410,8 @@ def serve(
         print(f"error: ports {port}-{port + 9} are all in use", file=sys.stderr)
         return 2
     url = f"http://127.0.0.1:{port}/?t={token}"
-    print(f"Solomon 대시보드: {url}")
-    print("이 주소는 이 컴퓨터에서만 열립니다. 주소의 t=... 값이 접속 키이니 다른 사람에게 공유하지 마세요. 종료: Ctrl+C")
+    print(f"Solomon 대시보드: {url}", flush=True)
+    print("이 주소는 이 컴퓨터에서만 열립니다. 주소의 t=... 값이 접속 키이니 다른 사람에게 공유하지 마세요. 종료: Ctrl+C", flush=True)
     if open_browser:
         webbrowser.open(url)
     try:

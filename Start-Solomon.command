@@ -1,7 +1,6 @@
 #!/bin/bash
-# Double-click this file in Finder: it opens Terminal and starts the Solomon dashboard.
+# Double-click in Finder: starts the Solomon dashboard in the background and opens the browser.
 cd "$(dirname "$0")" || exit 1
-bash scripts/start_dashboard.sh "$@"
-status=$?
+bash scripts/start.sh "$@"
 echo
-echo "Solomon stopped (exit $status). You can close this window."
+echo "브라우저가 열립니다. 이 창은 닫으셔도 대시보드는 계속 실행됩니다 (멈추기: Stop-Solomon.command)."
