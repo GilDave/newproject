@@ -16,9 +16,9 @@ goal ─▶ PLANNER ─▶ ORDER ─▶ BUILDER(격리 worktree) ─▶ Scope Gu
 - 외부 파이썬 패키지 없음 (테스트에만 pytest)
 
 ## 설치와 점검
-가장 쉬운 방법: `bash scripts/setup_mac.sh` (Python 3.11+ 탐색, 가상환경 생성, 설치, 테스트, CLI 점검을 한 번에. 아무것도 삭제하지 않음)
+가장 쉬운 방법: `bash install.sh` (Python 3.11+ 탐색, 가상환경 생성, 설치, 무비용 자체 점검 `solomon selftest`, 환경 점검 `solomon doctor`을 한 번에. 아무것도 삭제하지 않음). 사용법은 **[USER_GUIDE.md](USER_GUIDE.md)** (대시보드 우측 상단 '사용 가이드'에서도 볼 수 있습니다).
 
-이 스크립트는 `00.Solomon` 폴더가 아직 git 저장소가 아니면 **로컬 저장소**(`git init` + 첫 커밋, remote 없음)도 만듭니다. GitHub는 쓰지 않아도 됩니다.
+GitHub는 쓰지 않아도 됩니다. 대상 프로젝트는 모두 로컬 폴더입니다.
 
 대상 프로젝트는 GitHub가 아니라 **로컬 경로**로 지정합니다. 한 번만 지정해 두려면 `solomon.toml`에 `project = "/Users/dave_gil/00.Claud/my-app"`을 적으면 되고, 실행할 때마다 `--project`로 바꿔도 됩니다 (`--project`가 우선).
 

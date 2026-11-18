@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import signal
 import sys
@@ -22,19 +23,43 @@ EXIT = {"PASSED": 0, "FAILED": 1, "BLOCKED_QUOTA": 3, "ERROR": 2, "STOPPED": 130
 
 
 def _doctor(args: argparse.Namespace) -> int:
+    """Preflight: everything the guide's first step needs, each line saying what to do when it is not ok."""
+    import platform
+    import shutil
+
     settings = load_settings(args.config)
     providers = build_providers(settings)
-    ok = True
-    print(f"solomon {__version__}")
+    errors = 0
+    print(f"solomon {__version__}  ·  python {platform.python_version()}")
+    if sys.version_info < (3, 11):
+        print("[error] Python 3.11 이상이 필요합니다. 맥: brew install python@3.12 후 새 가상환경을 만드세요.")
+        errors += 1
+    else:
+        print("[ok] python 3.11+")
+    git = shutil.which("git")
+    if not git:
+        print("[error] git이 없습니다. 맥: xcode-select --install")
+        errors += 1
+    else:
+        mail = gitops.git(["config", "--get", "user.email"], ".", check=False).stdout.strip()
+        if mail:
+            print("[ok] git (사용자 정보 설정됨)")
+        else:
+            print('[warn] git 사용자 정보가 없습니다. 대시보드에서 커밋하려면: git config --global user.name "이름" && git config --global user.email "메일"')
     print(f"roles: {settings.roles}")
     keys = present_api_keys()
     if keys:
-        print(f"note: {', '.join(keys)} are set in this shell. Solomon removes them before every CLI call.")
+        print(f"note: {', '.join(keys)} 가 이 셸에 설정돼 있습니다. Solomon은 모든 CLI 호출 전에 이 값을 제거하므로 API 요금은 발생하지 않습니다.")
+    needed = set(settings.roles.values())
     for name in PROVIDER_CLASSES:
         exe = providers[name].locate()  # type: ignore[attr-defined]
+        required = name in needed
         if not exe:
-            print(f"[missing] {name}: CLI not found. Install it and sign in with your subscription.")
-            ok = False
+            if required:
+                print(f"[missing] {name}: CLI를 찾을 수 없습니다 (현재 역할 배정에 필요). 설치하고 구독 계정으로 로그인하세요.")
+                errors += 1
+            else:
+                print(f"[optional] {name}: 설치 안 됨 (선택 사항. 없어도 동작하지만 3번째 AI 검수·분석은 쓸 수 없습니다).")
             continue
         try:
             res = run_process([exe, "--version"], timeout=15)
@@ -42,9 +67,34 @@ def _doctor(args: argparse.Namespace) -> int:
             print(f"[ok] {name}: {exe} {version[0] if version else ''}")
         except OSError as exc:
             print(f"[error] {name}: {exc}")
-            ok = False
-    print("Login state is not checked here. Run each CLI once by hand to confirm it is signed in.")
-    return 0 if ok else 2
+            errors += 1
+    root = Path(settings.projects_root).expanduser()
+    probe = root if root.exists() else root.parent
+    print(("[ok]" if probe.exists() and os.access(probe, os.W_OK) else "[warn]") + f" 새 프로젝트 폴더 위치: {root}")
+    home = Path(os.environ.get("SOLOMON_HOME", str(Path.home() / ".solomon")))
+    print(f"[ok] 상태 폴더: {home}" if (home.exists() or os.access(home.parent, os.W_OK)) else f"[warn] 상태 폴더를 만들 수 없습니다: {home}")
+    print("로그인 상태는 여기서 확인하지 않습니다. 각 CLI를 직접 한 번 실행해 로그인돼 있는지 확인하세요 (가이드 1-3).")
+    print("결과: " + ("문제 없음" if not errors else f"고쳐야 할 항목 {errors}개"))
+    return 0 if not errors else 2
+
+
+def _init(args: argparse.Namespace) -> int:
+    """Write an editable solomon.toml next to where Solomon is run."""
+    import importlib.resources as res
+
+    dest = Path(args.path or "solomon.toml")
+    if dest.exists() and not args.force:
+        print(f"error: {dest} 가 이미 있습니다 (덮어쓰려면 --force).", file=sys.stderr)
+        return 2
+    dest.write_text(res.files("solomon").joinpath("solomon.example.toml").read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"설정 파일을 만들었습니다: {dest.resolve()}  (필요한 줄의 # 를 지우고 고치세요)")
+    return 0
+
+
+def _selftest(args: argparse.Namespace) -> int:
+    from .selftest import run_selftest
+
+    return run_selftest()
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -228,7 +278,7 @@ def _dashboard(args: argparse.Namespace) -> int:
     return dashboard.serve(settings, args.project or [], args.config, args.port, not args.no_open)
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="solomon", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -252,7 +302,15 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--no-tests", action="store_true", help="run without automatic tests (the result is UNVERIFIED)")
     run.set_defaults(func=_run)
 
-    doc = sub.add_parser("doctor", help="check that the CLIs are installed")
+    ini = sub.add_parser("init", help="write an editable solomon.toml (all options, commented)")
+    ini.add_argument("--path", help="where to write it (default: ./solomon.toml)")
+    ini.add_argument("--force", action="store_true")
+    ini.set_defaults(func=_init)
+
+    stt = sub.add_parser("selftest", help="check the installation end to end with fake AIs (no subscription use, no tokens)")
+    stt.set_defaults(func=_selftest)
+
+    doc = sub.add_parser("doctor", help="preflight: Python, git, the AI CLIs, folders")
     doc.add_argument("--config", help="path to solomon.toml")
     doc.set_defaults(func=_doctor)
 
@@ -309,8 +367,11 @@ def main(argv: list[str] | None = None) -> int:
     bn.add_argument("--keep", action="store_true", help="keep each working repository for inspection")
     bn.add_argument("--config", help="path to solomon.toml")
     bn.set_defaults(func=_bench)
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         return args.func(args)
     except (ConfigError, gitops.GitError, ValueError) as exc:  # user mistakes: show a message, not a traceback

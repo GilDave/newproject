@@ -4,10 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solomon"
-version = "0.1.0"
-description = "GPT x Claude cross-verified development pipeline driven by signed-in subscription CLIs"
+version = "1.0.0"
+description = "Cross-verified AI development pipeline (Claude x Codex x Antigravity) driven only by signed-in subscription CLIs"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
+keywords = ["ai", "code-review", "claude", "codex", "cross-verification"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Software Development :: Quality Assurance",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -19,7 +30,7 @@ solomon = "solomon.cli:main"
 packages = ["solomon", "solomon.providers"]
 
 [tool.setuptools.package-data]
-solomon = ["dashboard.html"]
+solomon = ["dashboard.html", "USER_GUIDE.md", "solomon.example.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

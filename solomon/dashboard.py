@@ -599,6 +599,14 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 csp = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                        "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'")
                 return self._send(200, HTML_PATH.read_bytes(), "text/html; charset=utf-8", {"Content-Security-Policy": csp})
+            if url.path == "/guide":
+                from .mdhtml import page
+                try:
+                    body = page((Path(__file__).parent / "USER_GUIDE.md").read_text(encoding="utf-8")).encode("utf-8")
+                except OSError:
+                    return self._json(404, {"error": "사용 가이드 파일이 없습니다."})
+                csp = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+                return self._send(200, body, "text/html; charset=utf-8", {"Content-Security-Policy": csp})
             if url.path == "/api/state":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다. 터미널에 표시된 주소로 여세요."})

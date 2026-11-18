@@ -1,0 +1,5 @@
+include README.md USER_GUIDE.md install.sh solomon.example.toml
+include Start-Solomon.command Stop-Solomon.command
+recursive-include scripts *.sh
+recursive-include bench *
+recursive-include solomon *.html *.md *.toml

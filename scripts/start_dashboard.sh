@@ -31,7 +31,7 @@ if [ -z "$PY" ]; then
   if [ -x "$ROOT/.venv/bin/python" ]; then PY="$ROOT/.venv/bin/python"
   elif python3 -c 'import solomon' >/dev/null 2>&1; then PY="$(command -v python3)"
   else
-    echo "Solomon is not set up yet. Run this once:  bash scripts/setup_mac.sh"
+    echo "Solomon is not set up yet. Run this once:  bash install.sh"
     exit 1
   fi
 fi

@@ -76,7 +76,7 @@ def test_missing_setup_gives_a_clear_message(tmp_path):
     env = dict(os.environ, HOME=str(tmp_path), PATH="/usr/bin:/bin")
     env.pop("SOLOMON_PYTHON", None)
     res = subprocess.run(["bash", str(fake_root / "scripts" / "start_dashboard.sh")], capture_output=True, text=True, env=env, timeout=30)
-    assert res.returncode == 1 and "setup_mac.sh" in res.stdout
+    assert res.returncode == 1 and "install.sh" in res.stdout
 
 
 def test_double_click_launcher_is_executable_and_wraps_the_script():

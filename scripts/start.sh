@@ -103,7 +103,7 @@ if [ "$PULL" = "1" ]; then
   if git pull --ff-only; then :; else echo "  (pull failed: starting with the code you already have)"; fi
 fi
 
-resolve_py || { echo "Solomon is not set up yet. Run this once:  bash scripts/setup_mac.sh"; exit 1; }
+resolve_py || { echo "Solomon is not set up yet. Run this once:  bash install.sh"; exit 1; }
 
 echo "== AI CLIs (installed? login state is not checked here) =="
 for c in claude codex agy; do
