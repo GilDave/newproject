@@ -50,6 +50,7 @@ class RunSummary:
     calls: list[dict] = field(default_factory=list)  # one entry per finished or failed AI call
     active: Optional[dict] = None  # the call in flight right now: {role, provider, since}
     quota_providers: list[str] = field(default_factory=list)
+    attempt_details: list[dict] = field(default_factory=list)  # one entry per attempt: builder, changes, scope, tests, review
 
     def elapsed_sec(self, now: Optional[datetime] = None) -> Optional[float]:
         if not self.started:
@@ -63,7 +64,7 @@ class RunSummary:
             "started": self.started.isoformat() if self.started else None,
             "elapsed_sec": self.elapsed_sec(), "roles": self.roles, "warnings": self.warnings,
             "timeline": self.timeline, "calls": self.calls, "active": self.active,
-            "quota_providers": self.quota_providers,
+            "quota_providers": self.quota_providers, "attempt_details": self.attempt_details,
             "providers": {
                 name: {"calls": st.calls, "failures": st.failures, "cli_sec": round(st.cli_sec, 1), "tokens": st.tokens,
                        "cache_read": st.cache_read, "estimated_calls": st.estimated_calls}
@@ -87,6 +88,7 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
     run = RunSummary(run_id=run_id)
     last_start: dict[str, dict] = {}
     pending: dict[str, dict] = {}
+    attempt: Optional[dict] = None
     for ev in events:
         kind = ev.get("event")
         ts = _parse_ts(ev.get("ts"))
@@ -99,6 +101,8 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.timeline.append(f"{clock}  시작")
         elif kind == "attempt_start":
             run.attempts = int(ev.get("attempt", run.attempts + 1))
+            attempt = {"attempt": run.attempts, "builder": None, "changes": [], "violations": [], "verify": None, "review": None}
+            run.attempt_details.append(attempt)
             run.timeline.append(f"{clock}  시도 {run.attempts}")
         elif kind == "call_start":
             role = str(ev.get("role"))
@@ -135,6 +139,9 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.active = None
             if role == "builder":
                 run.stage_key = "test"
+                if attempt is not None:
+                    attempt["builder"] = {"provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),
+                                          "tokens": int(exact["total"]) if isinstance(exact, dict) and exact.get("total") else None}
             run.calls.append({
                 "at": clock, "role": role, "provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),
                 "tokens": int(exact["total"]) if isinstance(exact, dict) and exact.get("total") else None,
@@ -155,16 +162,27 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                 run.quota_providers.append(str(ev.get("provider")))
             run.stage = _STAGE_BY_EVENT["quota"]
             run.timeline.append(f"{clock}  한도 소진 · {ev.get('provider')}")
+        elif kind == "changes":
+            if attempt is not None:
+                attempt["changes"] = list(ev.get("files") or [])
         elif kind == "scope_violation":
+            if attempt is not None:
+                attempt["violations"] = [str(v) for v in ev.get("violations", [])]
             run.stage_key = "scope"
             run.stage = _STAGE_BY_EVENT[kind]
             run.timeline.append(f"{clock}  범위 위반 {len(ev.get('violations', []))}건")
         elif kind == "verify":
+            if attempt is not None:
+                attempt["verify"] = {"passed": bool(ev.get("passed")), "skipped": bool(ev.get("skipped")),
+                                     "exit_code": ev.get("exit_code"), "command": str(ev.get("command") or ""),
+                                     "tail": str(ev.get("output_tail") or "")[-700:]}
             run.stage_key = "review"
             run.stage = _STAGE_BY_EVENT[kind]
             label = "생략" if ev.get("skipped") else ("통과" if ev.get("passed") else "실패")
             run.timeline.append(f"{clock}  테스트 {label}")
         elif kind == "review":
+            if attempt is not None:
+                attempt["review"] = {"verdict": str(ev.get("verdict")), "issues": [str(i) for i in ev.get("issues", [])]}
             run.stage_key = "decide"
             run.stage = _STAGE_BY_EVENT[kind]
             run.timeline.append(f"{clock}  검수 {ev.get('verdict')}")

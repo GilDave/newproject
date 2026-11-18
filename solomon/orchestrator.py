@@ -208,6 +208,8 @@ class Orchestrator:
                 feedback, reset_next = "No files were changed. Implement the ORDER by editing files.", False
                 result.summary = "builder made no changes"
                 continue
+            log.event("changes", count=len(changes), files=[
+                {"path": c.path, "status": c.status, "added": c.added, "removed": c.removed} for c in changes[:40]])
             violations = scope_guard.check(order, changes)
             if violations:
                 log.event("scope_violation", violations=violations)
@@ -218,7 +220,8 @@ class Orchestrator:
 
             verification = verify(self.s, wt)
             gitops.clean_untracked(wt)
-            log.event("verify", passed=verification.passed, skipped=verification.skipped, exit_code=verification.exit_code)
+            log.event("verify", passed=verification.passed, skipped=verification.skipped, exit_code=verification.exit_code,
+                      command=verification.command, output_tail=verification.output_tail[-1500:])
             warnings = ["tests were not run: result is UNVERIFIED"] if verification.skipped else []
             review = self._review(order, wt, verification, warnings, log)
             log.event("review", verdict=review.verdict, issues=review.issues)

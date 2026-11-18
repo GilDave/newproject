@@ -20,7 +20,7 @@ def _default_roles() -> dict[str, str]:
 
 
 def _default_timeouts() -> dict[str, float]:
-    return {"planner": 300.0, "builder": 900.0, "reviewer": 300.0, "no_output": 180.0, "verify": 600.0}
+    return {"planner": 300.0, "builder": 900.0, "reviewer": 300.0, "no_output": 180.0, "verify": 600.0, "analysis": 900.0}
 
 
 @dataclass

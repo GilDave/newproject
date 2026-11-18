@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, gitops
+from . import __version__, analysis as analysis_mod, gitops
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import Settings
 from .status import load_runs
@@ -36,6 +36,7 @@ RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 MAX_GOAL = 20000  # long enough to paste a stack trace
 MAX_BODY = 64 * 1024
 HTML_PATH = Path(__file__).with_name("dashboard.html")
+VENDORS = {"claude": "Anthropic", "codex": "OpenAI", "antigravity": "Google"}
 
 
 class ApiError(Exception):
@@ -153,7 +154,7 @@ class DashboardApp:
             return {"state": "idle"}
         code = job["popen"].poll()
         info = {"state": "running" if code is None else "exited", "pid": job["pid"], "project": job["project"],
-                "goal": job["goal"], "exit_code": code, "started": job["started"]}
+                "goal": job["goal"], "exit_code": code, "started": job["started"], "kind": job.get("kind", "run")}
         if code is not None:
             try:
                 info["log_tail"] = Path(job["log_path"]).read_text(encoding="utf-8", errors="replace")[-1500:]
@@ -161,7 +162,7 @@ class DashboardApp:
                 info["log_tail"] = ""
         return info
 
-    def build_state(self, project: Optional[str], run_id: Optional[str]) -> dict:
+    def build_state(self, project: Optional[str], run_id: Optional[str], analysis_id: Optional[str] = None) -> dict:
         projects = sorted(self._projects)
         if project not in self._projects:
             project = projects[0] if projects else None
@@ -169,10 +170,11 @@ class DashboardApp:
         state: dict = {
             "version": __version__, "projects": projects, "project": project, "roles": self.settings.roles,
             "providers": self.providers_info(), "job": job, "runs": [], "current": None,
-            "apply": {"possible": False, "applied": False},
+            "apply": {"possible": False, "applied": False}, "analyses": [], "analysis": None,
         }
         if not project:
             return state
+        self._add_analysis_state(state, Path(project), project, analysis_id, job)
         cmd, source = self.effective_test_command(project)
         state["test_command"] = {"text": " ".join(cmd) if cmd else "없음", "source": source}
         runs = load_runs(Path(project), self.settings.state_dir)
@@ -186,6 +188,12 @@ class DashboardApp:
         if job["state"] == "exited" and job.get("project") == project and job.get("started"):
             since = datetime.fromtimestamp(job["started"]) - timedelta(seconds=5)
             job["orphan"] = not any(r.started and r.started >= since for r in runs)  # died before creating a run
+        state["provider_cards"] = self._provider_cards(runs, state["providers"])
+        state["apply_pending"] = sum(
+            1 for r in runs[-30:]
+            if r.status == "PASSED" and (Path(project) / self.settings.state_dir / "runs" / r.run_id / "result.patch").is_file()
+            and not (Path(project) / self.settings.state_dir / "runs" / r.run_id / "applied.json").exists()
+        )
         pick = None
         if run_id and RUN_ID.match(run_id):
             pick = next((r for r in runs if r.run_id == run_id), None)
@@ -195,12 +203,53 @@ class DashboardApp:
             cur = pick.to_dict()
             cur["live"] = bool(running_here and not pick.finished)
             cur["interrupted"] = bool(not pick.finished and not cur["live"])
+            run_dir = Path(project) / self.settings.state_dir / "runs" / pick.run_id
+            cur["paths"] = {"project": project, "run_dir": str(run_dir), "events": str(run_dir / "events.jsonl"),
+                            "patch": str(run_dir / "result.patch") if (run_dir / "result.patch").is_file() else None}
             state["current"] = cur
             patch = Path(project) / self.settings.state_dir / "runs" / pick.run_id / "result.patch"
             applied = (patch.parent / "applied.json").exists()
             state["apply"] = {"possible": pick.status == "PASSED" and patch.is_file() and not applied, "applied": applied,
                               "patch": str(patch) if patch.is_file() else None}
         return state
+
+    def _provider_cards(self, runs: list, providers: list[dict]) -> list[dict]:
+        """Per-AI facts for the work room: status, today's calls and the most recent call."""
+        today = datetime.now().date()
+        latest = runs[-1] if runs else None
+        cards = []
+        for p in providers:
+            name = p["name"]
+            calls_today, last = 0, None
+            for r in reversed(runs):
+                for c in reversed(r.calls):
+                    if c["provider"] != name:
+                        continue
+                    if last is None:
+                        last = {"role": c["role"], "sec": c["sec"], "at": c["at"], "ok": c["ok"], "run_id": r.run_id}
+                    if r.started and r.started.date() == today:
+                        calls_today += 1
+            quota = bool(latest and name in latest.quota_providers)
+            cards.append({"name": name, "vendor": VENDORS.get(name, ""), "installed": p["installed"],
+                          "supports_write": p["supports_write"],
+                          "status": "설치 안 됨" if not p["installed"] else ("한도 소진" if quota else "정상"),
+                          "calls_today": calls_today, "last_call": last})
+        return cards
+
+    def _add_analysis_state(self, state: dict, path: Path, project: str, analysis_id: Optional[str], job: dict) -> None:
+        listing = analysis_mod.list_analyses(path, self.settings.state_dir)
+        state["analyses"] = listing
+        pick = analysis_id if analysis_id and RUN_ID.match(analysis_id) else (listing[0]["analysis_id"] if listing else None)
+        if not pick:
+            return
+        view = analysis_mod.load_analysis(path, self.settings.state_dir, pick)
+        if view is None:
+            return
+        latest = bool(listing) and listing[0]["analysis_id"] == pick
+        running_here = job["state"] == "running" and job.get("kind") == "analyze" and job.get("project") == project and latest
+        view["live"] = bool(running_here and not view["finished"])
+        view["interrupted"] = bool(not view["finished"] and not view["live"])
+        state["analysis"] = view
 
     # ------------------------------------------------------------- commands
     def _role_args(self, roles: Optional[dict]) -> list[str]:
@@ -237,23 +286,54 @@ class DashboardApp:
                 project = self.add_project(project or "")
             except gitops.GitError as exc:
                 raise ApiError(400, str(exc)) from exc
+        args = [sys.executable, "-m", "solomon", "run", goal, "--project", project]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        args += role_args
+        cfg = self._projects[project]
+        if "test_command" in cfg:
+            args += ["--test-command", shlex.join(cfg["test_command"])] if cfg["test_command"] else ["--no-tests"]
+        return self._spawn("run", args, project, goal)
+
+    def start_analysis(self, project: str, focus: str = "", ais: Optional[list] = None) -> dict:
+        focus = (focus or "").strip()
+        if len(focus) > MAX_GOAL:
+            raise ApiError(400, f"분석 요청이 너무 깁니다 ({MAX_GOAL}자 이하).")
+        installed = [p["name"] for p in self.providers_info() if p["installed"]]
+        if ais is not None and not isinstance(ais, list):
+            raise ApiError(400, "AI 선택 형식이 올바르지 않습니다.")
+        chosen = [str(a) for a in (ais or installed)]
+        bad = [a for a in chosen if a not in PROVIDER_CLASSES]
+        if bad:
+            raise ApiError(400, f"알 수 없는 AI입니다: {', '.join(bad)}")
+        missing = [a for a in chosen if a not in installed]
+        if missing:
+            raise ApiError(400, f"설치되지 않은 AI입니다: {', '.join(missing)}")
+        if not chosen:
+            raise ApiError(400, "분석에 쓸 수 있는 AI가 설치되어 있지 않습니다.")
+        if (project or "") not in self._projects:
+            try:
+                project = self.add_project(project or "")
+            except gitops.GitError as exc:
+                raise ApiError(400, str(exc)) from exc
+        args = [sys.executable, "-m", "solomon", "analyze", "--project", project, "--ais", ",".join(chosen)]
+        if focus:
+            args += ["--focus", focus]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        return self._spawn("analyze", args, project, focus or "전반 분석")
+
+    def _spawn(self, kind: str, args: list[str], project: str, label: str) -> dict:
         with self._lock:
             if self.job and self.job["popen"].poll() is None:
                 raise ApiError(409, "이미 실행 중인 작업이 있습니다. 끝나거나 중지한 뒤 다시 시도하세요.")
-            args = [sys.executable, "-m", "solomon", "run", goal, "--project", project]
-            if self.config_path:
-                args += ["--config", self.config_path]
-            args += role_args
-            cfg = self._projects[project]
-            if "test_command" in cfg:
-                args += ["--test-command", shlex.join(cfg["test_command"])] if cfg["test_command"] else ["--no-tests"]
             log_path = Path(project) / self.settings.state_dir / "dashboard.log"
             try:
                 popen = self._launcher(args, log_path)
             except OSError as exc:
                 raise ApiError(500, f"실행을 시작하지 못했습니다: {exc}") from exc
-            self.job = {"popen": popen, "pid": popen.pid, "project": project, "goal": goal, "started": time.time(),
-                        "log_path": str(log_path)}
+            self.job = {"popen": popen, "pid": popen.pid, "project": project, "goal": label, "started": time.time(),
+                        "log_path": str(log_path), "kind": kind}
         return self.job_info()
 
     def stop_run(self) -> dict:
@@ -340,7 +420,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
             if url.path == "/api/state":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다. 터미널에 표시된 주소로 여세요."})
-                state = app.build_state((query.get("project") or [None])[0], (query.get("run") or [None])[0])
+                state = app.build_state((query.get("project") or [None])[0], (query.get("run") or [None])[0],
+                                        (query.get("analysis") or [None])[0])
                 return self._json(200, state)
             return self._json(404, {"error": "not found"})
 
@@ -369,6 +450,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 path = urlparse(self.path).path
                 if path == "/api/run":
                     return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"))})
+                if path == "/api/analyze":
+                    return self._json(200, {"job": app.start_analysis(str(body.get("project", "")), str(body.get("focus", "")), body.get("ais"))})
                 if path == "/api/stop":
                     return self._json(200, {"job": app.stop_run()})
                 if path == "/api/apply":

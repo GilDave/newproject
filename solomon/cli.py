@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, gitops
+from . import __version__, analysis as analysis_mod, gitops
 from .env import present_api_keys
 from .orchestrator import Orchestrator
 from .providers import PROVIDER_CLASSES, build_providers
@@ -85,6 +85,33 @@ def _run(args: argparse.Namespace) -> int:
     return EXIT.get(result.status, 2)
 
 
+def _analyze(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    project = Path(args.project or settings.project_path or ".").expanduser()
+    ais = [a for a in (args.ais or "").split(",") if a] or None
+
+    def _stop(signum, frame):  # the dashboard's stop button sends SIGTERM
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop)
+    result = analysis_mod.run_analysis(settings, project, args.focus or "", ais)
+    print(f"analysis: {result.analysis_id}")
+    print(f"status:   {result.status}")
+    print(f"summary:  {result.summary}")
+    cov = result.coverage
+    if cov:
+        print(f"files:    {cov.get('included')} of {cov.get('total')} analysed, {cov.get('redactions')} secret-like values hidden")
+    for name, info in result.ais.items():
+        print(f"  {name:<12} {'ok' if info.get('ok') else 'FAILED: ' + str(info.get('error', ''))}")
+    for c in result.clusters[:10]:
+        where = f"{c['file']}:{c['line_start']}" if c["file"] else "?"
+        mark = "verified" if c["verified"] else "UNVERIFIED"
+        print(f"  [{c['severity']:<6}] {c['agreement']}/{len(result.ais)} AIs  {where}  {c['members'][0]['title']}  ({mark})")
+    if result.report_path:
+        print(f"report:   {result.report_path}")
+    return {"DONE": 0, "FAILED": 1, "STOPPED": 130}.get(result.status, 2)
+
+
 def _status(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     project = Path(args.project or settings.project_path or ".").expanduser().resolve()
@@ -158,6 +185,13 @@ def main(argv: list[str] | None = None) -> int:
     doc = sub.add_parser("doctor", help="check that the CLIs are installed")
     doc.add_argument("--config", help="path to solomon.toml")
     doc.set_defaults(func=_doctor)
+
+    an = sub.add_parser("analyze", help="read-only analysis of a project by several AIs (never modifies it)")
+    an.add_argument("--project", help="local path of the git project (default: `project` in solomon.toml, else the current folder)")
+    an.add_argument("--focus", help="what to look at, e.g. 'places that can crash' (default: a general analysis)")
+    an.add_argument("--ais", help="comma-separated AIs to use (default: every installed one)")
+    an.add_argument("--config", help="path to solomon.toml")
+    an.set_defaults(func=_analyze)
 
     st = sub.add_parser("status", help="show progress of recent runs (read-only)")
     st.add_argument("--project", help="local path of the project (default: `project` in solomon.toml, else the current folder)")
