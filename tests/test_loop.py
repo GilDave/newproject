@@ -194,3 +194,115 @@ def test_snapshot_can_be_turned_off(tmp_path):
     orch, p = three(make_settings(include_uncommitted=False), [order_json(), review_json()], [spy])
     r = orch.run("goal", repo)
     assert seen["app"] == "print('hi')\n" and any("NOT part" in w for w in r.warnings)
+
+
+# ---------------------------------------------------------------- up to three AIs per stage
+def make3(settings, claude=(), codex=(), agy=(), **kw):
+    provs = {"claude": ScriptedProvider("claude", list(claude)), "codex": ScriptedProvider("codex", list(codex)),
+             "agy": ScriptedProvider("agy", list(agy))}
+    provs["agy"].supports_write = False
+    return Orchestrator(settings, provs, **kw), provs
+
+
+def critic(verdict="CHANGE", concerns=("edge case: empty input",), extra=("handles empty input",)):
+    return json.dumps({"verdict": verdict, "concerns": list(concerns), "extra_acceptance_criteria": list(extra)})
+
+
+def test_plan_critics_add_criteria_but_never_widen_the_scope(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.roles.update(planner2="codex", planner3="agy")
+    widen = json.dumps({"verdict": "CHANGE", "concerns": ["c"], "extra_acceptance_criteria": ["x"], "allowed_paths": ["/"],
+                        "max_files_changed": 999})
+    orch, p = make3(s, claude=[order_json(), review_json()], codex=[critic(), write_file("src/new.py")], agy=[widen])
+    r = orch.run("goal", repo)
+    assert r.status == "PASSED"
+    order = next(e["order"] for e in events(r) if e["event"] == "order")
+    assert "handles empty input" in order["acceptance_criteria"] and "x" in order["acceptance_criteria"]
+    assert order["allowed_paths"] == ["src/"] and order["max_files_changed"] == 5
+    assert "edge case: empty input" in order["context"]
+    assert [e["provider"] for e in events(r) if e["event"] == "plan_review"] == ["codex", "agy"]
+    # the builder saw the merged criteria
+    assert "handles empty input" in p["codex"].calls[1]["prompt"]
+
+
+def test_a_plan_critic_that_fails_or_hits_its_quota_does_not_stop_the_run(tmp_path):
+    from solomon.providers import QuotaExhausted
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.roles.update(planner2="agy", planner3="codex")
+    orch, p = make3(s, claude=[order_json(), review_json()], codex=["not json", write_file("src/new.py")],
+                    agy=[QuotaExhausted("usage limit reached")])
+    r = orch.run("goal", repo)
+    assert r.status == "PASSED"
+    kinds = [e["event"] for e in events(r)]
+    assert "helper_skipped" in kinds and any(e.get("verdict") == "UNPARSEABLE" for e in events(r) if e["event"] == "plan_review")
+
+
+def test_three_reviewers_must_all_pass_and_stop_at_the_first_fail(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings(max_attempts=1)
+    s.roles.update(reviewer2="agy", reviewer3="claude")  # claude twice is allowed: it is not the builder
+    orch, p = make3(s, claude=[order_json(), review_json("PASS"), review_json("PASS")], codex=[write_file("src/new.py")],
+                    agy=[review_json("FAIL", ["agy says no"])])
+    r = orch.run("goal", repo)
+    assert r.status == "FAILED"
+    assert len(p["claude"].calls) == 2  # planner + reviewer; reviewer3 was never asked because reviewer2 failed
+    assert [e["verdict"] for e in events(r) if e["event"] == "review_role"] == ["PASS", "FAIL"]
+
+
+def test_all_three_reviewers_passing_passes(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.roles.update(reviewer2="agy", reviewer3="claude")
+    orch, p = make3(s, claude=[order_json(), review_json(), review_json()], codex=[write_file("src/new.py")], agy=[review_json()])
+    r = orch.run("goal", repo)
+    assert r.status == "PASSED" and len([e for e in events(r) if e["event"] == "review_role"]) == 3
+
+
+def test_builders_take_turns_after_failures_and_advisors_help(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings(max_attempts=0, stagnation_limit=50)
+    s.roles.update(builder2="claude", builder3="agy", reviewer2="agy")
+    s.roles["reviewer"] = "claude"  # claude reviews attempts that codex built; when claude builds, agy must review
+    advisor = "스펙을 먼저 읽고 빈 입력을 처리하세요"
+    # attempt1 codex (fails review), attempt2 codex (fails; 2nd consecutive failure -> hand over), attempt3 claude builds
+    orch, p = make3(s,
+                    claude=[order_json(), review_json("FAIL", ["a"]), review_json("FAIL", ["b"]), write_file("src/new.py")],
+                    codex=[write_file("src/other.py", "x=1\n"), write_file("src/other.py", "x=2\n")],
+                    agy=[advisor, review_json()])
+    r = orch.run("goal", repo)
+    assert r.status == "PASSED", r.summary
+    picks = [(e["attempt"], e["provider"]) for e in events(r) if e["event"] == "builder_pick"]
+    assert picks == [(1, "codex"), (2, "codex"), (3, "claude")]
+    assert advisor in p["codex"].calls[0]["prompt"]  # the read-only third AI advised before the first attempt
+    # when claude built, claude was skipped as its own reviewer and agy reviewed
+    assert any(e["event"] == "review_skipped_self" and e["provider"] == "claude" for e in events(r))
+
+
+def test_a_builder_failure_hands_over_to_the_next_builder(tmp_path):
+    from solomon.providers import ProviderError
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.roles.update(builder2="claude", reviewer="agy")
+    orch, p = make3(s, claude=[order_json(), write_file("src/new.py")], codex=[ProviderError("codex exited with 1: boom")],
+                    agy=[review_json()])
+    r = orch.run("goal", repo)
+    assert r.status == "PASSED" and [e["provider"] for e in events(r) if e["event"] == "builder_pick"] == ["codex", "claude"]
+
+
+def test_no_independent_reviewer_is_a_config_error_not_a_silent_self_review(tmp_path):
+    s = make_settings()
+    s.roles.update(builder2="claude")  # claude is the only reviewer, and a builder: when it builds nobody else reviews
+    with pytest.raises(ConfigError):
+        make3(s)
+
+
+def test_roles_validation_and_toml(tmp_path):
+    f = tmp_path / "s.toml"
+    f.write_text('[roles]\nplanner2 = "agy"\nbuilder2 = "claude"\nreviewer3 = ""\n')
+    s = load_settings(f)
+    assert s.roles["planner2"] == "agy" and "reviewer3" not in s.roles
+    f.write_text('[roles]\nplanner4 = "x"\n')
+    with pytest.raises(ConfigError):
+        load_settings(f)

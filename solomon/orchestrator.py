@@ -64,26 +64,31 @@ class Orchestrator:
         self._sleep = sleep
         self._clock = clock
         self._tokens = 0
-        for role in ROLES:
-            name = settings.roles[role]
+        for role, name in settings.roles.items():
             if name not in self.providers:
                 raise ConfigError(f"role '{role}' uses unknown provider '{name}' (known: {sorted(self.providers)})")
-        if not getattr(self.providers[settings.roles["builder"]], "supports_write", True):
+        if not self._can_write(settings.roles["builder"]):
             raise ConfigError(
                 f"'{settings.roles['builder']}' cannot be the builder (it is limited to read-only roles: planner, reviewer)"
             )
-        second = settings.roles.get("reviewer2")
-        if second:
-            if second not in self.providers:
-                raise ConfigError(f"role 'reviewer2' uses unknown provider '{second}' (known: {sorted(self.providers)})")
-            if second == settings.roles["builder"]:
-                raise ConfigError("the second reviewer must not be the builder")
         self.reduced_independence = settings.roles["builder"] == settings.roles["reviewer"]
         if self.reduced_independence and not settings.allow_same_provider:
             raise ConfigError(
                 "builder and reviewer must use different providers "
                 "(set loop.allow_same_provider = true to accept REDUCED_INDEPENDENCE)"
             )
+        reviewers = [settings.roles[r] for r in ("reviewer", "reviewer2", "reviewer3") if settings.roles.get(r)]
+        for r, name in self._builders()[0]:
+            if not settings.allow_same_provider and all(x == name for x in reviewers):
+                raise ConfigError(f"every reviewer is the same AI as the builder '{r}' ({name}): add a reviewer that differs from it")
+
+    def _can_write(self, name: str) -> bool:
+        return bool(getattr(self.providers[name], "supports_write", True))
+
+    def _builders(self) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+        """(write-capable builders in rotation order, read-only advisors) from builder / builder2 / builder3."""
+        pool = [(r, self.s.roles[r]) for r in ("builder", "builder2", "builder3") if self.s.roles.get(r)]
+        return [x for x in pool if self._can_write(x[1])], [x for x in pool if not self._can_write(x[1])]
 
     # ------------------------------------------------------------------ calls
     def _call(self, role: str, prompt: str, cwd: Path, write: bool, log: RunLog) -> ProviderResult:
@@ -122,7 +127,43 @@ class Orchestrator:
             )
             return res
 
+    def _helper(self, role: str, prompt: str, cwd: Path, log: RunLog) -> Optional[str]:
+        """An advisory call (plan critic, build advisor): its failure or quota never stops the run."""
+        try:
+            return self._call(role, prompt, cwd, False, log).text
+        except (BlockedByQuota, ProviderError) as exc:
+            log.event("helper_skipped", role=role, provider=self.s.roles.get(role), reason=str(exc)[:200])
+            return None
+
     # ------------------------------------------------------------------- plan
+    def _plan_review(self, goal: str, order: Order, project: Path, log: RunLog) -> Order:
+        notes: list[str] = []
+        for role in ("planner2", "planner3"):
+            if not self.s.roles.get(role):
+                continue
+            text = self._helper(role, prompts.plan_critic(goal, order), project, log)
+            if text is None:
+                continue
+            try:
+                data = extract_json(text)
+            except ValueError:
+                log.event("plan_review", role=role, provider=self.s.roles[role], verdict="UNPARSEABLE", concerns=[], added=[])
+                continue
+            added = []
+            for c in (data.get("extra_acceptance_criteria") or [])[:3]:
+                c = str(c).strip()[:240]
+                if c and c not in order.acceptance_criteria and c not in added:
+                    added.append(c)
+            concerns = [str(c).strip()[:240] for c in (data.get("concerns") or [])[:3] if str(c).strip()]
+            order.acceptance_criteria = list(order.acceptance_criteria) + added  # criteria only: scope and limits are never widened
+            if concerns:
+                notes.append(f"[{self.s.roles[role]}] " + " / ".join(concerns))
+            log.event("plan_review", role=role, provider=self.s.roles[role], verdict=str(data.get("verdict", ""))[:10],
+                      concerns=concerns, added=added)
+        if notes:
+            order.context = (order.context + "\nPlan reviewers' concerns: " + " | ".join(notes))[:2000]
+        return order
+
     def _plan(self, goal: str, project: Path, log: RunLog) -> Order:
         every = gitops.list_files(project, limit=5000)
         base = prompts.planner(
@@ -139,6 +180,7 @@ class Orchestrator:
                 error = str(exc)
                 log.event("plan_invalid", error=error)
                 continue
+            order = self._plan_review(goal, order, project, log)
             log.event("order", order=order.to_dict())
             return order
         raise PlanError(f"planner did not produce a valid ORDER: {error}")
@@ -171,17 +213,26 @@ class Orchestrator:
         return last
 
     def _review(self, order: Order, wt: Path, verification: VerifyResult, warnings: list[str], log: RunLog,
-                attempt: int = 0) -> ReviewResult:
+                attempt: int = 0, builder_name: Optional[str] = None) -> ReviewResult:
         """Cross-check: the reviewer, and the second reviewer when configured. Every reviewer must say PASS.
         The second one is only asked about code the first already accepted (time is money)."""
         agg = ReviewResult("PASS", [], "")
-        for role in [r for r in ("reviewer", "reviewer2") if self.s.roles.get(r)]:
+        builder_name = builder_name or self.s.roles["builder"]
+        roles = [r for r in ("reviewer", "reviewer2", "reviewer3") if self.s.roles.get(r)]
+        if not self.s.allow_same_provider:
+            skipped = [r for r in roles if self.s.roles[r] == builder_name]
+            roles = [r for r in roles if r not in skipped]
+            for r in skipped:
+                log.event("review_skipped_self", role=r, provider=builder_name, attempt=attempt)
+            if not roles:
+                return ReviewResult("FAIL", [f"no reviewer is independent of the builder ({builder_name})"], error=True)
+        for role in roles:
             who = self.s.roles[role]
             one = self._review_role(role, order, wt, verification, warnings, log, attempt)
             log.event("review_role", role=role, provider=who, verdict=one.verdict, error=one.error, issues=one.issues)
             if one.error:
                 return ReviewResult("FAIL", [f"[{who}] {i}" for i in one.issues], error=True)
-            if role == "reviewer":
+            if not agg.summary:
                 agg.summary = one.summary
             if one.verdict != "PASS":
                 agg.verdict = "FAIL"
@@ -272,6 +323,10 @@ class Orchestrator:
         history: list[str] = []
         signatures: list[str] = []
         restarts = 0
+        writers, advisors = self._builders()
+        rot = consec = 0  # which write-capable builder is on duty; consecutive failed attempts
+        advice: Optional[str] = None
+        advise_next = True
 
         if s.baseline_check and s.test_command:
             base = verify(s, wt)
@@ -300,8 +355,10 @@ class Orchestrator:
 
             def failed(problems: list[str], summary: str, reset: bool = False) -> Optional[str]:
                 """Record a rejected attempt. Returns a reason to stop when the same failure keeps repeating."""
-                nonlocal feedback, reset_next, restarts
+                nonlocal feedback, reset_next, restarts, rot, consec, advise_next
                 result.summary = summary
+                consec += 1
+                switch = reset  # hand the work to the next builder after a CLI failure, a stall, or every second failure
                 history.append(f"시도 {attempt}: {summary}")
                 signatures.append(self._signature(problems))
                 feedback = "\n\n".join(problems)
@@ -313,14 +370,28 @@ class Orchestrator:
                         return f"같은 실패가 {s.stagnation_limit}번씩 {restarts}차례 반복돼 중단했습니다 (진전 없음)"
                     signatures.clear()
                     reset_next = True  # start over from clean code with a different approach
+                    switch = True
+                    advise_next = True
                     feedback += ("\n\nTHE SAME FAILURE REPEATED " + str(s.stagnation_limit) + " TIMES. The code was reset to its "
                                  "original state. Take a COMPLETELY DIFFERENT approach. Attempts so far:\n" + "\n".join(history[-6:]))
                 elif len(history) > 1:
                     feedback += "\n\nEarlier attempts (do not repeat them):\n" + "\n".join(history[-6:-1])
+                if switch or consec % 2 == 0:
+                    rot += 1
                 return None
 
+            brole, bname = writers[rot % len(writers)]
+            if advisors and advise_next:
+                notes = []
+                for arole, aname in advisors:
+                    text = self._helper(arole, prompts.build_advisor(order, feedback), wt, log)
+                    if text and text.strip():
+                        notes.append(f"[{aname}] " + text.strip()[:1500])
+                advice = "\n".join(notes) or None
+                advise_next = False
+            log.event("builder_pick", attempt=attempt, role=brole, provider=bname)
             try:
-                self._call("builder", prompts.builder(order, feedback), wt, True, log)
+                self._call(brole, prompts.builder(order, feedback, advice), wt, True, log)
             except ProviderError as exc:
                 if (why := failed([f"The builder CLI failed: {exc}"], f"builder CLI failed: {exc}", reset=True)):
                     result.status, result.summary = "FAILED", why
@@ -349,7 +420,7 @@ class Orchestrator:
             log.event("verify", passed=verification.passed, skipped=verification.skipped, exit_code=verification.exit_code,
                       command=verification.command, output_tail=verification.output_tail[-1500:])
             warnings = ["tests were not run: result is UNVERIFIED"] if verification.skipped else []
-            review = self._review(order, wt, verification, warnings, log, attempt)
+            review = self._review(order, wt, verification, warnings, log, attempt, bname)
             if review.error:
                 (run_dir / "last_attempt.patch").write_text(gitops.full_diff(wt, binary=True), encoding="utf-8")
                 result.status = "ERROR"

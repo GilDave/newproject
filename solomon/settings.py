@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 ROLES = ("planner", "builder", "reviewer")
+# Every stage can have up to three AIs: the lead (planner / builder / reviewer) and two more (…2, …3).
+#   plan   : the lead drafts the ORDER, the others critique it (read-only; they can add criteria, never widen the scope)
+#   build  : the lead builds; other write-capable AIs take over when an attempt fails or stalls; read-only ones advise
+#   review : every reviewer must say PASS (a reviewer is skipped for an attempt its own AI built)
+EXTRA_ROLES = ("planner2", "planner3", "builder2", "builder3", "reviewer2", "reviewer3")
+ALL_ROLES = ("planner", "planner2", "planner3", "builder", "builder2", "builder3", "reviewer", "reviewer2", "reviewer3")
 
 
 class ConfigError(ValueError):
@@ -61,9 +67,15 @@ class Settings:
             raise ConfigError("loop.max_attempts, max_run_minutes and max_tokens must be >= 0 (0 = no limit)")
         if self.stagnation_limit < 2 or self.max_restarts < 0:
             raise ConfigError("loop.stagnation_limit must be >= 2 and loop.max_restarts >= 0")
-        second = self.roles.get("reviewer2")
-        if second and second == self.roles.get("builder"):
-            raise ConfigError("roles.reviewer2 must not be the builder")
+        for r in EXTRA_ROLES:
+            if not self.roles.get(r):
+                self.roles.pop(r, None)
+        unknown = [r for r in self.roles if r not in ALL_ROLES]
+        if unknown:
+            raise ConfigError(f"unknown role(s) in [roles]: {', '.join(unknown)} (valid: {', '.join(ALL_ROLES)})")
+        for r in ("reviewer2", "reviewer3"):
+            if self.roles.get(r) and self.roles[r] == self.roles.get("builder") and not self.allow_same_provider:
+                raise ConfigError(f"roles.{r} must not be the builder")
         if self.max_files_changed < 1 or self.max_diff_lines < 1:
             raise ConfigError("safety limits must be positive")
 

@@ -17,8 +17,13 @@ _STAGE_BY_EVENT = {
     "review": "판정",
     "quota": "한도 소진",
 }
-_STAGE_BY_ROLE_START = {"planner": "계획", "builder": "구현", "reviewer": "검수", "reviewer2": "2차 검수"}
-_STAGE_BY_ROLE_END = {"planner": "계획 완료", "builder": "범위 검사와 테스트", "reviewer": "판정", "reviewer2": "2차 판정"}
+def _base(role: str) -> str:
+    """planner2 / builder3 / reviewer2 ... belong to the same stage as planner / builder / reviewer."""
+    return role.rstrip("23") if role[:-1] in ("planner", "builder", "reviewer") else role
+
+
+_STAGE_BY_ROLE_START = {"planner": "계획", "builder": "구현", "reviewer": "검수"}
+_STAGE_BY_ROLE_END = {"planner": "계획 완료", "builder": "범위 검사와 테스트", "reviewer": "판정"}
 
 
 @dataclass
@@ -109,8 +114,8 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             last_start[role] = ev
             pending[role] = ev
             run.active = {"role": role, "provider": str(ev.get("provider")), "since": str(ev.get("ts"))}
-            run.stage = _STAGE_BY_ROLE_START.get(role, run.stage)
-            run.stage_key = {"planner": "plan", "builder": "build", "reviewer": "review", "reviewer2": "review"}.get(role, run.stage_key)
+            run.stage = _STAGE_BY_ROLE_START.get(_base(role), run.stage)
+            run.stage_key = {"planner": "plan", "builder": "build", "reviewer": "review"}.get(_base(role), run.stage_key)
         elif kind == "call_end":
             role, provider = str(ev.get("role")), str(ev.get("provider"))
             st = _stats(run, provider)
@@ -133,11 +138,11 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                     st.tokens += int((int(start.get("prompt_chars") or 0) + int(ev.get("output_chars") or 0)) / 3)
                 st.estimated_calls += 1
                 call_tokens = " · 토큰 추정"
-            run.stage = _STAGE_BY_ROLE_END.get(role, run.stage)
+            run.stage = _STAGE_BY_ROLE_END.get(_base(role), run.stage)
             run.timeline.append(f"{clock}  {role} · {provider} · {float(ev.get('duration_sec') or 0):.0f}초{call_tokens}")
             pending.pop(role, None)
             run.active = None
-            if role == "builder":
+            if _base(role) == "builder" and (last_start.get(role) or {}).get("write"):  # a read-only builder slot is an advisor
                 run.stage_key = "test"
                 if attempt is not None:
                     attempt["builder"] = {"provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),

@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage, projects as projects_mod
 from .providers import PROVIDER_CLASSES, build_providers
-from .settings import Settings
+from .settings import ALL_ROLES, ROLES, Settings
 from .status import load_runs
 
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
@@ -364,9 +364,14 @@ class DashboardApp:
             raise ApiError(400, "역할 배정 형식이 올바르지 않습니다.")
         args: list[str] = []
         effective = dict(self.settings.roles)
-        for role in ("planner", "builder", "reviewer", "reviewer2"):
+        for role in ALL_ROLES:
             name = roles.get(role)
             if name is None:
+                continue
+            if name == "":
+                if role in ROLES:
+                    raise ApiError(400, f"{role} 역할에는 AI가 하나 필요합니다.")
+                effective.pop(role, None)  # an optional slot cleared on the page
                 continue
             if name not in PROVIDER_CLASSES:
                 raise ApiError(400, f"알 수 없는 AI입니다: {name}")
@@ -376,9 +381,13 @@ class DashboardApp:
             raise ApiError(400, f"{effective['builder']}은(는) 구현을 맡을 수 없습니다 (계획·검수만 가능). 구현은 다른 AI로 고르세요.")
         if effective["builder"] == effective["reviewer"] and not self.settings.allow_same_provider:
             raise ApiError(400, "구현과 검수는 서로 다른 AI여야 합니다 (같은 AI가 자기 코드를 검수하면 교차 검증이 되지 않습니다).")
-        second = effective.get("reviewer2")
-        if second and second == effective["builder"]:
-            raise ApiError(400, "2차 검수 AI는 구현 AI와 달라야 합니다.")
+        reviewers = [effective[r] for r in ("reviewer", "reviewer2", "reviewer3") if effective.get(r)]
+        if effective["builder"] in reviewers and not self.settings.allow_same_provider:
+            raise ApiError(400, "검수 AI는 구현 AI와 달라야 합니다 (1차·2차·3차 모두).")
+        for r in ("builder2", "builder3"):
+            w = effective.get(r)
+            if w and PROVIDER_CLASSES[w].supports_write and reviewers and all(x == w for x in reviewers) and not self.settings.allow_same_provider:
+                raise ApiError(400, f"구현 보조 {w}가 구현할 차례에는 검수할 다른 AI가 없습니다. 검수 AI를 하나 더 지정하세요.")
         return args
 
     def start_run(self, goal: str, project: str, roles: Optional[dict] = None, persist: bool = False, fresh: bool = False) -> dict:

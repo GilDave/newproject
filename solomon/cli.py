@@ -17,7 +17,7 @@ from .providers import PROVIDER_CLASSES, build_providers
 from .runner import run_process
 from .status import load_runs, render
 from . import bench as bench_mod
-from .settings import ConfigError, load_settings
+from .settings import ALL_ROLES, ConfigError, load_settings
 
 EXIT = {"PASSED": 0, "FAILED": 1, "BLOCKED_QUOTA": 3, "ERROR": 2, "STOPPED": 130}
 
@@ -115,7 +115,7 @@ def _run(args: argparse.Namespace) -> int:
     if args.no_baseline:
         settings.baseline_check = False
     settings.validate()
-    for role in ("planner", "builder", "reviewer", "reviewer2"):
+    for role in ALL_ROLES:
         chosen = getattr(args, role, None)
         if chosen:
             settings.roles[role] = chosen  # validated by the Orchestrator (known AI, builder can write, independence)
@@ -183,7 +183,7 @@ def _autofix(args: argparse.Namespace) -> int:
         settings.test_command = None
     elif args.test_command:
         settings.test_command = shlex.split(args.test_command)
-    for role in ("planner", "builder", "reviewer", "reviewer2"):
+    for role in ALL_ROLES:
         chosen = getattr(args, role, None)
         if chosen:
             settings.roles[role] = chosen
@@ -290,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--apply", action="store_true", help="apply the passed patch to the working tree")
     run.add_argument("--keep-worktree", action="store_true", help="keep the isolated worktree for inspection")
     run.add_argument("--on-quota", choices=["stop", "wait"], help="override loop.on_quota")
-    for role in ("planner", "builder", "reviewer", "reviewer2"):
+    for role in ALL_ROLES:
         run.add_argument(f"--{role}", help=f"which AI takes the {role} role for this run (overrides the config)")
     run.add_argument("--test-command", help="test command for this run, e.g. 'npm test' (overrides the config)")
     run.add_argument("--persist", action="store_true", help="no attempt limit: keep trying until it passes or a budget runs out")
@@ -333,7 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
     af.add_argument("--test-command")
     af.add_argument("--no-tests", action="store_true")
     af.add_argument("--allow-untested", action="store_true")
-    for role in ("planner", "builder", "reviewer", "reviewer2"):
+    for role in ALL_ROLES:
         af.add_argument(f"--{role}")
     af.set_defaults(func=_autofix)
 

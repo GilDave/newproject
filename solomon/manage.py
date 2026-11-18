@@ -385,7 +385,8 @@ def _check_siblings(project: Path, state_dir: str, key: str) -> None:
 # ------------------------------------------------------------------ 5W1H: what happened under one id
 STATUS_KO = {"PASSED": "통과", "FAILED": "실패", "ERROR": "오류", "BLOCKED_QUOTA": "구독 한도 소진", "STOPPED": "중지됨",
              "DONE": "완료", "PARTIAL": "일부 성공", "NOTHING": "대상 없음", "SKIPPED": "건너뜀"}
-ROLE_KO = {"planner": "계획", "builder": "구현", "reviewer": "검수", "reviewer2": "2차 검수", "analysis": "분석"}
+ROLE_KO = {"planner": "계획", "planner2": "계획 검토1", "planner3": "계획 검토2", "builder": "구현", "builder2": "구현 보조1", "builder3": "구현 보조2",
+           "reviewer": "검수", "reviewer2": "2차 검수", "reviewer3": "3차 검수", "analysis": "분석"}
 
 
 def _events(path: Path) -> list[dict]:
@@ -627,6 +628,7 @@ def build_process(events: list[dict]) -> dict:
     cur: Optional[dict] = None
     live = True
     pending_scope: Optional[dict] = None
+    wrote: dict[str, bool] = {}
 
     def step(target: list, name: str, status: str, text: str = "", lines: Optional[list] = None, ts: str = "") -> dict:
         d = {"name": name, "status": status, "text": text, "lines": lines or [], "at": str(ts)[11:19]}
@@ -636,13 +638,30 @@ def build_process(events: list[dict]) -> dict:
     for e in events:
         k, ts = e.get("event"), e.get("ts", "")
         tgt = cur["steps"] if cur else prelude
-        if k == "call_end":
+        if k == "call_start":
+            wrote[str(e.get("role"))] = bool(e.get("write"))
+        elif k == "call_end":
             role = str(e.get("role"))
             sec = f"{float(e.get('duration_sec') or 0):.0f}초"
             if role == "planner":
                 step(prelude, "계획", "ok", f"{e.get('provider')}가 작업 지시서를 만들었습니다 ({sec})", ts=ts)
-            elif role == "builder" and cur is not None:
+            elif role.startswith("builder") and wrote.get(role) and cur is not None:
                 step(cur["steps"], "구현", "ok", f"{e.get('provider')}가 코드를 작성했습니다 ({sec})", ts=ts)
+            elif role.startswith("builder") and cur is not None:
+                step(cur["steps"], "구현 자문", "info", f"{e.get('provider')}가 구현 조언을 했습니다 ({sec})", ts=ts)
+        elif k == "plan_review":
+            v = str(e.get("verdict"))
+            step(prelude, f"계획 검토 · {e.get('provider')}", "ok" if v == "OK" else "warn" if v in ("CHANGE",) else "info",
+                 {"OK": "이상 없음", "CHANGE": "보완 제안", "UNPARSEABLE": "응답을 해석하지 못해 무시"}.get(v, v),
+                 [f"우려: {c}" for c in e.get("concerns", [])] + [f"완료 기준 추가: {c}" for c in e.get("added", [])], ts)
+        elif k == "helper_skipped":
+            step(tgt, "보조 AI 건너뜀", "warn", f"{e.get('provider')}: {_tail(e.get('reason'), 120)}", ts=ts)
+        elif k == "builder_pick":
+            att = next((a for a in attempts if a["n"] == e.get("attempt")), None)
+            if att is not None:
+                att["builder"] = e.get("provider")
+        elif k == "review_skipped_self":
+            step(tgt, "검수 건너뜀", "info", f"{e.get('provider')}가 이번 시도의 구현자라 스스로 검수하지 않습니다", ts=ts)
         elif k == "call_error":
             step(tgt, "AI 호출 실패", "fail", f"{e.get('role')} · {e.get('provider')}: {_tail(e.get('error'), 160)}", ts=ts)
         elif k == "quota":
@@ -660,7 +679,7 @@ def build_process(events: list[dict]) -> dict:
                  "수정 전 코드의 테스트 " + ("통과" if e.get("passed") else "실패 → AI를 부르지 않고 멈춤"),
                  [_tail(e.get("output_tail"), 300)] if not e.get("passed") else [], ts)
         elif k == "attempt_start":
-            cur = {"n": e.get("attempt"), "steps": [], "result": "진행 중"}
+            cur = {"n": e.get("attempt"), "steps": [], "result": "진행 중", "builder": ""}
             attempts.append(cur)
             pending_scope = None
         elif k == "changes" and cur is not None:
@@ -730,9 +749,11 @@ def build_assessment(process: dict, status: str, files: list, added: int, remove
     else:
         add("교차 검수", "warn", "기록 없음")
     if roles and roles.get("builder"):
-        same = [r for r in ("reviewer", "reviewer2") if roles.get(r) == roles["builder"]]
+        final_builder = (process["attempts"][-1].get("builder") if process["attempts"] else "") or roles["builder"]
+        judged = [x["name"].replace("검수 · ", "") for x in last if x["name"].startswith("검수 ·")]
+        same = [j for j in judged if j == final_builder]
         add("작성자와 검수자", "warn" if same else "ok",
-            "작성한 AI가 직접 검수했습니다 (독립성 낮음)" if same else f"구현 {roles['builder']} ≠ 검수 " + ", ".join(roles[r] for r in ("reviewer", "reviewer2") if roles.get(r)) + " (서로 다른 AI)")
+            "작성한 AI가 직접 검수했습니다 (독립성 낮음)" if same else f"구현 {final_builder} ≠ 검수 " + ", ".join(judged or ["?"]) + " (서로 다른 AI)")
     size = f"파일 {len(files)}개 · +{added} −{removed}줄"
     add("변경 규모", "warn" if len(files) > 8 or added + removed > 400 else "ok", size + (" — 큰 변경이니 내용을 꼼꼼히 보세요" if len(files) > 8 or added + removed > 400 else ""))
     if overlap:
