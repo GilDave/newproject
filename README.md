@@ -44,6 +44,20 @@ solomon run "..." --project ~/work/my-app --apply           # 통과한 패치�
 
 결과는 `<project>/.solomon/runs/<run_id>/` 에 남습니다: `events.jsonl`(단계별 로그), `result.json`, `result.patch`(통과 시), `last_attempt.patch`(마지막 실패 시도).
 
+## G2 검증 실험 (교차 검증이 단독보다 나은가)
+`bench/tasks/`에 과제 7개가 있습니다. 각 과제는 AI에게 보이는 목표와, AI가 **보지 못하는 숨은 테스트**로 이뤄집니다.
+파이프라인이 PASSED라고 했는데 숨은 테스트가 실패하면 **결함 통과**로 셉니다. 정답 기준은 AI가 아니라 숨은 테스트입니다.
+
+```bash
+solomon bench validate                       # 과제가 공정한지 확인 (구현이 없으면 실패, 정답 구현이면 통과). AI 호출 없음
+solomon bench run --only t01 --out bench_results     # 먼저 과제 1개를 4가지 구성으로 (시범 4회)
+solomon bench run --out bench_results                # 전체 7과제 x 4구성 = 28회
+solomon bench report --out bench_results             # 구성별 비교표
+```
+4가지 구성: `codex_solo`, `claude_solo`(한 모델이 계획·구현·검수를 모두 함), `codex_build_claude_review`, `claude_build_codex_review`(서로 다른 모델이 검수).
+한도가 소진되면 `BLOCKED_QUOTA`로 멈추고, 같은 명령을 다시 실행하면 끝난 것은 건너뛰고 이어서 합니다. `--repeat N`으로 반복 횟수를 늘릴 수 있습니다.
+주의: `claude`가 구현하는 구성과 `codex`가 계획·검수하는 구성은 아직 실제 CLI로 돌려 본 적이 없습니다. 시범 4회로 먼저 확인하세요.
+
 ## 안전 장치
 | 장치 | 동작 |
 | --- | --- |

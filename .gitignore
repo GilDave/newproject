@@ -5,3 +5,4 @@ __pycache__/
 .solomon/
 *.egg-info/
 .DS_Store
+bench_results/

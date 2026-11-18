@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 from . import __version__, gitops
@@ -12,6 +13,7 @@ from .orchestrator import Orchestrator
 from .providers import PROVIDER_CLASSES, build_providers
 from .runner import run_process
 from .status import load_runs, render
+from . import bench as bench_mod
 from .settings import ConfigError, load_settings
 
 EXIT = {"PASSED": 0, "FAILED": 1, "BLOCKED_QUOTA": 3, "ERROR": 2}
@@ -81,6 +83,40 @@ def _status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _bench(args: argparse.Namespace) -> int:
+    tasks_dir = Path(args.tasks)
+    if not tasks_dir.is_dir():
+        print(f"error: task folder not found: {tasks_dir} (run from the repository root or pass --tasks)", file=sys.stderr)
+        return 2
+    out = Path(args.out)
+    if args.action == "report":
+        print(bench_mod.format_report(bench_mod.load_results(out)))
+        return 0
+    only = [t for t in (args.only or "").split(",") if t]
+    tasks = bench_mod.load_tasks(tasks_dir, only or None)
+    if args.action == "validate":
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as scratch:
+            problems = bench_mod.validate_tasks(tasks, Path(scratch))
+        for p in problems:
+            print(f"[problem] {p}")
+        print(f"{len(tasks)} task(s) checked, {len(problems)} problem(s).")
+        return 1 if problems else 0
+    settings = load_settings(args.config)
+    names = [c for c in (args.configs or ",".join(bench_mod.CONFIGS)).split(",") if c]
+    for name in names:  # fail early on a typo, before any quota is spent
+        bench_mod.settings_for(settings, name)
+    problems = bench_mod.validate_tasks(tasks, Path(tempfile.mkdtemp()))
+    if problems:
+        print("\n".join(f"[problem] {p}" for p in problems), file=sys.stderr)
+        return 2
+    records = bench_mod.run_bench(tasks, names, out, settings, repeat=args.repeat, keep=args.keep)
+    print()
+    print(bench_mod.format_report(records))
+    return 3 if any(r["status"] == "BLOCKED_QUOTA" for r in records) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="solomon", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -105,6 +141,17 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--run", help="show the run whose id starts with this text")
     st.add_argument("--limit", type=int, default=5, help="how many recent runs to list")
     st.set_defaults(func=_status)
+
+    bn = sub.add_parser("bench", help="G2 experiment: compare single-model and cross-review configurations")
+    bn.add_argument("action", choices=["validate", "run", "report"])
+    bn.add_argument("--tasks", default="bench/tasks", help="folder with the experiment tasks")
+    bn.add_argument("--only", help="comma-separated task ids or prefixes (default: all)")
+    bn.add_argument("--configs", help=f"comma-separated, default all: {', '.join(bench_mod.CONFIGS)}")
+    bn.add_argument("--repeat", type=int, default=1, help="repetitions of every task and config")
+    bn.add_argument("--out", default="bench_results", help="folder for results.jsonl and run logs")
+    bn.add_argument("--keep", action="store_true", help="keep each working repository for inspection")
+    bn.add_argument("--config", help="path to solomon.toml")
+    bn.set_defaults(func=_bench)
 
     args = parser.parse_args(argv)
     try:

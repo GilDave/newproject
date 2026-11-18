@@ -1,0 +1,2 @@
+title = "슬라이딩 윈도우 속도 제한"
+goal = '''ratelimit.py에 SlidingWindowLimiter 클래스를 만든다. SlidingWindowLimiter(limit, window)로 생성하고 allow(key, now)가 True 또는 False를 반환한다. now는 호출하는 쪽이 넘기는 시각(초, 숫자)이다. 규칙: (1) limit은 1 이상의 정수, window는 0보다 큰 숫자(int 또는 float)여야 하며 아니면 ValueError. (2) 시각 t에 허용된 요청은 now - t < window 인 동안만 개수에 포함된다. 즉 t + window 시각이 되면 더 이상 포함되지 않는다. (3) allow는 윈도우 안의 허용된 요청 수가 limit 미만이면 요청을 기록하고 True, 아니면 기록하지 않고 False를 반환한다. 거부된 요청은 개수에 포함되지 않는다. (4) key마다 독립적으로 센다. (5) 같은 key에서 직전 호출의 now보다 작은 now가 들어오면 ValueError. 같은 값은 허용한다. 다른 key의 시각과는 무관하다. 테스트도 추가한다.'''
