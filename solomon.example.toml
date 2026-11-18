@@ -1,0 +1,39 @@
+# Copy to solomon.toml (next to where you run `solomon`) and edit.
+# Every key is optional; these are the defaults.
+
+state_dir = ".solomon"          # run logs and worktrees live in <project>/.solomon
+
+[roles]                          # who does what. Starting hypothesis, change after your own experiment.
+planner  = "claude"
+builder  = "codex"
+reviewer = "claude"              # must differ from builder unless loop.allow_same_provider = true
+
+[executables]                    # only needed if a CLI is not on PATH
+# claude = "/Users/you/.local/bin/claude"
+# codex  = "/opt/homebrew/bin/codex"
+
+[extra_args]                     # appended to each CLI call, e.g. to pin a model
+# claude = ["--model", "sonnet"]
+# codex  = ["--model", "gpt-5"]
+
+[timeouts]                       # seconds
+planner   = 300
+builder   = 900
+reviewer  = 300
+no_output = 180
+verify    = 600
+
+[safety]
+max_files_changed = 15
+max_diff_lines    = 1500
+approved_commands = ["python", "python3", "pytest", "npm", "node", "cargo", "go", "make"]
+
+[verification]
+test_command = ["python3", "-m", "pytest", "-q"]   # [] = no automatic tests (result is UNVERIFIED)
+
+[loop]
+max_attempts        = 3
+on_quota            = "stop"     # "stop" ends the run when a subscription limit is hit; "wait" sleeps and retries
+quota_wait_sec      = 900
+quota_max_waits     = 8
+allow_same_provider = false

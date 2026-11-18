@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solomon"
+version = "0.1.0"
+description = "GPT x Claude cross-verified development pipeline driven by signed-in subscription CLIs"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+solomon = "solomon.cli:main"
+
+[tool.setuptools]
+packages = ["solomon", "solomon.providers"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
