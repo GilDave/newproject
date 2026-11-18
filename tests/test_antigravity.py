@@ -178,6 +178,8 @@ def test_agy_is_found_in_its_own_install_folder(tmp_path, monkeypatch):
     exe.chmod(0o755)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "/nonexistent")
+    # the machine running the tests may really have agy in /opt/homebrew/bin: take the system folders out of play
+    monkeypatch.setattr("solomon.env._posix_candidates", lambda name: [])
     assert resolve_cli("agy") == str(exe.resolve())
 
 
