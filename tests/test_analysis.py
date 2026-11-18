@@ -77,6 +77,49 @@ def test_secret_shapes_are_removed(text, gone):
     assert gone not in out and n >= 1 and "redacted" in out
 
 
+@pytest.mark.parametrize("text,gone", [
+    ("BOT_TOKEN=abc123xyz789", "abc123xyz789"),
+    ("export DISCORD_TOKEN=plain-value-here-12345", "plain-value-here-12345"),
+    ("  api_key: sk_live_whatever_1234  # comment", "sk_live_whatever_1234"),
+    ("DB_PASSWORD=hunter2", "hunter2"),
+    ("client-secret = very-secret-value", "very-secret-value"),
+    ("OPENAI_API_KEY=" + OPENAI, OPENAI),
+])
+def test_env_file_style_values_without_quotes_are_removed_too(text, gone):
+    out, n = redact(text, ".env")
+    assert gone not in out and n >= 1
+    assert out.split("=")[0].split(":")[0].strip().replace("export ", "")  # the variable name survives
+
+
+def test_env_style_redaction_leaves_ordinary_settings_alone():
+    cfg = "DEBUG=true\nPORT=8080\nTOKEN_LIMIT=5\nname: ena\nTOKEN=\n# TOKEN=commented-out\ntoken: <redacted>\n"
+    out, n = redact(cfg, "config.yaml")
+    assert "DEBUG=true" in out and "PORT=8080" in out and "name: ena" in out
+    assert "<redacted>\n" in out and "TOKEN=\n" in out  # an empty value and an already hidden one are not double-processed
+    assert "TOKEN_LIMIT=5" in out  # too short to be a secret (and a limit, not a token)
+
+
+@pytest.mark.parametrize("name", ["main.py", "src/auth.js", "bot.go", "README.md", "handler.ts"])
+def test_source_code_is_not_mangled_by_the_unquoted_rule(name):
+    code = "token = get_token()\n    auth_key = request.headers['Authorization']\nsecret_count: int = len(secrets)\n"
+    assert redact(code, name) == (code, 0)  # the auth logic stays readable for the analysis
+
+
+@pytest.mark.parametrize("name", [".env", ".env.local", "prod.env", "settings.ini", "app.cfg", "config.yaml", "x.yml", "pyproject.toml", ".env.example"])
+def test_config_like_files_get_the_unquoted_rule(name):
+    assert redact("BOT_TOKEN=abc123xyz789", name)[0] == "BOT_TOKEN=<redacted>"
+
+
+def test_a_template_with_a_real_looking_value_does_not_leak(tmp_path):
+    repo = make_bot_repo(tmp_path)
+    (repo / ".env.example").write_text("BOT_TOKEN=real-value-pasted-by-mistake-1234\nDEBUG=false\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    c = collect_project(repo)
+    assert ".env.example" in {f.path for f in c.files}  # templates are still analysed
+    prompt = build_prompt(c, "")
+    assert "real-value-pasted-by-mistake-1234" not in prompt and "DEBUG=false" in prompt
+
+
 def test_ordinary_code_is_left_alone():
     code = 'token = "x"\nname = "alice"\nlimit = 100\nTOKEN_LIMIT = 5\n'
     assert redact(code) == (code, 0)

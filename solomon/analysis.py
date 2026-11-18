@@ -63,9 +63,26 @@ _REDACTIONS = [
 ]
 
 
-def redact(text: str) -> tuple[str, int]:
+# Unquoted KEY=value / key: value lines. Only for config-like files: in source code the same shape is ordinary
+# (`token = get_token()`) and blanking it would wreck exactly the auth code an analysis needs to read.
+_ENV_STYLE = (re.compile(r"""(?im)^([ \t]*(?:export[ \t]+)?[A-Za-z0-9_.\-]*(?:token|secret|passw(?:or)?d|passwd|api[_-]?key|apikey|"""
+                r"""auth[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?key)[A-Za-z0-9_.\-]*[ \t]*[=:][ \t]*)"""
+                r"""(?!<redacted)([^\s#"'][^\s#]{3,})"""),
+     r"\1<redacted>")
+_CONFIG_EXT = {".env", ".ini", ".cfg", ".conf", ".properties", ".yaml", ".yml", ".toml", ".example", ".sample", ".template"}
+
+
+def _config_like(path: str) -> bool:
+    base = os.path.basename(path).lower()
+    return base.startswith(".env") or os.path.splitext(base)[1] in _CONFIG_EXT
+
+
+def redact(text: str, path: str = "") -> tuple[str, int]:
     count = 0
-    for pattern, repl in _REDACTIONS:
+    rules = list(_REDACTIONS)
+    if path and _config_like(path):
+        rules.append(_ENV_STYLE)
+    for pattern, repl in rules:
         text, n = pattern.subn(repl, text)
         count += n
     return text, count
@@ -176,7 +193,7 @@ def collect_project(project: Path, budget_chars: int = 150_000, max_file_chars: 
         except (OSError, UnicodeDecodeError):
             out.excluded.append((rel, "텍스트가 아님"))
             continue
-        text, n = redact(raw)
+        text, n = redact(raw, rel)
         truncated = len(text) > max_file_chars
         if truncated:
             text = text[:max_file_chars]
