@@ -17,8 +17,9 @@ def ev(kind, ts="2026-11-18T20:15:28", **kw):
 
 def test_claude_usage_sums_cache_tokens():
     out = json.dumps({"result": "x", "usage": {"input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 5}})
-    assert claude_usage(out) == {"in": 100, "out": 5, "total": 105}
-    assert ClaudeProvider().extract_usage(out, "") == {"in": 100, "out": 5, "total": 105}
+    expected = {"in": 100, "out": 5, "total": 105, "cache_read": 90, "cache_create": 0}
+    assert claude_usage(out) == expected
+    assert ClaudeProvider().extract_usage(out, "") == expected
     assert claude_usage("not json") is None
     assert claude_usage('{"result": "x"}') is None
 
@@ -94,3 +95,16 @@ def test_partial_last_line_is_ignored(tmp_path):
     (d / "events.jsonl").write_text(json.dumps(ev("run_start", goal="g")) + '\n{"event": "call_st', encoding="utf-8")
     runs = load_runs(tmp_path)
     assert runs[0].goal == "g"
+
+
+def test_status_shows_cache_share_and_per_call_tokens():
+    events = [
+        ev("run_start", goal="g"),
+        ev("call_start", role="reviewer", provider="claude", prompt_chars=10),
+        ev("call_end", role="reviewer", provider="claude", duration_sec=9,
+           tokens={"total": 61000, "cache_read": 50000}, tokens_est={"in": 1, "out": 1}),
+    ]
+    run = summarize_run("r", events)
+    text = render([run], Path("."))
+    assert "캐시 읽기 50,000 포함" in text
+    assert "reviewer · claude · 9초 · 토큰 61,000" in text

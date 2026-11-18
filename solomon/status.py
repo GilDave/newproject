@@ -27,6 +27,7 @@ class ProviderStats:
     failures: int = 0
     cli_sec: float = 0.0
     tokens: int = 0  # exact where the CLI reported it, estimate otherwise
+    cache_read: int = 0  # part of `tokens` that was cached input (Claude only)
     estimated_calls: int = 0  # how many calls had to be estimated
 
 
@@ -87,8 +88,11 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             st.calls += 1
             st.cli_sec += float(ev.get("duration_sec") or 0)
             exact = ev.get("tokens")
+            call_tokens = ""
             if isinstance(exact, dict) and exact.get("total"):
                 st.tokens += int(exact["total"])
+                st.cache_read += int(exact.get("cache_read") or 0)
+                call_tokens = f" · 토큰 {int(exact['total']):,}"
             else:
                 est = ev.get("tokens_est")
                 if isinstance(est, dict):
@@ -97,8 +101,9 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                     start = last_start.get(role, {})
                     st.tokens += int((int(start.get("prompt_chars") or 0) + int(ev.get("output_chars") or 0)) / 3)
                 st.estimated_calls += 1
+                call_tokens = " · 토큰 추정"
             run.stage = _STAGE_BY_ROLE_END.get(role, run.stage)
-            run.timeline.append(f"{clock}  {role} · {provider} · {float(ev.get('duration_sec') or 0):.0f}초")
+            run.timeline.append(f"{clock}  {role} · {provider} · {float(ev.get('duration_sec') or 0):.0f}초{call_tokens}")
         elif kind == "call_error":
             _stats(run, str(ev.get("provider"))).failures += 1
             run.timeline.append(f"{clock}  {ev.get('role')} 호출 실패 · {str(ev.get('error', ''))[:60]}")
@@ -160,7 +165,8 @@ def _tokens(st: ProviderStats) -> str:
         return "0"
     mark = "" if st.estimated_calls == 0 else "~"
     note = "정확" if st.estimated_calls == 0 else ("추정" if st.estimated_calls == st.calls else "일부 추정")
-    return f"{mark}{st.tokens:,} ({note})"
+    cache = f", 캐시 읽기 {st.cache_read:,} 포함" if st.cache_read else ""
+    return f"{mark}{st.tokens:,} ({note}{cache})"
 
 
 def render(runs: list[RunSummary], project: Path, limit: int = 5) -> str:

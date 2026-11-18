@@ -20,13 +20,16 @@ def claude_usage(stdout: str) -> Optional[dict]:
     try:
         envelope = json.loads(stdout)
         use = envelope.get("usage") or {}
-        tin = sum(int(use.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        cache_create = int(use.get("cache_creation_input_tokens") or 0)
+        cache_read = int(use.get("cache_read_input_tokens") or 0)
+        tin = int(use.get("input_tokens") or 0) + cache_create + cache_read
         tout = int(use.get("output_tokens") or 0)
     except (ValueError, TypeError, AttributeError):
         return None
     if not (tin or tout):
         return None
-    return {"in": tin, "out": tout, "total": tin + tout}
+    # "in" includes cached input; the split is kept so cache reads can be told apart from fresh input
+    return {"in": tin, "out": tout, "total": tin + tout, "cache_read": cache_read, "cache_create": cache_create}
 
 
 _CODEX_TOTAL = re.compile(r"tokens used[:\s]*([\d,]+)", re.IGNORECASE)
