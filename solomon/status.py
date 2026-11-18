@@ -93,6 +93,8 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                 st.tokens += int(exact["total"])
                 st.cache_read += int(exact.get("cache_read") or 0)
                 call_tokens = f" · 토큰 {int(exact['total']):,}"
+                if exact.get("turns"):
+                    call_tokens += f" · {int(exact['turns'])}턴"
             else:
                 est = ev.get("tokens_est")
                 if isinstance(est, dict):

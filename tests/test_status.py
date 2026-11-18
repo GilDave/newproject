@@ -108,3 +108,14 @@ def test_status_shows_cache_share_and_per_call_tokens():
     text = render([run], Path("."))
     assert "캐시 읽기 50,000 포함" in text
     assert "reviewer · claude · 9초 · 토큰 61,000" in text
+
+
+def test_turns_are_recorded_when_claude_reports_them():
+    out = json.dumps({"result": "x", "num_turns": 4, "usage": {"input_tokens": 1, "output_tokens": 1}})
+    assert claude_usage(out)["turns"] == 4
+    assert "turns" not in claude_usage(json.dumps({"result": "x", "usage": {"input_tokens": 1}}))
+    events = [
+        ev("run_start", goal="g"),
+        ev("call_end", role="reviewer", provider="claude", duration_sec=8, tokens={"total": 100, "turns": 4}),
+    ]
+    assert "reviewer · claude · 8초 · 토큰 100 · 4턴" in render([summarize_run("r", events)], Path("."))

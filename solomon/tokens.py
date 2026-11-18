@@ -29,7 +29,11 @@ def claude_usage(stdout: str) -> Optional[dict]:
     if not (tin or tout):
         return None
     # "in" includes cached input; the split is kept so cache reads can be told apart from fresh input
-    return {"in": tin, "out": tout, "total": tin + tout, "cache_read": cache_read, "cache_create": cache_create}
+    result = {"in": tin, "out": tout, "total": tin + tout, "cache_read": cache_read, "cache_create": cache_create}
+    turns = envelope.get("num_turns")  # internal model turns of this one call, when the CLI reports it
+    if isinstance(turns, int) and turns > 0:
+        result["turns"] = turns
+    return result
 
 
 _CODEX_TOTAL = re.compile(r"tokens used[:\s]*([\d,]+)", re.IGNORECASE)
