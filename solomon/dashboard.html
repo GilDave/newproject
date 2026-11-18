@@ -47,6 +47,33 @@ textarea:focus,input:focus{outline:none;border-color:#34507a}
 pre.diff{max-height:420px;overflow:auto;background:#08101a;border:1px solid var(--line);border-radius:9px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace;margin:8px 0 0}
 pre.diff .a{color:#7ee2b0}pre.diff .d{color:#ff9aa5}pre.diff .h{color:#8fb4ff}
 .hl{font-size:17px;font-weight:700;margin:0 0 10px}
+.pjw{padding:16px 24px 24px;display:flex;flex-direction:column;gap:14px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.kpi{border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:linear-gradient(180deg,var(--panel),var(--panel2));cursor:default}
+.kpi b{display:block;font-size:24px;line-height:1.2}.kpi small{color:var(--dim);font-size:12px}.kpi.click{cursor:pointer}.kpi.click:hover{border-color:#3a5b88}.kpi.alert b{color:#f7d98b}
+.toolbar{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.aigrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:12px}
+.aic{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#0a121c}.aic.focus{border-color:#4f86d6;box-shadow:0 0 0 2px #1c3a6b}
+.aic h3{margin:0 0 6px;font-size:16px}.aic .row2{display:flex;justify-content:space-between;font-size:13px;margin:3px 0;color:var(--dim)}.aic .row2 b{color:var(--text)}
+.chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.chip{font-size:11px;border-radius:999px;padding:2px 9px;border:1px solid var(--line);background:#0d1826;color:var(--dim)}
+.chip.ai{cursor:pointer;color:var(--text)}.chip.ai:hover{border-color:#3a5b88}
+.meter{height:6px;border-radius:3px;background:#13202f;overflow:hidden;margin:4px 0}.meter i{display:block;height:100%}
+.pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+.pcard{display:flex;flex-direction:column;gap:9px}.pcard.busy{border-color:#2f74e6;box-shadow:0 0 0 1px #1c3a6b}
+.pcard .nm{font-size:17px;font-weight:700;cursor:pointer}.pcard .nm:hover{color:var(--gemini)}
+.flow{display:flex;align-items:stretch;gap:4px}.fn{flex:1;text-align:center;border:1px solid var(--line);border-radius:9px;padding:4px 2px;background:#0a121c;cursor:pointer;min-width:0}
+.fn span{display:block;font-size:11px;color:var(--faint)}.fn b{font-size:16px;color:var(--faint)}.fn.on{border-color:#2a4166;background:#0f1d2e}.fn.on b{color:var(--text)}.fn.on span{color:var(--dim)}
+.fn.hot{border-color:#8a6d1e;background:#2a230b}.fn.hot b{color:#f7d98b}.fn.live{border-color:#2f74e6;animation:pulse 1.2s infinite}
+.fa{align-self:center;color:var(--faint);font-size:12px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center}.stats div{background:#0a121c;border-radius:8px;padding:5px 2px}.stats b{display:block;font-size:15px}.stats small{font-size:10px;color:var(--dim)}
+.dots{display:flex;gap:3px;align-items:center;flex-wrap:wrap}.dots i{width:11px;height:11px;border-radius:3px;background:#2a3a50;display:inline-block}
+.dots i.PASSED{background:var(--ok)}.dots i.FAILED,.dots i.ERROR{background:var(--bad)}.dots i.BLOCKED_QUOTA{background:var(--warn)}.dots i.STOPPED{background:#7f8aa0}.dots i.RUNNING{background:#4f86d6}
+.pcard .btns{display:flex;gap:6px;flex-wrap:wrap}.pcard .btns button{padding:5px 11px;font-size:12px}
+.stk{display:flex;height:8px;border-radius:4px;overflow:hidden;background:#13202f}.stk i{display:block;height:100%}
+.sd{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;align-items:stretch}
+.sg{border:1px solid var(--line);border-radius:12px;padding:8px;background:#0a121c;min-width:0}.sg h4{margin:0 0 6px;font-size:13px;color:var(--text)}
+.sg.mach{border-style:dashed;opacity:.85}.sg .chips{margin-top:4px}.sg small{display:block;color:var(--faint);font-size:11px;line-height:1.35;margin-top:4px}
+@media (max-width:1100px){.sd{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .strip{display:flex;align-items:center;gap:10px;margin-left:16px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:#0a121c;font-size:13px;cursor:pointer;max-width:520px;overflow:hidden;white-space:nowrap}
 .strip.busy{border-color:#2f74e6;background:#0e2140}.strip .led{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}.strip.busy .led{background:#4f86d6;box-shadow:0 0 8px #4f86d6;animation:pulse 1.2s infinite}
 @keyframes pulse{50%{opacity:.35}}
@@ -64,6 +91,7 @@ pre.diff .a{color:#7ee2b0}pre.diff .d{color:#ff9aa5}pre.diff .h{color:#8fb4ff}
 .pj{display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line);padding:8px 0;flex-wrap:wrap}
 .pj .nm{font-weight:700}.pj .pth{font-size:12px;color:var(--dim);flex-basis:100%}
 .chk{display:flex;gap:8px;align-items:flex-start;font-size:12px;margin-top:8px}
+.rgrid{display:grid;grid-template-columns:34px repeat(3,minmax(0,1fr));gap:5px;align-items:center}.rgrid small{color:var(--dim);font-size:11px;text-align:center}.rgrid select{padding:6px 4px;font-size:12px}
 .rr{display:grid;grid-template-columns:44px 1fr;align-items:center}
 .rr small{color:var(--dim);font-size:12px}
 select{width:100%;background:#08101a;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 8px;font:inherit}
@@ -180,7 +208,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
 </head>
 <body>
 <header>
-  <div class="brand">SOLOMON<small>여러 AI가 서로 검증하며 만듭니다</small></div>
+  <div class="brand" id="brand" style="cursor:pointer" title="대시보드로">SOLOMON<small>여러 AI가 서로 검증하며 만듭니다</small></div>
   <nav class="tabs" aria-label="화면 선택"><button id="tab-dash" class="on">대시보드</button><button id="tab-work">작업실</button><button id="tab-mg">관리 <span id="mgBadge"></span></button><button id="tab-pj">프로젝트</button></nav>
   <div class="strip" id="strip" title="지금 하고 있는 일"><span class="led"></span><span id="stripText">대기 중</span><span class="need" id="stripNeed"></span></div>
   <div class="spacer"></div>
@@ -210,13 +238,16 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
       <div id="roleBlock">
         <label>역할 배정 — 어느 AI가 무엇을 맡을까요</label>
         <div class="roles">
-          <div class="rr"><small>계획</small><select id="r-planner"></select></div>
-          <div class="rr"><small>구현</small><select id="r-builder"></select></div>
-          <div class="rr"><small>검수</small><select id="r-reviewer"></select></div>
-          <div class="rr"><small>2차 검수</small><select id="r-reviewer2"></select></div>
+          <div class="rgrid">
+            <span></span><small>AI 1 (담당)</small><small>AI 2</small><small>AI 3</small>
+            <small>계획</small><select id="r-planner"></select><select id="r-planner2"></select><select id="r-planner3"></select>
+            <small>구현</small><select id="r-builder"></select><select id="r-builder2"></select><select id="r-builder3"></select>
+            <small>검수</small><select id="r-reviewer"></select><select id="r-reviewer2"></select><select id="r-reviewer3"></select>
+          </div>
         </div>
         <label class="chk"><input type="checkbox" id="persist" checked> 끈질기게 시도 — 통과할 때까지 반복 (최대 3시간·구독 한도 내, 같은 실패 반복 시 접근 변경)</label>
         <div class="hint" id="rolehint">구현과 검수는 서로 다른 AI여야 교차 검증이 됩니다.</div>
+        <div class="hint">단계마다 AI를 최대 3개까지 둘 수 있습니다. 계획 AI 2·3은 계획을 검토하고(완료 기준만 추가), 구현 AI 2·3은 실패 시 교대하거나(쓰기 가능한 AI) 조언하며(읽기 전용 AI), 검수는 지정한 AI가 모두 통과시켜야 합니다. 범위 검사와 테스트는 AI가 아닌 기계가 판정합니다.</div>
       </div>
       <div id="anBlock" hidden>
         <label>분석에 참여할 AI (각자 독립적으로 분석합니다)</label>
@@ -280,24 +311,25 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
   </section>
 </main>
 
-<main class="mg" id="view-pj" hidden>
-  <section class="col">
-    <div class="card"><h2>프로젝트 목록</h2><div id="pjList"></div>
-      <div class="hint" id="pjRoot"></div></div>
+<main class="pjw" id="view-pj" hidden>
+  <section class="kpis" id="pjKpi"></section>
+  <section class="card"><h2>단계별 AI 참여 도식 — 단계마다 최대 3개 AI</h2><div id="flowDiagram"></div>
+    <div class="hint">칩을 누르면 대시보드의 역할 배정으로 이동합니다. 범위 검사와 테스트는 AI의 말이 아니라 기계가 판정하고, 적용은 사람이 합니다.</div></section>
+  <section class="card"><h2>AI · 모델 성능 (모든 프로젝트 합계, 기록에서 집계)</h2><div class="aigrid" id="pjAIs"></div></section>
+  <section>
+    <div class="toolbar"><h2 style="margin:0">프로젝트 카드</h2><span class="spacer"></span>
+      <select id="pjSort" style="width:auto"><option value="attention">주의 필요한 순</option><option value="recent">최근 활동 순</option><option value="name">이름 순</option></select>
+      <button class="primary" id="pjNew">+ 신규 프로젝트</button></div>
+    <div class="pcards" id="pjCards"></div>
+    <div class="hint" id="pjRoot"></div>
   </section>
-  <section class="col">
-    <div class="card"><h2>휴지통 — 삭제한 프로젝트 (복원 가능)</h2><div id="pjTrash"></div></div>
-    <div class="card"><h2>이 화면에서 하는 일</h2>
-      <div class="ln">신규 프로젝트: 왼쪽 위 "명령" 카드의 <b>신규 프로젝트</b> 버튼 → 이름·종류·만들 것을 적고 시작합니다. 폴더·git·테스트 틀이 자동으로 만들어집니다.</div>
-      <div class="ln">기존 프로젝트: "개선" 모드에서 폴더 경로를 입력하면 목록에 추가됩니다.</div>
-      <div class="ln">삭제는 Solomon이 만든 프로젝트만 가능하며 휴지통으로 이동합니다. 다른 프로젝트는 목록에서만 제거되고 파일은 그대로입니다.</div>
-    </div>
-  </section>
+  <section class="card"><h2>휴지통 — 삭제한 프로젝트 (복원 가능)</h2><div id="pjTrash"></div></section>
 </main>
 
 <main class="mg" id="view-mg" hidden>
   <section class="col">
     <div class="card"><h2>작업 폴더</h2>
+      <select id="mgProjectSel" title="결과를 볼 프로젝트"></select>
       <div id="mgTree" class="hint"></div>
       <div class="row"><button id="mgTest">작업 폴더 테스트 실행</button></div>
       <div id="mgJob" class="hint"></div>
@@ -309,6 +341,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
 </main>
 
 <main class="work" id="view-work" hidden>
+  <div class="row" style="margin:0 0 4px"><button id="w-to-mg">이 실행의 5W1H · 적용 (관리 탭)</button><button id="w-to-pj">프로젝트 카드</button><button id="w-to-dash">대시보드로</button></div>
   <div class="card w-top" id="w-top"></div>
   <div class="w-steps" id="w-steps"></div>
   <details class="card"><summary>현재 실행의 상세 정보 (실행 번호·경로)</summary><div class="kv" id="w-detail" style="margin-top:10px"></div></details>
@@ -331,7 +364,15 @@ const $ = (id) => document.getElementById(id);
 function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 function clear(n){ while (n.firstChild) n.removeChild(n.firstChild); }
 
-const ROLE_KO = {planner:"계획", builder:"구현", reviewer:"검수", reviewer2:"2차 검수", analysis:"분석"};
+const ALL_ROLES = ["planner","planner2","planner3","builder","builder2","builder3","reviewer","reviewer2","reviewer3"];
+const ROLE_KO = {planner:"계획", planner2:"계획 검토1", planner3:"계획 검토2", builder:"구현", builder2:"구현 보조1", builder3:"구현 보조2",
+  reviewer:"검수", reviewer2:"2차 검수", reviewer3:"3차 검수", analysis:"분석"};
+const roleBase = (r) => r.replace(/[23]$/, "");
+function collectRoles(){
+  const roles = {};
+  ALL_ROLES.forEach(r => { const v = $("r-" + r).value; if (v || !/[23]$/.test(r)) roles[r] = v; });
+  return roles;
+}
 const ROLE_LABEL = {planner:"PLANNER · 계획", builder:"BUILDER · 구현", reviewer:"REVIEWER · 검수"};
 const ROLE_CARD = {planner:"PLANNER (계획)", builder:"BUILDER (코드 작성)", reviewer:"REVIEWER (검수)"};
 const NAMES = {claude:"Claude", codex:"Codex", antigravity:"Antigravity", gemini:"Gemini"};
@@ -346,11 +387,11 @@ const pcolor = (p) => COLORS[p] || "var(--other)";
 
 let TOKEN = new URLSearchParams(location.search).get("t") || "";
 try { if (TOKEN) sessionStorage.setItem("solomon_t", TOKEN); else TOKEN = sessionStorage.getItem("solomon_t") || ""; } catch (e) {}
-if (new URLSearchParams(location.search).has("t")) history.replaceState(null, "", location.pathname);
+if (new URLSearchParams(location.search).has("t")) history.replaceState(null, "", location.pathname + location.hash);
 
 let state = null, receivedAt = 0, selectedRun = null, selectedAnalysis = null, selectedProject = null, lastProject = null, busy = false;
 let tab = "dash", mode = "run", rolesDirty = false;
-try { if (location.hash === "#work") tab = "work"; } catch (e) {}
+try { const h = location.hash.replace("#", ""); if (["work", "mg", "pj"].includes(h)) tab = h; } catch (e) {}
 
 function toast(msg, bad){ const t = $("toast"); t.textContent = msg; t.className = bad ? "bad" : ""; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", 4500); }
 
@@ -392,24 +433,28 @@ function num(n){ return Number(n || 0).toLocaleString("ko-KR"); }
 
 function fillRoleSelects(cur){
   const want = (cur && cur.roles && Object.keys(cur.roles).length) ? cur.roles : state.roles;
-  ["planner", "builder", "reviewer"].forEach(role => {
-    const sel = $("r-" + role), keep = sel.value;
+  ALL_ROLES.forEach(role => {
+    const sel = $("r-" + role), keep = sel.value, optional = /[23]$/.test(role), base = roleBase(role);
     clear(sel);
+    if (optional){ const none = el("option", "", "없음"); none.value = ""; sel.appendChild(none); }
     state.providers.forEach(p => {
-      const o = el("option", "", pname(p.name) + (p.installed ? "" : " (미설치)") + (role === "builder" && !p.supports_write ? " (구현 불가)" : ""));
-      o.value = p.name; o.disabled = !p.installed || (role === "builder" && !p.supports_write); sel.appendChild(o);
+      const readOnly = base === "builder" && !p.supports_write;
+      const o = el("option", "", pname(p.name) + (p.installed ? "" : " (미설치)") + (readOnly ? (optional ? " (자문만)" : " (구현 불가)") : ""));
+      o.value = p.name; o.disabled = !p.installed || (readOnly && !optional); sel.appendChild(o);
     });
-    const target = rolesDirty && keep ? keep : want[role];
+    const target = rolesDirty && keep !== undefined && sel.dataset.touched ? keep : (want[role] || "");
     if ([...sel.options].some(o => o.value === target && !o.disabled)) sel.value = target;
-    else { const first = [...sel.options].find(o => !o.disabled); if (first) sel.value = first.value; }
+    else if (!optional){ const first = [...sel.options].find(o => !o.disabled); if (first) sel.value = first.value; }
+    else sel.value = "";
   });
-  const sel2 = $("r-reviewer2"), keep2 = sel2.value;
-  clear(sel2);
-  const none = el("option", "", "없음"); none.value = ""; sel2.appendChild(none);
-  state.providers.forEach(p => { const o = el("option", "", pname(p.name) + (p.installed ? "" : " (미설치)")); o.value = p.name; o.disabled = !p.installed; sel2.appendChild(o); });
-  sel2.value = [...sel2.options].some(o => o.value === keep2 && !o.disabled) ? keep2 : "";
-  const b = $("r-builder").value, r = $("r-reviewer").value;
-  $("rolehint").textContent = b === r ? "⚠ 구현과 검수가 같은 AI입니다. 교차 검증이 되지 않으니 다르게 고르세요." : "구현과 검수는 서로 다른 AI여야 교차 검증이 됩니다.";
+  const v = collectRoles(), hint = $("rolehint");
+  const reviewers = ["reviewer", "reviewer2", "reviewer3"].map(r => v[r]).filter(Boolean);
+  if (reviewers.includes(v.builder)) hint.textContent = "⚠ 검수 AI 중에 구현 AI(" + pname(v.builder) + ")가 있습니다. 교차 검증이 되지 않으니 다르게 고르세요.";
+  else {
+    const swap = ["builder2", "builder3"].map(r => v[r]).filter(x => x && (state.providers.find(p => p.name === x) || {}).supports_write);
+    const bad = swap.find(w => reviewers.every(x => x === w));
+    hint.textContent = bad ? "⚠ 구현 보조 " + pname(bad) + "가 구현할 차례에는 검수할 다른 AI가 없습니다. 검수 AI를 하나 더 지정하세요." : "구현과 검수는 서로 다른 AI여야 교차 검증이 됩니다.";
+  }
 }
 
 function fillAnalysisChecks(){
@@ -426,7 +471,7 @@ function fillAnalysisChecks(){
 function setTab(t){
   tab = t; $("view-dash").hidden = t !== "dash"; $("view-work").hidden = t !== "work"; $("view-mg").hidden = t !== "mg"; $("view-pj").hidden = t !== "pj";
   $("tab-dash").className = t === "dash" ? "on" : ""; $("tab-work").className = t === "work" ? "on" : ""; $("tab-mg").className = t === "mg" ? "on" : ""; $("tab-pj").className = t === "pj" ? "on" : "";
-  try { history.replaceState(null, "", t === "work" ? "#work" : location.pathname); } catch (e) {}
+  try { history.replaceState(null, "", t === "dash" ? location.pathname : "#" + t); } catch (e) {}
   if (state) render();
 }
 function setMode(m){
@@ -469,7 +514,8 @@ function renderBatches(){
     c.appendChild(el("div", "", (b.finished ? "" : "🔄 진행 중 · ") + b.batch_id + (b.summary ? " — " + b.summary : "")));
     (b.items || []).forEach(it => c.appendChild(el("div", "hint", (BK[it.status] || "…") + " " + (it.severity || "") + " · " + clip(it.title, 60) + (it.summary && it.status !== "PASSED" ? " — " + clip(String(it.summary).split("\n")[0], 80) : ""))));
     if (b.branch && b.finished) c.appendChild(el("div", "hint", "브랜치: " + b.branch));
-    if (b.has_patch){
+    const open = el("div", "row"), ob = el("button", "", "관리 탭에서 5W1H · 적용"); ob.onclick = () => openProject(state.project, {tab: "mg", key: "batch:" + b.batch_id}); open.appendChild(ob); c.appendChild(open);
+    if (false && b.has_patch){
       const r = el("div", "row"), btn = el("button", "good", b.applied ? "적용됨" : "원본에 적용 (커밋 안 함)"); btn.disabled = !!b.applied;
       btn.onclick = async () => { if (!confirm("통과한 수정 전부를 작업 폴더에 적용할까요? 커밋은 하지 않습니다.")) return; try { const r2 = await api("/api/apply-batch", {project: state.project, batch_id: b.batch_id}); toast(r2.message); poll(); } catch (e) { toast(e.message, true); } };
       r.appendChild(btn); c.appendChild(r);
@@ -481,8 +527,7 @@ function renderBatches(){
 }
 $("bf-go").onclick = async () => {
   if (!state || !state.project) return toast("프로젝트를 먼저 선택하세요.", true);
-  const roles = {planner: $("r-planner").value, builder: $("r-builder").value, reviewer: $("r-reviewer").value};
-  if ($("r-reviewer2").value) roles.reviewer2 = $("r-reviewer2").value;
+  const roles = collectRoles();
   try { await api("/api/autofix", {project: state.project, min_severity: $("bf-sev").value, max_fixes: +$("bf-n").value, budget_hours: +$("bf-h").value, roles}); toast("밤샘 자동 수정을 시작했습니다. 컴퓨터를 켜두세요."); poll(); } catch (e) { toast(e.message, true); }
 };
 
@@ -557,7 +602,7 @@ function layout(n){  // positions in % of the stage: 1 centre, 2 side by side, 3
 }
 function currentRoles(cur){
   if (cur && cur.roles && Object.keys(cur.roles).length && (cur.live || selectedRun || !rolesDirty)) return cur.roles;
-  return {planner: $("r-planner").value, builder: $("r-builder").value, reviewer: $("r-reviewer").value};
+  return collectRoles();
 }
 function activeCalls(cur, isAn){
   if (!cur || !cur.live) return [];
@@ -571,7 +616,7 @@ function renderStage(cur, isAn){
   Object.keys(nodeEls).forEach(k => { if (!names.has(k)){ nodeEls[k].remove(); delete nodeEls[k]; } });
   provs.forEach((p, i) => {
     let n = nodeEls[p.name];
-    if (!n){ n = el("div", "node"); n.appendChild(el("div", "orb")); n.appendChild(el("div", "who")); n.appendChild(el("div", "roles-of")); n.appendChild(el("div", "st")); stage.appendChild(n); nodeEls[p.name] = n; }
+    if (!n){ n = el("div", "node"); n.appendChild(el("div", "orb")); n.appendChild(el("div", "who")); n.appendChild(el("div", "roles-of")); n.appendChild(el("div", "st")); stage.appendChild(n); nodeEls[p.name] = n; n.style.cursor = "pointer"; n.title = "이 AI의 성능 보기"; n.onclick = () => { pjFocus = p.name; setTab("pj"); loadProjects().then(() => { const t = $("ai-" + p.name); if (t) t.scrollIntoView({behavior: "smooth", block: "center"}); }); }; }
     n.style.left = pos[i][0] + "%"; n.style.top = pos[i][1] + "%"; n.style.setProperty("--c", pcolor(p.name));
     const quota = cur && cur.quota_providers && cur.quota_providers.includes(p.name);
     const act = actives.find(a => a.provider === p.name);
@@ -582,7 +627,7 @@ function renderStage(cur, isAn){
       status = !p.installed ? "설치 안 됨" : !a ? "대기" : act ? "분석 중" : a.state === "done" ? "완료 · 발견 " + (a.findings || 0) + "건" : a.state === "quota" ? "한도 소진" : a.state === "failed" ? "실패" : "대기";
       idle = !a;
     } else {
-      const mine = ["planner", "builder", "reviewer"].filter(r => roles[r] === p.name);
+      const mine = ALL_ROLES.filter(r => roles[r] === p.name);
       const calls = cur ? cur.calls.filter(c => c.provider === p.name && c.ok).length : 0;
       rolesText = mine.length ? mine.map(r => ROLE_KO[r]).join(" · ") : "역할 없음";
       status = !p.installed ? "설치 안 됨" : quota ? "한도 소진" : act ? ROLE_KO[act.role] + " 작업 중" : calls ? calls + "회 완료" : "대기";
@@ -716,8 +761,9 @@ function latestAttempt(cur){ return cur && cur.attempt_details && cur.attempt_de
 function nextFor(provider, cur, roles){
   if (!cur || !cur.live) return "다음 실행 대기";
   const now = STAGE_ORDER[cur.stage_key] == null ? 0 : STAGE_ORDER[cur.stage_key];
-  const upcoming = [["planner", 0], ["builder", 1], ["reviewer", 2]].filter(([r, at]) => roles[r] === provider && at > now);
-  return upcoming.length ? "다음: " + ROLE_LABEL[upcoming[0][0]] : "다음: 판정 대기";
+  const at = {planner: 0, builder: 1, reviewer: 2};
+  const upcoming = ALL_ROLES.filter(r => roles[r] === provider && at[roleBase(r)] > now);
+  return upcoming.length ? "다음: " + ROLE_KO[upcoming[0]] : "다음: 판정 대기";
 }
 function stepCards(cur, roles){
   const att = latestAttempt(cur), live = !!(cur && cur.live), key = cur ? cur.stage_key : "start";
@@ -772,7 +818,7 @@ function renderWork(){
   const live = $("w-live"); clear(live);
   const act = cur && cur.live && cur.active ? cur.active : null;
   state.providers.forEach(p => {
-    const mine = ["planner", "builder", "reviewer"].filter(r => roles[r] === p.name).map(r => ROLE_LABEL[r].split(" · ")[0]).join(" · ") || "역할 없음";
+    const mine = ALL_ROLES.filter(r => roles[r] === p.name).map(r => ROLE_KO[r]).join(" · ") || "역할 없음";
     const isAct = act && act.provider === p.name;
     const row = el("div", "live-row" + (isAct ? " on" : ""));
     row.appendChild(el("span", "d")); row.appendChild(el("span", "n", pname(p.name)));
@@ -846,13 +892,13 @@ function renderWork(){
     const c = el("div", "card aicard"), h = el("h3", "", pname(pc.name).toUpperCase()); h.style.color = pcolor(pc.name); h.appendChild(el("small", "", pc.vendor)); c.appendChild(h);
     const kv = el("div", "kv"), add = (k, v, cls) => { kv.appendChild(el("span", "", k)); kv.appendChild(el("span", cls || "", v)); };
     add("상태", pc.status, pc.status === "정상" ? "st-ok" : "st-bad");
-    const mine = ["planner", "builder", "reviewer"].filter(r => roles[r] === pc.name);
-    add("역할", mine.length ? mine.map(r => ROLE_CARD[r]).join(", ") : (pc.supports_write ? "없음" : "없음 (계획·검수만 가능)"));
+    const mine = ALL_ROLES.filter(r => roles[r] === pc.name);
+    add("역할", mine.length ? mine.map(r => ROLE_KO[r]).join(", ") : (pc.supports_write ? "없음" : "없음 (계획·검수만 가능)"));
     add("최근 작업", pc.last_call ? (ROLE_KO[pc.last_call.role] || pc.last_call.role) + " · " + pc.last_call.sec + "초" : "없음");
     add("오늘 호출", pc.calls_today + "회");
     c.appendChild(kv); c.appendChild(el("div", "next", nextFor(pc.name, cur, roles)));
     const a = act && act.provider === pc.name;
-    if (a) c.appendChild(el("div", "work-line", "● 작업 중 · " + ROLE_LABEL[act.role] + " · " + dur((Date.now() - new Date(act.since).getTime()) / 1000)));
+    if (a) c.appendChild(el("div", "work-line", "● 작업 중 · " + (ROLE_KO[act.role] || act.role) + " · " + dur((Date.now() - new Date(act.since).getTime()) / 1000)));
     cards.appendChild(c);
   });
 
@@ -885,7 +931,7 @@ function tick(){
 }
 
 // ------------------------------------------------------------------ 관리 탭: 결과함 · 5W1H
-let projectsInfo = null, mgDetailAt = 0, inbox = null, mgKey = null, mgDetail = null, mgDiff = null, mgBusy = false, mgLoading = false, mgLast = 0;
+let portfolioData = null, pjFocus = null, projectsInfo = null, mgDetailAt = 0, inbox = null, mgKey = null, mgDetail = null, mgDiff = null, mgBusy = false, mgLoading = false, mgLast = 0;
 const ST_KO = {pending: "적용 전", applied: "적용됨(미커밋)", committed: "커밋됨", discarded: "폐기함"};
 const KIND_KO = {run: "개선", batch: "밤샘 수정", item: "수정 항목", analysis: "분석"};
 const W5 = [["who", "누가 · Who"], ["what", "무엇을 · What"], ["when", "언제 · When"], ["where", "어디서 · Where"], ["why", "왜 · Why"], ["how", "어떻게 · How"]];
@@ -987,6 +1033,11 @@ function renderEntry(e, parent, nested){
 }
 
 function renderManage(){
+  const ps = $("mgProjectSel");
+  if (state && ps.dataset.sig !== state.projects.join("|") + "|" + state.project){
+    clear(ps); state.projects.forEach(p => { const o = el("option", "", p.split("/").pop() + "  —  " + p); o.value = p; ps.appendChild(o); });
+    ps.value = state.project; ps.dataset.sig = state.projects.join("|") + "|" + state.project;
+  }
   if (!inbox) return;
   const tree = $("mgTree"); clear(tree);
   if (inbox.not_git){ tree.textContent = "git 저장소가 아니어서 적용·커밋 관리를 할 수 없습니다 (분석 결과 보기는 가능)."; }
@@ -1018,6 +1069,12 @@ function renderDetail(){
   head.appendChild(el("div", "hint", (KIND_KO[mgDetail.kind] || mgDetail.kind) + " 번호 " + mgDetail.id));
   const ent = inbox && inbox.entries.find(e => e.key === mgKey);
   if (ent && ent.kind !== "analysis") head.appendChild(entryButtons(ent));
+  const links = el("div", "btns"); links.style.marginTop = "8px";
+  const link = (label, fn) => { const b = el("button", "", label); b.style.padding = "5px 11px"; b.style.fontSize = "12px"; b.onclick = fn; links.appendChild(b); };
+  if (mgDetail.kind === "run") link("작업실에서 보기", () => { selectedRun = mgDetail.id; setTab("work"); poll(); });
+  if (mgDetail.kind === "analysis") link("대시보드에서 보고서 보기", () => { selectedAnalysis = mgDetail.id; setMode("analyze"); setTab("dash"); poll(); });
+  link("프로젝트 카드", () => setTab("pj"));
+  head.appendChild(links);
   box.appendChild(head);
   if (mgDetail.assessment){
     const a = mgDetail.assessment, ab = el("div", "assess " + a.recommendation);
@@ -1084,32 +1141,149 @@ async function renderResultCard(){
 
 // ------------------------------------------------------------------ 프로젝트 탭 · 상단 현재 작업 표시줄
 async function loadProjects(){
-  try { projectsInfo = await api("/api/projects"); renderProjects(); } catch (e) { toast(e.message, true); }
+  try { [projectsInfo, portfolioData] = await Promise.all([api("/api/projects"), api("/api/portfolio")]); renderProjects(); } catch (e) { toast(e.message, true); }
 }
-async function pjAct(path, body, okTab){
+async function pjAct(path, body){
   try { const r = await api(path, body); toast(r.message); await loadProjects(); poll(); return r; } catch (e) { toast(e.message, true); }
 }
-function renderProjects(){
-  if (!projectsInfo) return;
-  const list = $("pjList"); clear(list);
-  if (!projectsInfo.projects.length) list.appendChild(el("div", "hint", "등록된 프로젝트가 없습니다. '명령' 카드에서 신규 프로젝트를 만들거나 개선 모드에서 폴더 경로를 입력하세요."));
-  projectsInfo.projects.forEach(p => {
-    const row = el("div", "pj");
-    row.appendChild(el("span", "nm", p.name));
-    row.appendChild(el("span", "tag " + (p.managed ? "PASSED" : ""), p.managed ? "Solomon이 만듦" : "기존 폴더"));
-    if (!p.git) row.appendChild(el("span", "tag ERROR", "git 아님"));
-    if (p.busy) row.appendChild(el("span", "tag LIVE", "작업 중"));
-    const b1 = el("button", "", "선택"); b1.onclick = () => { selectedProject = p.path; $("project").value = p.path; setMode("run"); setTab("dash"); poll(); };
-    const b2 = el("button", "", "목록에서 제거"); b2.disabled = p.busy; b2.onclick = () => confirm("목록에서만 제거합니다. 폴더와 파일은 그대로 둡니다.") && pjAct("/api/projects/remove", {path: p.path});
-    row.appendChild(b1); row.appendChild(b2);
-    if (p.managed){
-      const b3 = el("button", "danger", "폴더 삭제 (휴지통)"); b3.disabled = p.busy;
-      b3.onclick = () => { const n = prompt("휴지통으로 옮깁니다 (복원 가능). 확인을 위해 프로젝트 이름을 입력하세요: " + p.name); if (n !== null) pjAct("/api/projects/delete", {path: p.path, confirm: n}); };
-      row.appendChild(b3);
-    }
-    row.appendChild(el("div", "pth", p.path + (p.test_command ? "  ·  테스트: " + p.test_command : "  ·  테스트 명령 없음")));
-    list.appendChild(row);
+async function openProject(path, o){
+  o = o || {};
+  selectedProject = path; $("project").value = path; selectedRun = null; selectedAnalysis = null; lastProject = path;
+  if (o.mode) setMode(o.mode);
+  mgKey = o.key || null; mgDetail = null; mgDiff = null; inbox = null;
+  setTab(o.tab || "dash");
+  await poll();
+  if (o.tab === "mg"){ await loadInbox(true); if (o.key) openKey(o.key); }
+  if (o.scroll) { const t = $(o.scroll); if (t) t.scrollIntoView({behavior: "smooth", block: "center"}); }
+}
+function goNext(c){
+  const a = c.next.action;
+  if (a === "analyze") return openProject(c.path, {tab: "dash", mode: "analyze"});
+  if (a === "improve") return openProject(c.path, {tab: "dash", mode: "run"});
+  if (a === "autofix") return openProject(c.path, {tab: "dash", mode: "run", scroll: "batchCard"});
+  if (a === "manage") return openProject(c.path, {tab: "mg"});
+  if (a === "work") return openProject(c.path, {tab: "work"});
+}
+const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n || 0);
+const MACH = {scope: "범위 검사", test: "테스트"};
+
+function renderKpis(){
+  const t = portfolioData.totals, box = $("pjKpi"); clear(box);
+  const tile = (big, small, cls, fn) => { const k = el("div", "kpi " + (cls || "") + (fn ? " click" : "")); k.appendChild(el("b", "", big)); k.appendChild(el("small", "", small)); if (fn) k.onclick = fn; box.appendChild(k); };
+  tile(String(t.projects), "프로젝트");
+  tile(String(t.busy), "진행 중", t.busy ? "alert" : "", t.busy ? () => setTab("work") : null);
+  tile(String(t.pending), "결정 대기 (적용·커밋)", t.pending ? "alert" : "", t.pending ? () => { const c = portfolioData.projects.find(x => x.counts && x.counts.pending); if (c) openProject(c.path, {tab: "mg"}); } : null);
+  tile(t.passed + " / " + t.runs, "통과한 개선 / 전체 실행");
+  tile(fmtTok(t.tokens), "누적 토큰 (~추정 포함)");
+}
+
+function renderFlow(){
+  const box = $("flowDiagram"); clear(box);
+  const v = state && state.providers && $("r-planner").options.length ? collectRoles() : (portfolioData.roles || {});
+  const grid = el("div", "sd");
+  const stage = (title, roles, note, mach) => {
+    const g = el("div", "sg" + (mach ? " mach" : "")); g.appendChild(el("h4", "", title));
+    const chips = el("div", "chips");
+    if (mach){ chips.appendChild(el("span", "chip", "🛠 기계 판정")); }
+    roles.forEach(r => { const name = v[r]; if (!name) return; const c = el("span", "chip ai", pname(name) + " · " + (r.endsWith("2") || r.endsWith("3") ? ROLE_KO[r] : "담당")); c.style.borderColor = pcolor(name); c.style.color = pcolor(name);
+      c.onclick = () => { setTab("dash"); const sel = $("r-" + r); sel.scrollIntoView({behavior: "smooth", block: "center"}); sel.focus(); }; chips.appendChild(c); });
+    if (!mach && !roles.some(r => v[r])) chips.appendChild(el("span", "chip", "미지정"));
+    g.appendChild(chips); g.appendChild(el("small", "", note)); grid.appendChild(g);
+  };
+  stage("① 계획", ["planner", "planner2", "planner3"], "담당이 작업 지시서를 쓰고, 나머지는 검토해 완료 기준만 보탭니다 (범위는 못 넓힘).");
+  stage("② 구현", ["builder", "builder2", "builder3"], "담당이 구현. 실패하거나 막히면 다음 쓰기 가능 AI가 교대, 읽기 전용 AI는 조언.");
+  stage("③ 범위 검사", [], "실제 git diff로 지시서 범위·보호 경로·한도를 판정합니다.", true);
+  stage("④ 테스트", [], "프로젝트 테스트를 실행하고 통과 뒤 한 번 더 실행합니다.", true);
+  stage("⑤ 검수", ["reviewer", "reviewer2", "reviewer3"], "지정한 AI가 모두 PASS해야 통과. 구현한 AI는 자기 코드를 검수하지 않습니다.");
+  const h = el("div", "sg"); h.appendChild(el("h4", "", "⑥ 적용 (사람)")); const hc = el("div", "chips"); hc.appendChild(el("span", "chip", "👤 관리 탭에서 결정")); h.appendChild(hc);
+  h.appendChild(el("small", "", "적용 · 테스트 · 커밋 · 되돌리기는 사람이 합니다.")); h.style.cursor = "pointer"; h.onclick = () => setTab("mg"); grid.appendChild(h);
+  box.appendChild(grid);
+}
+
+function renderAIs(){
+  const box = $("pjAIs"); clear(box);
+  const totals = portfolioData.ais, all = Object.values(totals).reduce((a, x) => a + x.tokens, 0) || 1;
+  state.providers.forEach(p => {
+    const a = totals[p.name], c = el("div", "aic" + (pjFocus === p.name ? " focus" : "")); c.id = "ai-" + p.name;
+    const h = el("h3", "", pname(p.name)); h.style.color = pcolor(p.name); c.appendChild(h);
+    c.appendChild(el("div", "hint", (p.installed ? "연결 가능" : "설치 안 됨") + (p.supports_write ? " · 구현 가능" : " · 읽기 전용 (계획·검수·자문·분석)")));
+    if (!a){ c.appendChild(el("div", "hint", "아직 기록이 없습니다.")); box.appendChild(c); return; }
+    const row = (k, v) => { const r = el("div", "row2"); r.appendChild(el("span", "", k)); r.appendChild(el("b", "", v)); c.appendChild(r); };
+    row("호출 / 실패", a.calls + "회 / " + a.failures + "회");
+    row("평균 응답", a.avg_sec != null ? a.avg_sec + "초" : "-");
+    row("토큰", fmtTok(a.tokens));
+    const m = el("div", "meter"); const i = el("i"); i.style.width = Math.round(a.tokens / all * 100) + "%"; i.style.background = pcolor(p.name); m.appendChild(i); c.appendChild(m);
+    if (a.builds.attempts) row("구현 성공률", Math.round(a.builds.passed / a.builds.attempts * 100) + "% (" + a.builds.passed + "/" + a.builds.attempts + "시도)");
+    const rv = a.reviews.pass + a.reviews.fail;
+    if (rv) row("검수 불합격 지적", Math.round(a.reviews.fail / rv * 100) + "% (" + a.reviews.fail + "/" + rv + "건)");
+    if (a.advice) row("구현 자문", a.advice + "회");
+    const chips = el("div", "chips");
+    Object.entries(a.roles).sort((x, y) => y[1] - x[1]).forEach(([r, n]) => chips.appendChild(el("span", "chip", (ROLE_KO[r] || r) + " " + n)));
+    c.appendChild(chips); box.appendChild(c);
   });
+}
+
+function pcard(c){
+  const box = el("div", "card pcard" + (c.busy ? " busy" : ""));
+  const top = el("div", "toolbar"); top.style.margin = "0";
+  const nm = el("span", "nm", c.name); nm.title = "이 프로젝트 선택"; nm.onclick = () => openProject(c.path, {tab: "dash", mode: "run"}); top.appendChild(nm);
+  top.appendChild(el("span", "spacer"));
+  top.appendChild(el("span", "tag " + (c.managed ? "PASSED" : ""), c.managed ? "Solomon이 만듦" : "기존 폴더"));
+  if (c.busy) top.appendChild(el("span", "tag LIVE", "작업 중"));
+  if (c.is_git === false) top.appendChild(el("span", "tag ERROR", "git 아님"));
+  box.appendChild(top);
+  box.appendChild(el("div", "hint", c.path));
+  if (c.error){ box.appendChild(el("div", "hint", "⚠ 이 프로젝트를 읽지 못했습니다: " + c.error)); }
+  else {
+    const n = c.counts, fl = el("div", "flow");
+    [["분석", n.analyses, () => openProject(c.path, {tab: "dash", mode: "analyze"})], ["개선", n.runs, () => openProject(c.path, {tab: "work"})],
+     ["밤샘 수정", n.batches, () => openProject(c.path, {tab: "dash", mode: "run", scroll: "batchCard"})], ["결정 대기", n.pending, () => openProject(c.path, {tab: "mg"})],
+     ["커밋", n.committed, () => openProject(c.path, {tab: "mg"})]].forEach(([label, v, fn], i, arr) => {
+      const f = el("div", "fn" + (v ? " on" : "") + (label === "결정 대기" && v ? " hot" : "") + (label === "개선" && c.busy ? " live" : ""));
+      f.appendChild(el("b", "", String(v))); f.appendChild(el("span", "", label)); f.onclick = fn; fl.appendChild(f);
+      if (i < arr.length - 1) fl.appendChild(el("span", "fa", "→"));
+    });
+    box.appendChild(fl);
+    const st = el("div", "stats");
+    [[c.pass_rate == null ? "-" : c.pass_rate + "%", "통과율"], [c.avg_attempts == null ? "-" : c.avg_attempts, "평균 시도"], [c.avg_minutes == null ? "-" : c.avg_minutes + "분", "평균 시간"], [fmtTok(c.tokens), "토큰"]]
+      .forEach(([b, sm]) => { const d = el("div"); d.appendChild(el("b", "", String(b))); d.appendChild(el("small", "", sm)); st.appendChild(d); });
+    box.appendChild(st);
+    if (c.recent.length){ const dots = el("div", "dots"); dots.appendChild(el("small", "", "최근 실행 ")); c.recent.forEach(r => { const i = el("i", r); i.title = STATUS_KO[r] || r; dots.appendChild(i); }); box.appendChild(dots); }
+    const names = Object.keys(c.ais);
+    if (names.length){
+      const tot = names.reduce((a, k) => a + c.ais[k].tokens, 0) || 1, stk = el("div", "stk");
+      names.forEach(k => { const i = el("i"); i.style.width = (c.ais[k].tokens / tot * 100) + "%"; i.style.background = pcolor(k); i.title = pname(k); stk.appendChild(i); });
+      box.appendChild(stk);
+      const chips = el("div", "chips");
+      names.forEach(k => { const a = c.ais[k], ch = el("span", "chip ai", pname(k) + " · " + a.calls + "회 · " + fmtTok(a.tokens)); ch.style.borderColor = pcolor(k); ch.onclick = () => { pjFocus = k; renderProjects(); const t = $("ai-" + k); if (t) t.scrollIntoView({behavior: "smooth", block: "center"}); }; chips.appendChild(ch); });
+      box.appendChild(chips);
+    } else box.appendChild(el("div", "hint", "아직 AI 작업 기록이 없습니다."));
+    if (c.last_run) box.appendChild(el("div", "hint", "최근 개선: " + (STATUS_KO[c.last_run.status] || c.last_run.status) + " · " + c.last_run.goal));
+    if (c.last_analysis) box.appendChild(el("div", "hint", "최근 분석: 발견 " + c.last_analysis.findings + "건 (근거 확인 " + c.last_analysis.verified + ")"));
+    box.appendChild(el("div", "hint", [c.branch && ("브랜치 " + c.branch), c.dirty ? ("변경 " + c.dirty + "개") : "깨끗함", c.test_command ? ("테스트 " + c.test_command) : "테스트 명령 없음", c.last_activity && ("활동 " + c.last_activity)].filter(Boolean).join(" · ")));
+    const nb = el("button", c.next.action === "manage" ? "good" : "primary", "▶ " + c.next.label); nb.onclick = () => goNext(c); box.appendChild(nb);
+  }
+  const btns = el("div", "btns");
+  const add = (label, cls, fn, dis) => { const b = el("button", cls || "", label); b.disabled = !!dis; b.onclick = fn; btns.appendChild(b); };
+  add("분석", "", () => openProject(c.path, {tab: "dash", mode: "analyze"}));
+  add("개선", "", () => openProject(c.path, {tab: "dash", mode: "run"}));
+  add("결과함", "", () => openProject(c.path, {tab: "mg"}));
+  add("작업실", "", () => openProject(c.path, {tab: "work"}));
+  add("목록에서 제거", "", () => confirm("목록에서만 제거합니다. 폴더와 파일은 그대로 둡니다.") && pjAct("/api/projects/remove", {path: c.path}), c.busy);
+  if (c.managed) add("폴더 삭제 (휴지통)", "danger", () => { const n = prompt("휴지통으로 옮깁니다 (복원 가능). 확인을 위해 프로젝트 이름을 입력하세요: " + c.name); if (n !== null) pjAct("/api/projects/delete", {path: c.path, confirm: n}); }, c.busy);
+  box.appendChild(btns);
+  return box;
+}
+
+function renderProjects(){
+  if (!portfolioData || !projectsInfo || !state) return;
+  renderKpis(); renderFlow(); renderAIs();
+  const cards = $("pjCards"); clear(cards);
+  const list = portfolioData.projects.slice(), by = $("pjSort").value;
+  const score = (c) => c.error ? 9 : (c.busy ? 5 : 0) + (c.counts.pending ? 4 : 0) + (c.counts.runs === 0 ? 1 : 0);
+  list.sort(by === "name" ? (a, b) => a.name.localeCompare(b.name) : by === "recent" ? (a, b) => (b.last_activity || "").localeCompare(a.last_activity || "") : (a, b) => score(b) - score(a) || a.name.localeCompare(b.name));
+  if (!list.length) cards.appendChild(el("div", "card", "등록된 프로젝트가 없습니다. 위의 '+ 신규 프로젝트'를 누르거나, 대시보드에서 폴더 경로를 입력하세요."));
+  list.forEach(c => cards.appendChild(pcard(c)));
   $("pjRoot").textContent = "새 프로젝트는 " + projectsInfo.root + " 아래에 만들어집니다 (solomon.toml의 projects_root로 변경).";
   const tr = $("pjTrash"); clear(tr);
   if (!projectsInfo.trash.length) tr.appendChild(el("div", "hint", "휴지통이 비어 있습니다."));
@@ -1150,8 +1324,7 @@ $("run").onclick = async () => {
     if (!name) return toast("새 프로젝트 이름을 입력하세요.", true);
     busy = true; $("run").disabled = true;
     try {
-      const roles = {planner: $("r-planner").value, builder: $("r-builder").value, reviewer: $("r-reviewer").value};
-      if ($("r-reviewer2").value) roles.reviewer2 = $("r-reviewer2").value;
+      const roles = collectRoles();
       const r = await api("/api/projects/create", {name, stack: $("np-stack").value, goal, roles, persist: $("persist").checked});
       selectedProject = r.project; $("project").value = r.project; selectedRun = null; $("np-name").value = ""; $("goal").value = "";
       setMode("run"); toast(r.message);
@@ -1167,8 +1340,7 @@ $("run").onclick = async () => {
       if (!ais.length){ busy = false; return toast("분석에 참여할 AI를 하나 이상 고르세요.", true); }
       await api("/api/analyze", {project, focus: goal, ais}); selectedProject = project; selectedAnalysis = null; toast("분석을 시작했습니다.");
     } else {
-      const roles = {planner: $("r-planner").value, builder: $("r-builder").value, reviewer: $("r-reviewer").value};
-      if ($("r-reviewer2").value) roles.reviewer2 = $("r-reviewer2").value;
+      const roles = collectRoles();
       await api("/api/run", {goal, project, roles, persist: $("persist").checked}); rolesDirty = false; selectedProject = project; selectedRun = null; toast("실행을 시작했습니다.");
     }
   } catch (e) { toast(e.message, true); }
@@ -1191,8 +1363,16 @@ $("savetest").onclick = async () => {
   catch (e) { toast(e.message, true); }
   poll();
 };
-["r-planner", "r-builder", "r-reviewer", "r-reviewer2"].forEach(id => $(id).addEventListener("change", () => { rolesDirty = true; if (state) render(); }));
+ALL_ROLES.forEach(r => $("r-" + r).addEventListener("change", (ev) => { ev.target.dataset.touched = "1"; rolesDirty = true; if (state) render(); }));
 $("project").addEventListener("change", () => { const v = $("project").value.trim(); if (state && state.projects.includes(v)){ selectedProject = v; selectedRun = null; selectedAnalysis = null; poll(); } });
+$("brand").onclick = () => setTab("dash");
+$("w-to-dash").onclick = () => setTab("dash");
+$("w-to-pj").onclick = () => { setTab("pj"); loadProjects(); };
+$("w-to-mg").onclick = () => { const c = state && state.current; if (c) openProject(state.project, {tab: "mg", key: "run:" + c.run_id}); else openProject(state.project, {tab: "mg"}); };
+$("mgTest").onclick = () => runTests();
+$("pjNew").onclick = () => { setMode("new"); setTab("dash"); $("np-name").focus(); };
+$("pjSort").onchange = () => renderProjects();
+$("mgProjectSel").onchange = (ev) => openProject(ev.target.value, {tab: "mg"});
 $("tab-mg").onclick = () => { setTab("mg"); loadInbox(true); };
 $("tab-pj").onclick = () => { setTab("pj"); loadProjects(); };
 $("tab-dash").onclick = () => setTab("dash"); $("tab-work").onclick = () => setTab("work");

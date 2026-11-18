@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage, projects as projects_mod
+from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage, portfolio, projects as projects_mod
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
 from .status import load_runs
@@ -89,6 +89,7 @@ class DashboardApp:
         self.job: Optional[dict] = None
         self._providers_cache: tuple[float, list[dict]] = (0.0, [])
         self._git_cache: dict[str, tuple[float, bool]] = {}
+        self._portfolio_cache: Optional[tuple[float, dict]] = None
         self._load_store()
         for p in list(projects or []) + ([settings.project_path] if settings.project_path else []):
             try:
@@ -152,7 +153,32 @@ class DashboardApp:
         return {"projects": rows, "trash": projects_mod.list_trash(self.trash_dir), "root": str(self.projects_root()),
                 "stacks": {k: v["label"] for k, v in projects_mod.STACKS.items()}}
 
+    def portfolio(self) -> dict:
+        """Every project as a card of measured numbers, plus the per-AI totals. Cached for a few seconds."""
+        now = time.time()
+        if self._portfolio_cache and now - self._portfolio_cache[0] < 4:
+            return self._portfolio_cache[1]
+        cards = []
+        for path in sorted(self._projects):
+            cmd, _ = self.effective_test_command(path)
+            try:
+                c = portfolio.card(Path(path), self.settings.state_dir, is_git=self.is_git(path),
+                                   managed=projects_mod.is_managed(Path(path), self.projects_root()),
+                                   test_command=" ".join(cmd) if cmd else "", busy=self._busy_here(path))
+            except Exception as exc:  # one broken project folder must not blank the whole board
+                c = {"error": f"{type(exc).__name__}: {exc}", "counts": {}, "ais": {}, "recent": [], "next": {"label": "", "action": ""}}
+            c.update(path=path, name=Path(path).name)
+            cards.append(c)
+        ok = [c for c in cards if "error" not in c]
+        data = {"projects": cards, "ais": portfolio.merge_ais(ok), "roles": self.settings.roles,
+                "totals": {"projects": len(cards), "busy": sum(1 for c in ok if c["busy"]), "pending": sum(c["counts"]["pending"] for c in ok),
+                           "runs": sum(c["counts"]["runs"] for c in ok), "passed": sum(c["counts"]["passed"] for c in ok),
+                           "tokens": sum(c["tokens"] for c in ok)}}
+        self._portfolio_cache = (now, data)
+        return data
+
     def create_project(self, body: dict) -> dict:
+        self._portfolio_cache = None
         if str(body.get("goal", "")).strip():
             self._role_args(body.get("roles"))  # a bad role choice must fail before a folder is created
         try:
@@ -171,6 +197,7 @@ class DashboardApp:
         return {"project": path, "job": job, "message": f"프로젝트 폴더를 만들었습니다: {path}" + (" · 첫 구현을 시작했습니다." if job else "")}
 
     def remove_project(self, path: str) -> dict:
+        self._portfolio_cache = None
         path = self._known(path)
         if self._busy_here(path):
             raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다.")
@@ -180,6 +207,7 @@ class DashboardApp:
         return {"ok": True, "message": "목록에서 제거했습니다. 폴더와 파일은 그대로입니다."}
 
     def delete_project(self, path: str, confirm: str) -> dict:
+        self._portfolio_cache = None
         path = self._known(path)
         if self._busy_here(path):
             raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝나거나 중지한 뒤 삭제하세요.")
@@ -193,6 +221,7 @@ class DashboardApp:
         return {"ok": True, "message": f"휴지통으로 옮겼습니다 ({row['name']}). 휴지통에서 복원할 수 있습니다."}
 
     def restore_project(self, entry_id: str) -> dict:
+        self._portfolio_cache = None
         try:
             path = projects_mod.restore_project(self.trash_dir, entry_id, self.projects_root())
         except projects_mod.ProjectError as exc:
@@ -480,6 +509,7 @@ class DashboardApp:
         return bool(self.job and self.job["popen"].poll() is None and self.job.get("project") == project)
 
     def act(self, project: str, key: str, action: str, message: str = "") -> dict:
+        self._portfolio_cache = None
         project = self._known(project)
         try:
             return manage.perform(Path(project), self.settings.state_dir, key, action, message, self._busy_here(project))
@@ -531,6 +561,7 @@ class DashboardApp:
         return self.act(project, f"batch:{batch_id}", "apply")
 
     def _spawn(self, kind: str, args: list[str], project: str, label: str) -> dict:
+        self._portfolio_cache = None
         with self._lock:
             if self.job and self.job["popen"].poll() is None:
                 raise ApiError(409, "이미 실행 중인 작업이 있습니다. 끝나거나 중지한 뒤 다시 시도하세요.")
@@ -622,6 +653,10 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 state = app.build_state((query.get("project") or [None])[0], (query.get("run") or [None])[0],
                                         (query.get("analysis") or [None])[0])
                 return self._json(200, state)
+            if url.path == "/api/portfolio":
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                return self._json(200, app.portfolio())
             if url.path == "/api/projects":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})

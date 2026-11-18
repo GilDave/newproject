@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import gitops, manage, projects
+from . import gitops, manage, portfolio, projects
 from .orchestrator import Orchestrator
 from .providers.base import Provider, ProviderResult
 from .settings import Settings
@@ -144,6 +144,29 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             assert list(d["sections"]) == ["who", "what", "when", "where", "why", "how"]
             assert d["assessment"]["recommendation"] == "recommend", d["assessment"]
 
+        def three_ais_per_stage():
+            repo = _repo(base, "p4")
+            st = _settings()
+            st.roles.update(planner2="agy", builder2="claude", builder3="agy", reviewer2="agy", reviewer3="claude")
+            st.roles["reviewer"] = "claude"
+            agy = _Fake("agy", [json.dumps({"verdict": "CHANGE", "concerns": ["빈 입력"], "extra_acceptance_criteria": ["빈 입력 처리"]}),
+                                "조언: 빈 입력을 먼저 처리하세요", _review(), _review()])
+            agy.supports_write = False
+            # attempt 1 (codex) is rejected by claude; attempt 2 (codex) too; attempt 3 is handed to claude, so agy must review it
+            claude = _Fake("claude", [_order(), _review("FAIL", ["a"]), _review("FAIL", ["b"]), _write("src/new.py")])
+            codex = _Fake("codex", [_write("src/other.py", "x = 1\n"), _write("src/other.py", "x = 2\n")])
+            st.max_attempts = 0
+            st.stagnation_limit = 50
+            r = Orchestrator(st, {"claude": claude, "codex": codex, "agy": agy}).run("add module", repo)
+            assert r.status == "PASSED", r.summary
+            ev = [json.loads(l) for l in (Path(r.run_dir) / "events.jsonl").read_text().splitlines()]
+            order = next(e["order"] for e in ev if e["event"] == "order")
+            assert "빈 입력 처리" in order["acceptance_criteria"] and order["allowed_paths"] == ["src/"]
+            assert [e["provider"] for e in ev if e["event"] == "builder_pick"] == ["codex", "codex", "claude"]
+            assert any(e["event"] == "review_skipped_self" for e in ev)
+            card = portfolio.card(repo, ".solomon", is_git=True, managed=False, test_command="", busy=False)
+            assert set(card["ais"]) == {"claude", "codex", "agy"} and card["counts"]["passed"] == 1 and card["tokens"] > 0
+
         def project_folders():
             root = base / "root"
             made = projects.create_project(root, "demo-app", "python", "demo")
@@ -169,6 +192,7 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             ("적용 → 되돌리기 → 커밋 → 커밋 취소", apply_commit_undo),
             ("폐기 → 복원", discard_restore),
             ("5W1H 기록과 적용 판단", five_w_one_h),
+            ("단계마다 AI 최대 3개 (계획 검토 · 구현 교대·자문 · 3중 검수) + 프로젝트 카드 집계", three_ais_per_stage),
             ("신규 프로젝트 폴더 · 휴지통 · 복원 · 기존 프로젝트 삭제 거부", project_folders),
         ):
             check(title, fn)

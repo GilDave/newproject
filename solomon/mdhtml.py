@@ -100,7 +100,8 @@ def render(md: str) -> tuple[str, list[tuple[int, str, str]]]:
             kind = "ol" if m.group(2)[0].isdigit() else "ul"
             if depth > len(list_stack):
                 while len(list_stack) < depth:
-                    out.append(f"<{kind}><li>"); list_stack.append(kind)
+                    start = f' start="{int(m.group(2)[:-1])}"' if kind == "ol" and len(list_stack) == depth - 1 and int(m.group(2)[:-1]) != 1 else ""
+                    out.append(f"<{kind}{start}><li>"); list_stack.append(kind)
             else:
                 close_lists(depth)
                 out.append("</li><li>")
@@ -143,3 +144,34 @@ def page(md: str) -> str:
     body, toc = render(md)
     nav = "".join(f'<a class="l{lvl}" href="#{html.escape(a, quote=True)}">{html.escape(t)}</a>' for lvl, t, a in toc if lvl in (2, 3))
     return PAGE.replace("%NAV%", nav).replace("%BODY%", body)
+
+
+PRINT_CSS = """
+@page{size:A4;margin:18mm 16mm 20mm 16mm}
+:root{--text:#1c2533;--dim:#5b6b80;--line:#d9e1ec;--acc:#1c5fd1;--code:#f1f4f9;--panel:#f6f8fb}
+*{box-sizing:border-box}html,body{background:#fff;color:var(--text);margin:0;
+font:10.5pt/1.65 "Apple SD Gothic Neo","Noto Sans KR","WenQuanYi Zen Hei",-apple-system,system-ui,sans-serif}
+h1{font-size:22pt;margin:0 0 6pt}h2{font-size:15pt;margin:20pt 0 6pt;padding-top:8pt;border-top:1.5pt solid var(--line);break-after:avoid}
+h3{font-size:12pt;margin:14pt 0 4pt;break-after:avoid}h4{font-size:10.5pt;break-after:avoid}
+p,li{orphans:3;widows:3}code{font:9pt "DejaVu Sans Mono",Menlo,"WenQuanYi Zen Hei",monospace;background:var(--code);border:.5pt solid var(--line);border-radius:3pt;padding:0 3pt}
+pre{background:var(--code);border:.5pt solid var(--line);border-radius:5pt;padding:7pt 9pt;white-space:pre-wrap;word-break:break-word;break-inside:avoid}
+pre code{border:0;padding:0;background:none;font-size:8.8pt}
+table{border-collapse:collapse;width:100%;margin:8pt 0;font-size:9.2pt}tr{break-inside:avoid}th,td{border:.5pt solid var(--line);padding:3.5pt 6pt;text-align:left;vertical-align:top}th{background:var(--panel)}
+blockquote{margin:8pt 0;padding:5pt 10pt;border-left:2.5pt solid var(--acc);background:var(--panel)}
+a{color:var(--acc);text-decoration:none}hr{border:0;border-top:.5pt solid var(--line)}
+.cover{min-height:235mm;display:flex;flex-direction:column;justify-content:center;break-after:page}
+.cover h1{font-size:34pt;letter-spacing:.04em}.cover .sub{font-size:14pt;color:var(--dim);margin:6pt 0 24pt}.cover .meta{color:var(--dim);font-size:10pt}
+.toc{break-after:page}.toc h2{border:0;margin-top:0}.toc a{display:block;padding:1.5pt 0}.toc a.l3{padding-left:14pt;color:var(--dim)}
+"""
+
+
+def print_page(md: str, version: str, date: str) -> str:
+    """The guide as a print-ready document: cover, table of contents, body. Light theme, A4."""
+    body, toc = render(md)
+    body = re.sub(r"^<h1[^>]*>.*?</h1>\n?", "", body, count=1, flags=re.S)  # the cover carries the title
+    items = "".join(f'<a class="l{lvl}" href="#{html.escape(a, quote=True)}">{html.escape(t)}</a>' for lvl, t, a in toc if lvl in (2, 3))
+    cover = (f'<section class="cover"><h1>Solomon</h1><div class="sub">사용 가이드 · 설치부터 시험까지</div>'
+             f'<div class="meta">버전 {html.escape(version)} · {html.escape(date)}<br>여러 AI가 서로 검증하며 만드는 개발 도구<br>'
+             f'구독 로그인 CLI만 사용 · 원본은 사람이 적용할 때만 변경</div></section>')
+    return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Solomon 사용 가이드 v{html.escape(version)}</title>'
+            f"<style>{PRINT_CSS}</style></head><body>{cover}<section class=\"toc\"><h2>목차</h2>{items}</section><main>{body}</main></body></html>")

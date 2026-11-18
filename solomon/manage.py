@@ -767,3 +767,4 @@ def build_assessment(process: dict, status: str, files: list, added: int, remove
     if warn:
         return {"recommendation": "caution", "headline": "확인할 점이 있습니다", "checks": checks}
     return {"recommendation": "recommend", "headline": "모든 점검을 통과했습니다 — 변경 내용만 훑어보고 적용하세요", "checks": checks}
+
