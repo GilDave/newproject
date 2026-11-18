@@ -53,9 +53,33 @@ def exclude_from_git(project: Path, name: str) -> None:
             fh.write(("\n" if existing and existing[-1] else "") + line + "\n")
 
 
-def create_worktree(project: Path, dest: Path) -> None:
+def create_worktree(project: Path, dest: Path, ref: str = "HEAD") -> None:
+    """An isolated checkout of `ref` (a commit or branch name) as a detached HEAD."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    git(["worktree", "add", "--detach", str(dest), "HEAD"], project)
+    git(["worktree", "add", "--detach", str(dest), ref], project)
+
+
+def resolve(project: Path, ref: str) -> str:
+    return git(["rev-parse", "--verify", f"{ref}^{{commit}}"], project).stdout.strip()
+
+
+def commit_all(wt: Path, message: str, name: str = "Solomon", email: str = "solomon@localhost") -> str:
+    """Commit everything in the worktree under a fixed identity (never the user's), return the new commit id."""
+    git(["add", "-A"], wt)
+    git(["-c", f"user.name={name}", "-c", f"user.email={email}", "commit", "-q", "--no-verify", "-m", message], wt)
+    return git(["rev-parse", "HEAD"], wt).stdout.strip()
+
+
+def create_branch(project: Path, name: str, ref: str) -> None:
+    git(["branch", name, ref], project)  # refuses an existing name: a batch never overwrites someone's branch
+
+
+def move_branch(project: Path, name: str, commit: str) -> None:
+    git(["update-ref", f"refs/heads/{name}", commit], project)
+
+
+def diff_between(project: Path, base: str, tip: str) -> str:
+    return git(["diff", "--binary", "--no-renames", base, tip], project).stdout
 
 
 def remove_worktree(project: Path, dest: Path) -> None:

@@ -79,6 +79,7 @@ def make_settings(**overrides) -> Settings:
     # The 'verification' passes only if the builder created src/new.py in the worktree.
     s.test_command = ["python3", "-c", "import pathlib,sys; sys.exit(0 if pathlib.Path('src/new.py').exists() else 1)"]
     s.max_attempts = 3
+    s.baseline_check = False
     for key, value in overrides.items():
         setattr(s, key, value)
     s.validate()

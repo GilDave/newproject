@@ -35,7 +35,13 @@ class Settings:
         default_factory=lambda: ["python", "python3", "pytest", "npm", "node", "cargo", "go", "make"]
     )
     test_command: Optional[list[str]] = field(default_factory=lambda: ["python3", "-m", "pytest", "-q"])
-    max_attempts: int = 3
+    max_attempts: int = 3  # 0 = no limit: keep trying until the budgets below or the subscription run out
+    max_run_minutes: float = 0.0  # wall-clock budget of one run (0 = none)
+    max_tokens: int = 0  # token budget of one run, exact where the CLI reports it (0 = none)
+    stagnation_limit: int = 3  # this many IDENTICAL failures in a row = the approach is stuck: restart from clean
+    max_restarts: int = 2  # clean restarts allowed before giving up as "no progress"
+    double_check_tests: bool = True  # run the tests a second time before declaring a pass (catches flaky passes)
+    baseline_check: bool = True  # run the tests on the untouched code first: a broken test setup must not burn tokens
     on_quota: str = "stop"  # "stop" ends the run; "wait" sleeps and retries the same call
     quota_wait_sec: float = 900.0
     quota_max_waits: int = 8
@@ -49,8 +55,13 @@ class Settings:
                 raise ConfigError(f"role '{role}' has no provider")
         if self.on_quota not in ("stop", "wait"):
             raise ConfigError("loop.on_quota must be 'stop' or 'wait'")
-        if self.max_attempts < 1:
-            raise ConfigError("loop.max_attempts must be >= 1")
+        if self.max_attempts < 0 or self.max_run_minutes < 0 or self.max_tokens < 0:
+            raise ConfigError("loop.max_attempts, max_run_minutes and max_tokens must be >= 0 (0 = no limit)")
+        if self.stagnation_limit < 2 or self.max_restarts < 0:
+            raise ConfigError("loop.stagnation_limit must be >= 2 and loop.max_restarts >= 0")
+        second = self.roles.get("reviewer2")
+        if second and second == self.roles.get("builder"):
+            raise ConfigError("roles.reviewer2 must not be the builder")
         if self.max_files_changed < 1 or self.max_diff_lines < 1:
             raise ConfigError("safety limits must be positive")
 
@@ -93,6 +104,12 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
 
     loop = _section(data, "loop")
     s.max_attempts = int(loop.get("max_attempts", s.max_attempts))
+    s.max_run_minutes = float(loop.get("max_run_minutes", s.max_run_minutes))
+    s.max_tokens = int(loop.get("max_tokens", s.max_tokens))
+    s.stagnation_limit = int(loop.get("stagnation_limit", s.stagnation_limit))
+    s.max_restarts = int(loop.get("max_restarts", s.max_restarts))
+    s.double_check_tests = bool(loop.get("double_check_tests", s.double_check_tests))
+    s.baseline_check = bool(loop.get("baseline_check", s.baseline_check))
     s.on_quota = str(loop.get("on_quota", s.on_quota))
     s.quota_wait_sec = float(loop.get("quota_wait_sec", s.quota_wait_sec))
     s.quota_max_waits = int(loop.get("quota_max_waits", s.quota_max_waits))
