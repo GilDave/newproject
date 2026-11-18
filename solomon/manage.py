@@ -497,13 +497,14 @@ def _describe_batch(project: Path, state_dir: str, batch_id: str, marks: dict, k
     clusters = {c.get("id"): c for c in analysis.get("clusters", [])}
     lines = []
     for n, it in enumerate(items, 1):
-        c = clusters.get(it.get("cluster"), {})
         st = STATUS_KO.get(it.get("status", ""), it.get("status", ""))
         lines.append(f"{n}. [{st}] {it.get('title', '')} — {it.get('file', '')}" + (f" · 시도 {it['attempts']}번" if it.get("attempts") else "")
                      + (f" · 커밋 {it['commit'][:8]}" if it.get("commit") else ""))
-        if c:
-            why_lines.append(f"{n}. {it.get('title', '')}: {', '.join(c.get('ais', []))}가 지적 ({c.get('agreement')}명 동의), "
-                             f"{'근거 확인됨' if c.get('verified') else '근거 미확인'}, 심각도 {c.get('severity')}")
+        for cid in (it.get("clusters") or [it.get("cluster")]):
+            c = clusters.get(cid)
+            if c:
+                why_lines.append(f"{n}. {c['members'][0]['title']}: {', '.join(c.get('ais', []))}가 지적 ({c.get('agreement')}명 동의), "
+                                 f"{'근거 확인됨' if c.get('verified') else '근거 미확인'}, 심각도 {c.get('severity')}")
     patch = d / "combined.patch"
     text = patch.read_text(encoding="utf-8", errors="replace") if patch.is_file() else ""
     files, (added, removed) = patch_files(text), patch_stats(text)

@@ -492,8 +492,15 @@ class DashboardApp:
             hours = float(opts.get("budget_hours", 6))
         except (TypeError, ValueError):
             raise ApiError(400, "숫자 값이 올바르지 않습니다.") from None
-        if not (1 <= fixes <= 30) or not (0.25 <= hours <= 24):
-            raise ApiError(400, "수정 개수는 1~30, 시간은 0.25~24시간이어야 합니다.")
+        if not (0 <= fixes <= 100) or not (0.25 <= hours <= 24):
+            raise ApiError(400, "수정 개수는 0(전부)~100, 시간은 0.25~24시간이어야 합니다.")
+        ids = opts.get("ids")
+        if ids is not None:
+            if not isinstance(ids, list) or not ids or len(ids) > 300 or not all(isinstance(i, int) and not isinstance(i, bool) and i > 0 for i in ids):
+                raise ApiError(400, "고칠 항목 번호 목록이 올바르지 않습니다.")
+        analysis_id = opts.get("analysis_id")
+        if analysis_id is not None and not re.match(r"^[0-9a-zA-Z-]{1,60}$", str(analysis_id)):
+            raise ApiError(400, "분석 번호가 올바르지 않습니다.")
         cfg = self._projects[project]
         cmd, _ = self.effective_test_command(project)
         if not cmd:
@@ -502,8 +509,15 @@ class DashboardApp:
                 "--max-fixes", str(fixes), "--budget-minutes", str(int(hours * 60)), "--test-command", shlex.join(cmd)]
         if self.config_path:
             args += ["--config", self.config_path]
+        if ids:
+            args += ["--ids", ",".join(str(i) for i in ids)]
+        if analysis_id:
+            args += ["--analysis", str(analysis_id)]
+        if opts.get("group"):
+            args += ["--group-by-file"]
         args += self._role_args(opts.get("roles"))
-        return self._spawn("autofix", args, project, f"밤샘 자동 수정 ({sev} 이상 · 최대 {fixes}건)")
+        label = f"선택한 {len(ids)}건 순서대로 자동 수정" if ids else f"밤샘 자동 수정 ({sev} 이상 · {'전부' if fixes == 0 else '최대 ' + str(fixes) + '건'})"
+        return self._spawn("autofix", args, project, label + (" · 파일별 묶음" if opts.get("group") else ""))
 
     def _busy_here(self, project: str) -> bool:
         return bool(self.job and self.job["popen"].poll() is None and self.job.get("project") == project)

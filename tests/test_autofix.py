@@ -177,7 +177,7 @@ def test_dashboard_starts_an_autofix_job_with_checked_options(env):
     assert env.state()[1]["job"]["kind"] == "autofix"
 
 
-@pytest.mark.parametrize("opts", [{"min_severity": "x"}, {"max_fixes": 0}, {"max_fixes": 99}, {"budget_hours": 0},
+@pytest.mark.parametrize("opts", [{"min_severity": "x"}, {"max_fixes": 101}, {"budget_hours": 0},
                                   {"budget_hours": "abc"}, {"roles": {"builder": "antigravity"}}])
 def test_dashboard_rejects_bad_autofix_options(env, opts):
     sleeper.calls.clear()
@@ -218,3 +218,77 @@ def test_running_batch_is_rebuilt_from_events(tmp_path):
 
 def test_stop_script_knows_autofix_jobs():
     assert "autofix" in (Path(__file__).parent.parent / "scripts" / "stop.sh").read_text()
+
+
+# ---------------------------------------------------- fix everything in one go: ids, grouping, no cap
+def test_ids_select_exactly_the_ticked_findings_ignoring_the_filters():
+    a = {"clusters": [cluster(1, "low"), cluster(2, "high", verified=False), cluster(3, "medium"), cluster(4, "high", file="")]}
+    assert [c["id"] for c in autofix.select_findings(a, ids=[1, 2, 4])] == [1, 2]  # no file -> cannot be fixed; filters not applied
+    assert [c["id"] for c in autofix.select_findings(a, max_fixes=0, min_severity="low", verified_only=False)] == [1, 2, 3]  # 0 = no cap
+
+
+def test_group_by_file_merges_findings_of_one_file_up_to_the_limit():
+    cs = [cluster(i, file="a.py") for i in range(1, 9)] + [cluster(20, file="b.py")]
+    groups = autofix.group_by_file(cs)
+    assert [len(g) for g in groups] == [autofix.GROUP_MAX, 8 - autofix.GROUP_MAX, 1]
+    goal = autofix.build_group_goal(groups[0])
+    assert goal.count("quote:") == autofix.GROUP_MAX and "all of them" in goal and "secrets" in goal
+    assert autofix.build_group_goal([cs[0]]) == autofix.build_goal(cs[0])  # a single one is the normal goal
+
+
+def test_one_run_fixes_all_findings_of_a_file_and_the_report_says_so(tmp_path):
+    repo = make_repo(tmp_path)
+    put_analysis(repo, [cluster(1, file="src/app.py"), cluster(2, file="src/app.py"), cluster(3, file="src/app.py")])
+    s = make_settings()
+    o = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json()]),
+                         "codex": ScriptedProvider("codex", [write_file("src/new.py")])})
+    r = autofix.run_autofix(s, repo, orchestrator=o, group=True, max_fixes=0, ids=[1, 2, 3])
+    assert r.status == "DONE" and len(r.items) == 1 and r.items[0].clusters == [1, 2, 3]
+    prompt = o.providers["codex"].calls[0]["prompt"]
+    assert "problem 1" in prompt and "problem 2" in prompt and "problem 3" in prompt  # one plan, one build, one review for all three
+    assert len(o.providers["claude"].calls) == 2
+    assert "묶음" in r.items[0].title
+
+
+def test_cli_ids_group_and_no_cap_reach_the_engine(tmp_path, monkeypatch):
+    from solomon import cli
+    seen = {}
+
+    def fake(settings, project, analysis_id=None, **kw):
+        seen.update(kw)
+        return autofix.BatchResult("b", "NOTHING", "none", report_path="r.md")
+
+    monkeypatch.setattr(autofix, "run_autofix", fake)
+    repo = make_repo(tmp_path)
+    assert cli.main(["autofix", "--project", str(repo), "--ids", "1, 3,7", "--group-by-file", "--max-fixes", "0"]) == 0
+    assert seen["ids"] == [1, 3, 7] and seen["group"] is True and seen["max_fixes"] == 0
+
+
+def test_dashboard_autofix_accepts_ticked_ids_group_and_all(env):
+    st, _, _ = env.call("POST", "/api/autofix", {"project": env.project, "ids": [1, 4, 9], "group": True, "max_fixes": 0,
+                                                 "analysis_id": "20260101-000000-aaaa"})
+    assert st == 200
+    a = sleeper.calls[-1]
+    assert a[a.index("--ids") + 1] == "1,4,9" and "--group-by-file" in a and a[a.index("--max-fixes") + 1] == "0"
+    assert a[a.index("--analysis") + 1] == "20260101-000000-aaaa"
+    assert env.state()[1]["job"]["goal"].startswith("선택한 3건")
+
+
+@pytest.mark.parametrize("opts", [{"ids": []}, {"ids": ["1"]}, {"ids": [0]}, {"ids": [True]}, {"ids": "1,2"}, {"ids": list(range(1, 400))},
+                                  {"analysis_id": "../x"}, {"max_fixes": 101}, {"max_fixes": -1}])
+def test_dashboard_rejects_bad_ticked_ids(env, opts):
+    sleeper.calls.clear()
+    st, _, _ = env.call("POST", "/api/autofix", {"project": env.project, **opts})
+    assert st == 400 and not sleeper.calls
+
+
+def test_batch_5w1h_lists_every_finding_of_a_grouped_item(env):
+    put_analysis(env.repo, [cluster(1, file="src/app.py"), cluster(2, file="src/app.py")])
+    s = make_settings()
+    o = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json()]),
+                         "codex": ScriptedProvider("codex", [write_file("src/new.py")])})
+    b = autofix.run_autofix(s, env.repo, orchestrator=o, group=True, ids=[1, 2])
+    from urllib.parse import quote
+    d = env.call("GET", f"/api/describe?project={quote(env.project)}&key=batch:{b.batch_id}")[1]
+    why = d["sections"]["why"]["lines"]
+    assert any("problem 1" in l for l in why) and any("problem 2" in l for l in why)

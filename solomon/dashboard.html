@@ -74,6 +74,7 @@ pre.diff .a{color:#7ee2b0}pre.diff .d{color:#ff9aa5}pre.diff .h{color:#8fb4ff}
 .sg{border:1px solid var(--line);border-radius:12px;padding:8px;background:#0a121c;min-width:0}.sg h4{margin:0 0 6px;font-size:13px;color:var(--text)}
 .sg.mach{border-style:dashed;opacity:.85}.sg .chips{margin-top:4px}.sg small{display:block;color:var(--faint);font-size:11px;line-height:1.35;margin-top:4px}
 @media (max-width:1100px){.sd{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.fixbar{border:1px solid #2f74e6;background:#0b1a30;border-radius:12px;padding:12px 14px;margin:10px 0}.fixbar .hl{font-size:15px}
 .strip{display:flex;align-items:center;gap:10px;margin-left:16px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:#0a121c;font-size:13px;cursor:pointer;max-width:520px;overflow:hidden;white-space:nowrap}
 .strip.busy{border-color:#2f74e6;background:#0e2140}.strip .led{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}.strip.busy .led{background:#4f86d6;box-shadow:0 0 8px #4f86d6;animation:pulse 1.2s infinite}
 @keyframes pulse{50%{opacity:.35}}
@@ -291,9 +292,10 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
       <div class="hint">가장 최근 분석에서 근거가 확인된 문제를 하나씩 차례로 고칩니다. 별도 브랜치에만 저장되고 원본은 그대로입니다. 아침에 결과를 보고 적용하세요.</div>
       <div class="roles" style="margin-top:8px">
         <div class="rr"><small>최소 심각도</small><select id="bf-sev"><option value="high">높음</option><option value="medium" selected>보통 이상</option><option value="low">전부</option></select></div>
-        <div class="rr"><small>최대 수정 개수</small><select id="bf-n"><option>3</option><option selected>5</option><option>10</option><option>20</option></select></div>
+        <div class="rr"><small>최대 수정 개수</small><select id="bf-n"><option value="3">3</option><option value="5" selected>5</option><option value="10">10</option><option value="20">20</option><option value="0">전부 (제한 없음)</option></select></div>
         <div class="rr"><small>제한 시간</small><select id="bf-h"><option value="2">2시간</option><option value="6" selected>6시간</option><option value="10">10시간</option></select></div>
       </div>
+      <label class="chk"><input type="checkbox" id="bf-g" checked> 같은 파일의 문제는 한 번에 묶어서 고치기 (실행 횟수가 줄어 훨씬 빠릅니다)</label>
       <div class="row" style="margin-top:8px"><button id="bf-go" class="good">밤샘 자동 수정 시작</button></div>
       <div id="batches" style="margin-top:10px"></div>
     </div>
@@ -400,6 +402,7 @@ async function api(path, body){
   if (body !== undefined){ opt.method = "POST"; opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch(path, opt);
   let j = {}; try { j = await r.json(); } catch (e) { j = {error: "응답을 해석하지 못했습니다"}; }
+  if (r.status === 404 && j.error === "not found") throw new Error("대시보드 서버가 옛 버전입니다. 터미널에서 bash scripts/stop.sh 후 bash scripts/start.sh 로 다시 시작하세요.");
   if (!r.ok) throw new Error(j.error || ("오류 " + r.status));
   return j;
 }
@@ -528,7 +531,7 @@ function renderBatches(){
 $("bf-go").onclick = async () => {
   if (!state || !state.project) return toast("프로젝트를 먼저 선택하세요.", true);
   const roles = collectRoles();
-  try { await api("/api/autofix", {project: state.project, min_severity: $("bf-sev").value, max_fixes: +$("bf-n").value, budget_hours: +$("bf-h").value, roles}); toast("밤샘 자동 수정을 시작했습니다. 컴퓨터를 켜두세요."); poll(); } catch (e) { toast(e.message, true); }
+  try { await api("/api/autofix", {project: state.project, min_severity: $("bf-sev").value, max_fixes: +$("bf-n").value, budget_hours: +$("bf-h").value, group: $("bf-g").checked, roles}); toast("밤샘 자동 수정을 시작했습니다. 컴퓨터를 켜두세요."); poll(); } catch (e) { toast(e.message, true); }
 };
 
 function render(){
@@ -725,8 +728,49 @@ function renderReport(cur){
   if (!cur.finished){ box.appendChild(el("div", "hint", "AI가 분석하는 동안 기다려 주세요. 보통 1~5분 걸립니다. 끝나면 발견한 문제가 여기에 나옵니다.")); return; }
   if (!cur.clusters.length) box.appendChild(el("div", "hint", cur.status === "DONE" ? "발견된 문제가 없습니다." : "분석 결과가 없습니다."));
   const total = Object.keys(cur.ais).length;
+  const aid = cur.analysis_id, fixable = cur.clusters.filter(c => c.file);
+  if (!fixSel[aid]) fixSel[aid] = new Set(fixable.filter(c => c.verified && c.severity !== "low").map(c => c.id));
+  const sel = fixSel[aid];
+  if (fixable.length){
+    const bar = el("div", "fixbar");
+    bar.appendChild(el("div", "hl", "한 번에 순서대로 자동 수정"));
+    const info = el("div", "hint", ""); info.id = "fixInfo"; bar.appendChild(info);
+    const r1 = el("div", "row"); r1.style.marginTop = "6px";
+    const mk = (label, fn) => { const b = el("button", "", label); b.style.padding = "5px 11px"; b.style.fontSize = "12px"; b.onclick = () => { fn(); renderReport(state.analysis); }; r1.appendChild(b); };
+    mk("전체 선택", () => fixable.forEach(c => sel.add(c.id)));
+    mk("근거 확인된 것만", () => { sel.clear(); fixable.filter(c => c.verified).forEach(c => sel.add(c.id)); });
+    mk("2개 이상 AI가 지적한 것만", () => { sel.clear(); fixable.filter(c => c.agreement >= 2).forEach(c => sel.add(c.id)); });
+    mk("선택 해제", () => sel.clear());
+    bar.appendChild(r1);
+    const opt = el("div", "row"); opt.style.alignItems = "center";
+    const lab = el("label", "chk"); lab.style.margin = "0"; const cb = el("input"); cb.type = "checkbox"; cb.checked = fixOpts.group; cb.onchange = () => { fixOpts.group = cb.checked; };
+    lab.appendChild(cb); lab.appendChild(document.createTextNode("같은 파일은 한 번에 묶어서 (빠름)")); opt.appendChild(lab);
+    const hs = el("select"); hs.style.width = "auto"; [[2, "2시간"], [6, "6시간"], [10, "10시간"]].forEach(([v, t]) => { const o = el("option", "", "제한 " + t); o.value = v; hs.appendChild(o); }); hs.value = fixOpts.hours; hs.onchange = () => { fixOpts.hours = +hs.value; };
+    opt.appendChild(hs); bar.appendChild(opt);
+    const go = el("button", "primary", ""); go.id = "fixGo"; go.style.marginTop = "8px"; go.style.width = "100%";
+    go.onclick = async () => {
+      if (!sel.size) return;
+      if (!confirm(sel.size + "건을 순서대로 자동 수정합니다. 별도 브랜치에만 쌓이고 원본은 그대로입니다. 시작할까요?")) return;
+      try {
+        await api("/api/autofix", {project: state.project, ids: [...sel].sort((a, b) => a - b), group: fixOpts.group, budget_hours: fixOpts.hours, max_fixes: 0, analysis_id: aid, roles: collectRoles()});
+        toast(sel.size + "건 자동 수정을 시작했습니다. 진행은 상단 표시줄과 아래 '밤샘 자동 수정' 카드에서 봅니다."); poll();
+        const t = $("batchCard"); if (t) t.scrollIntoView({behavior: "smooth", block: "center"});
+      } catch (e) { toast(e.message, true); }
+    };
+    bar.appendChild(go);
+    bar.appendChild(el("div", "hint", "각 수정은 계획 → 구현 → 범위 검사 → 테스트 → 교차 검수를 거치고 앞 수정 위에 이어서 쌓입니다. 끝나면 관리 탭에서 항목별 또는 전체를 적용합니다. 직접 하나씩 목표로 보내려면 각 문제의 '이 문제 고치기'를 쓰세요."));
+    box.appendChild(bar);
+    const refresh = () => {
+      const n = sel.size, files = new Set(fixable.filter(c => sel.has(c.id)).map(c => c.file)).size;
+      info.textContent = "문제 " + fixable.length + "건 중 " + n + "건 선택 (파일 " + files + "개)" + (state.test_command && state.test_command.text === "없음" ? " · ⚠ 테스트 명령이 없어 시작되지 않습니다 (개선 모드의 '프로젝트 설정: 테스트 명령')" : "");
+      go.textContent = n ? "▶ 선택한 " + n + "건 전부 순서대로 자동 수정" : "고칠 문제를 선택하세요";
+      go.disabled = !n || state.job.state === "running" || state.project_git === false;
+    };
+    refresh(); bar.refresh = refresh;
+  }
   cur.clusters.forEach(c => {
     const f = el("div", "finding"), h = el("h3");
+    if (c.file){ const k = el("input"); k.type = "checkbox"; k.checked = sel.has(c.id); k.title = "자동 수정 대상에 포함"; k.style.marginRight = "8px"; k.onchange = () => { k.checked ? sel.add(c.id) : sel.delete(c.id); renderReport(state.analysis); }; h.appendChild(k); }
     h.appendChild(el("span", "sev " + c.severity, SEV_KO[c.severity])); h.appendChild(document.createTextNode(c.members[0].title)); f.appendChild(h);
     const ev = EV[c.verified ? "verified" : c.members[0].evidence] || EV.unchecked;
     const meta = el("div", "meta", (c.file ? c.file + ":" + c.line_start : "위치 불명") + " · 지적한 AI " + c.ais.map(pname).join(", ") + " (" + c.agreement + "/" + total + ")");
@@ -931,7 +975,7 @@ function tick(){
 }
 
 // ------------------------------------------------------------------ 관리 탭: 결과함 · 5W1H
-let portfolioData = null, pjFocus = null, projectsInfo = null, mgDetailAt = 0, inbox = null, mgKey = null, mgDetail = null, mgDiff = null, mgBusy = false, mgLoading = false, mgLast = 0;
+let fixSel = {}, fixOpts = {group: true, hours: 6}, portfolioData = null, pjFocus = null, projectsInfo = null, mgDetailAt = 0, inbox = null, mgKey = null, mgDetail = null, mgDiff = null, mgBusy = false, mgLoading = false, mgLast = 0;
 const ST_KO = {pending: "적용 전", applied: "적용됨(미커밋)", committed: "커밋됨", discarded: "폐기함"};
 const KIND_KO = {run: "개선", batch: "밤샘 수정", item: "수정 항목", analysis: "분석"};
 const W5 = [["who", "누가 · Who"], ["what", "무엇을 · What"], ["when", "언제 · When"], ["where", "어디서 · Where"], ["why", "왜 · Why"], ["how", "어떻게 · How"]];

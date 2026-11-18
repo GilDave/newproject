@@ -72,3 +72,10 @@ def test_dashboard_passes_all_slots_and_rejects_bad_combinations(env):
 def test_an_optional_slot_cleared_on_the_page_is_not_passed(env):
     st, _, _ = env.call("POST", "/api/run", run_body(env, planner2="", reviewer2=""))
     assert st == 200 and "--planner2" not in sleeper.calls[-1] and "--reviewer2" not in sleeper.calls[-1]
+
+
+def test_the_analysis_report_can_start_a_whole_batch_in_one_click():
+    for needle in ('id = "fixGo"', "/api/autofix", "ids: [...sel]", "group: fixOpts.group", "analysis_id: aid", "전체 선택", "근거 확인된 것만",
+                   "옛 버전입니다"):
+        assert needle in HTML, needle
+    assert 'id="bf-g"' in HTML and 'value="0">전부' in HTML

@@ -32,12 +32,16 @@ class AutofixError(RuntimeError):
     pass
 
 
+GROUP_MAX = 6  # findings in one file fixed together in a single run (one plan, one review) instead of one run each
+
+
 @dataclass
 class Item:
     cluster: int
     title: str
     file: str
     severity: str
+    clusters: list[int] = field(default_factory=list)  # every finding this item fixes (several when grouped by file)
     status: str = "PENDING"  # PENDING | PASSED | FAILED | SKIPPED | ERROR | BLOCKED_QUOTA | STOPPED
     summary: str = ""
     run_id: str = ""
@@ -77,8 +81,13 @@ def load_analysis(project: Path, state_dir: str, analysis_id: Optional[str] = No
 
 
 def select_findings(analysis: dict, min_severity: str = "medium", min_agreement: int = 1,
-                    verified_only: bool = True, max_fixes: int = 5) -> list[dict]:
-    """The findings worth fixing unattended: serious enough, evidence confirmed, enough AIs agree. Best first."""
+                    verified_only: bool = True, max_fixes: int = 5, ids: Optional[list[int]] = None) -> list[dict]:
+    """The findings worth fixing unattended: serious enough, evidence confirmed, enough AIs agree. Best first.
+    `ids` = the findings a person ticked: exactly those, in report order (the filters do not apply). max_fixes 0 = no cap."""
+    if ids is not None:
+        want = {int(i) for i in ids}
+        picked = [c for c in analysis.get("clusters", []) if c.get("id") in want and c.get("file")]
+        return picked[:max_fixes] if max_fixes else picked
     floor = SEVERITY_RANK[min_severity]
     picked = []
     for c in analysis.get("clusters", []):
@@ -109,6 +118,35 @@ def build_goal(c: dict) -> str:
     )
 
 
+def group_by_file(chosen: list[dict]) -> list[list[dict]]:
+    """Findings in the same file become one unit of work (order of first appearance kept, at most GROUP_MAX each)."""
+    groups: dict[str, list[list[dict]]] = {}
+    order: list[list[dict]] = []
+    for c in chosen:
+        lists = groups.setdefault(c["file"], [])
+        if not lists or len(lists[-1]) >= GROUP_MAX:
+            lists.append([])
+            order.append(lists[-1])
+        lists[-1].append(c)
+    return order
+
+
+def build_group_goal(cs: list[dict]) -> str:
+    if len(cs) == 1:
+        return build_goal(cs[0])
+    parts = []
+    for n, c in enumerate(cs, 1):
+        m = c["members"][0]
+        quote = next((x["quote"] for x in c["members"] if x.get("quote")), "")
+        sug = next((x["suggestion"] for x in c["members"] if x.get("suggestion")), "")
+        parts.append(f"{n}. {m['title']} (lines {c['line_start']}-{c['line_end']})\n   quote: {quote}\n   details: {m['problem']}"
+                     + (f"\n   suggested fix: {sug}" if sug else ""))
+    return (f"Fix these {len(cs)} problems found by code analysis in {cs[0]['file']}. Fix ONLY these problems, all of them.\n"
+            + "\n".join(parts) + "\nRules: keep every change minimal; do not refactor or reformat unrelated code; do not change behaviour "
+            "that is not part of a problem; add or update a test for each fix when the project has tests; never touch secrets, .env files, "
+            "credentials, or deployment/trading configuration. If a problem turns out not to exist, leave it alone and say so.")
+
+
 def run_autofix(
     settings: Settings,
     project: Path,
@@ -121,6 +159,8 @@ def run_autofix(
     budget_minutes: float = DEFAULT_BUDGET_MIN,
     item_minutes: float = DEFAULT_ITEM_MIN,
     allow_untested: bool = False,
+    ids: Optional[list[int]] = None,
+    group: bool = False,
     orchestrator: Optional[Orchestrator] = None,
     clock: Callable[[], float] = time.time,
 ) -> BatchResult:
@@ -132,7 +172,10 @@ def run_autofix(
         raise AutofixError("테스트 명령이 없으면 밤새 자동 수정을 하지 않습니다 (검증 없는 수정이 쌓입니다). "
                            "테스트 명령을 설정하거나 --allow-untested 를 주세요.")
     analysis = load_analysis(project, settings.state_dir, analysis_id)
-    chosen = select_findings(analysis, min_severity, min_agreement, verified_only, max_fixes)
+    chosen = select_findings(analysis, min_severity, min_agreement, verified_only, 0 if group else max_fixes, ids)
+    units = group_by_file(chosen) if group else [[c] for c in chosen]
+    if group and max_fixes:
+        units = units[:max_fixes]
 
     batch_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
     bdir = project / settings.state_dir / "batches" / batch_id
@@ -140,7 +183,9 @@ def run_autofix(
     gitops.exclude_from_git(project, settings.state_dir)
     branch = f"solomon/autofix-{batch_id}"
     result = BatchResult(batch_id, "NOTHING", "", branch, str(bdir),
-                         [Item(c["id"], c["members"][0]["title"], c["file"], c["severity"]) for c in chosen])
+                         [Item(u[0]["id"], u[0]["members"][0]["title"] if len(u) == 1 else f"{len(u)}건 묶음: {u[0]['members'][0]['title']} 외",
+                               u[0]["file"], max((c["severity"] for c in u), key=lambda v: SEVERITY_RANK[v]), [c["id"] for c in u])
+                          for u in units])
     events = bdir / "events.jsonl"
 
     def log(kind: str, **fields) -> None:
@@ -149,7 +194,7 @@ def run_autofix(
 
     log("batch_start", analysis=analysis.get("analysis_id"), items=[dataclasses.asdict(i) for i in result.items],
         branch=branch, budget_minutes=budget_minutes)
-    if not chosen:
+    if not units:
         result.summary = "조건에 맞는 고칠 항목이 없습니다 (심각도·근거 확인·AI 동의 기준)."
         return _finish(result, project, bdir, "HEAD", log)
 
@@ -165,7 +210,7 @@ def run_autofix(
     failures = 0
     stop: Optional[str] = None
 
-    for n, (item, cluster) in enumerate(zip(result.items, chosen), 1):
+    for n, (item, unit) in enumerate(zip(result.items, units), 1):
         left = budget_minutes - (clock() - started) / 60
         if left <= 1:
             stop = "시간 예산을 다 써서 남은 항목은 건너뛰었습니다"
@@ -175,13 +220,13 @@ def run_autofix(
         log("item_start", n=n, cluster=item.cluster, title=item.title)
 
         def commit(wt: Path, res, item=item) -> str:
-            sha = gitops.commit_all(wt, f"autofix: {item.title[:70]}\n\nFinding #{item.cluster} in {item.file} "
+            sha = gitops.commit_all(wt, f"autofix: {item.title[:70]}\n\nFinding(s) #{', #'.join(str(i) for i in item.clusters or [item.cluster])} in {item.file} "
                                         f"({item.severity}). Batch {batch_id}.")
             gitops.move_branch(project, branch, sha)
             return sha
 
         try:
-            res = orch.run(build_goal(cluster), project, base_ref=branch, on_pass=commit)
+            res = orch.run(build_group_goal(unit), project, base_ref=branch, on_pass=commit)
         except Exception as exc:  # one broken item must not end the night
             item.status, item.summary = "ERROR", f"{type(exc).__name__}: {exc}"
             log("item_end", n=n, status="ERROR", summary=item.summary)

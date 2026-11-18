@@ -198,7 +198,8 @@ def _autofix(args: argparse.Namespace) -> int:
         res = autofix_mod.run_autofix(
             settings, project, args.analysis, min_severity=args.min_severity, min_agreement=args.min_agreement,
             verified_only=not args.include_unverified, max_fixes=args.max_fixes, budget_minutes=args.budget_minutes,
-            allow_untested=args.allow_untested)
+            allow_untested=args.allow_untested, ids=[int(i) for i in args.ids.split(',') if i.strip()] if args.ids else None,
+            group=args.group_by_file)
     except (autofix_mod.AutofixError, ConfigError, gitops.GitError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -328,7 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
     af.add_argument("--min-severity", choices=["low", "medium", "high"], default="medium")
     af.add_argument("--min-agreement", type=int, default=1, help="how many AIs must have reported the finding")
     af.add_argument("--include-unverified", action="store_true", help="also fix findings whose quoted evidence was not found")
-    af.add_argument("--max-fixes", type=int, default=5)
+    af.add_argument("--max-fixes", type=int, default=5, help="0 = no cap (every selected finding)")
+    af.add_argument("--ids", help="fix exactly these findings of the analysis, e.g. 1,3,7 (the numbers in the report)")
+    af.add_argument("--group-by-file", action="store_true", help="fix all findings of one file in a single run (faster overnight)")
     af.add_argument("--budget-minutes", type=float, default=360.0)
     af.add_argument("--test-command")
     af.add_argument("--no-tests", action="store_true")
