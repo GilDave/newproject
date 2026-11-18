@@ -4,7 +4,7 @@ Modelled on the invocation the ai-dev-director reference documents and uses dail
   agy --input-format stream-json --output-format stream-json --sandbox
   stdin : one NDJSON line {"event":"user","message":{"role":"user","content":[{"type":"text","text":...}]}}
   stdout: NDJSON events; the last {"event":"result","result":{"status":"SUCCESS","response":...}} is the answer.
-NOT yet run against a real `agy` by this project: check with `agy --help` and `solomon doctor`.
+Checked against a real `agy` (help text and one live call): the flags exist and the result event has this shape.
 
 Read-only roles only (planner, reviewer): the call runs in an EMPTY temporary folder with tools told off,
 so it can only judge what the prompt contains. A BUILDER needs enforced write scoping (the reference installs
@@ -28,6 +28,11 @@ from .base import (
 
 NO_TOOLS = "Do not use tools. Use only the evidence supplied in this message.\n"
 
+# `agy models` on a signed-in account also lists Claude and GPT-OSS models, and "auto" may pick any of them.
+# A Claude model behind agy would review Claude's own work and silently void the cross-review, so a Google
+# model is pinned unless the config names one (extra_args.antigravity = ["--model", "<id from `agy models`>"]).
+DEFAULT_MODEL = "gemini-3.8-flash-high"
+
 
 class TransientStreamError(ProviderError):
     """The stream ended without a usable result; one fresh retry is allowed."""
@@ -39,7 +44,10 @@ class AntigravityProvider(CliProvider):
     supports_write = False
 
     def build_argv(self, exe: str, write: bool) -> list[str]:
-        return [exe, "--input-format", "stream-json", "--output-format", "stream-json", "--sandbox", *self.extra_args]
+        argv = [exe, "--input-format", "stream-json", "--output-format", "stream-json", "--sandbox"]
+        if "--model" not in self.extra_args:
+            argv += ["--model", DEFAULT_MODEL]
+        return argv + self.extra_args
 
     def prepare_stdin(self, prompt: str) -> str:
         message = {"event": "user", "message": {"role": "user", "content": [{"type": "text", "text": NO_TOOLS + prompt}]}}

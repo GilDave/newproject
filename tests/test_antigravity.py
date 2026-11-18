@@ -22,7 +22,9 @@ def result_line(**result):
 def test_argv_and_stdin_shape():
     p = AntigravityProvider()
     argv = p.build_argv("agy", False)
-    assert argv == ["agy", "--input-format", "stream-json", "--output-format", "stream-json", "--sandbox"]
+    assert argv == ["agy", "--input-format", "stream-json", "--output-format", "stream-json", "--sandbox",
+                    "--model", "gemini-3.8-flash-high"]
+    assert argv[-2:] != ["--model", "auto"]
     assert "--mode" not in argv and "accept-edits" not in argv  # no write mode exists in this adapter
     stdin = p.prepare_stdin("한글 프롬프트 \"quoted\"\nsecond line")
     assert stdin.endswith("\n") and stdin.count("\n") == 1  # exactly one NDJSON line
@@ -50,7 +52,29 @@ def test_parse_output_failures_are_classified():
     assert not isinstance(exc.value, (TransientStreamError, QuotaExhausted))
 
 
-def test_usage_takes_the_largest_prompt_count_and_sums_candidates():
+REAL_OUTPUT = (
+    '{"event":"init","conversation_id":"c1","init":{"cwd":"/x","tools":["view_file","run_command"],"permission_mode":"request-review"}}\n'
+    '{"event":"step_update","step_update":{"step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"안녕하세요."}}\n'
+    '{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":9485,"output_tokens":241,"total_tokens":9726}}}\n'
+    '{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"안녕하세요.\\n","duration_seconds":5.1,"num_turns":1,'
+    '"usage":{"input_tokens":9485,"output_tokens":241,"thinking_tokens":239,"cache_read_tokens":0,"total_tokens":9726}}}\n'
+)
+
+
+def test_a_real_agy_run_is_parsed_exactly():
+    """The output below was captured from a real `agy` on the project owner's Mac."""
+    p = AntigravityProvider()
+    assert p.parse_output(REAL_OUTPUT) == "안녕하세요.\n"
+    assert p.extract_usage(REAL_OUTPUT, "") == {"in": 9485, "out": 241, "total": 9726, "turns": 1}
+
+
+def test_usage_includes_cache_reads_when_reported():
+    out = result_line(status="SUCCESS", response="x", num_turns=3,
+                      usage={"input_tokens": 100, "output_tokens": 10, "total_tokens": 110, "cache_read_tokens": 60})
+    assert antigravity_usage(out) == {"in": 100, "out": 10, "total": 110, "cache_read": 60, "turns": 3}
+
+
+def test_usage_legacy_format_still_works_as_a_fallback():
     out = '{"promptTokenCount": 100, "candidatesTokenCount": 5}\n{"promptTokenCount": 140, "candidatesTokenCount": 7}\n'
     assert antigravity_usage(out) == {"in": 140, "out": 12, "total": 152}
     assert antigravity_usage("nothing to see") is None
@@ -72,7 +96,7 @@ behaviour = {behaviour!r}
 if behaviour == "empty" or (behaviour == "flaky" and n == 0):
     print(json.dumps({{"event": "progress"}}))
 else:
-    print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response": "pong", "u": {{"promptTokenCount": 50, "candidatesTokenCount": 7}}}}}}))
+    print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response": "pong", "num_turns": 1, "usage": {{"input_tokens": 50, "output_tokens": 7, "total_tokens": 57}}}}}}))
 """)
     script.chmod(0o755)
     return str(script), log
@@ -88,7 +112,7 @@ def test_real_process_runs_in_an_empty_folder_with_the_ndjson_prompt(tmp_path):
     project.mkdir()
     (project / "secret.txt").write_text("must not be visible")
     res = AntigravityProvider(executable=exe).run("judge this", cwd=str(project), write=False, timeout=30)
-    assert res.text == "pong" and res.tokens == {"in": 50, "out": 7, "total": 57}
+    assert res.text == "pong" and res.tokens == {"in": 50, "out": 7, "total": 57, "turns": 1}
     (call,) = calls(log)
     assert call["listing"] == [] and call["cwd"] != str(project)  # an empty temp folder, not the project
     assert "--sandbox" in call["args"] and "judge this" in json.loads(call["stdin"])["message"]["content"][0]["text"]
@@ -155,3 +179,8 @@ def test_agy_is_found_in_its_own_install_folder(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", "/nonexistent")
     assert resolve_cli("agy") == str(exe.resolve())
+
+
+def test_a_configured_model_replaces_the_pinned_default():
+    argv = AntigravityProvider(extra_args=["--model", "gemini-3.8-flash-low"]).build_argv("agy", False)
+    assert argv.count("--model") == 1 and argv[-2:] == ["--model", "gemini-3.8-flash-low"]

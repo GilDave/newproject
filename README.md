@@ -101,7 +101,8 @@ builder  = "codex"
 reviewer = "antigravity"
 ```
 - **지금은 계획·검수만** 맡습니다. 빈 임시 폴더에서 도구 없이 프롬프트에 담긴 근거만으로 판단하므로 안전합니다. **구현(builder) 역할로 지정하면 시작을 거부합니다.** 파일 쓰기 범위를 강제하는 장치(레퍼런스는 권한 규칙과 훅을 설치)가 아직 없기 때문입니다.
-- 호출 방식(`--input-format stream-json --output-format stream-json --sandbox`)은 레퍼런스가 쓰는 형태를 따랐지만 **이 프로젝트에서 실제 `agy`로는 아직 실행해 보지 않았습니다.** `agy --help`와 `solomon doctor`로 확인하세요.
+- 호출 방식(`--input-format stream-json --output-format stream-json --sandbox`)은 실제 `agy`의 도움말과 실제 호출 1회로 확인했습니다. 토큰은 결과 이벤트의 `usage`(입력·출력·캐시·총합)와 턴 수를 읽습니다.
+- **모델은 Gemini로 고정**합니다(기본 `gemini-3.8-flash-high`). `agy models`에는 Claude·GPT-OSS도 나오는데, "auto"가 그 모델을 고르면 Claude가 Claude를 검수하는 꼴이 되어 교차 검증이 무의미해지기 때문입니다. 바꾸려면 `[extra_args] antigravity = ["--model", "<agy models의 id>"]`.
 - 비교 실험: `solomon bench run --configs codex_build_antigravity_review,claude_build_antigravity_review` (기본 4구성에는 포함되지 않음).
 
 다른 AI를 더 붙이려면 `providers/<이름>.py`에 `CliProvider` 하위 클래스를 만들고 `providers/__init__.py`의 `PROVIDER_CLASSES`에 한 줄 추가합니다.

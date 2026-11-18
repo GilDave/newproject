@@ -48,8 +48,34 @@ def codex_usage(stdout: str, stderr: str) -> Optional[dict]:
 
 
 def antigravity_usage(stdout: str) -> Optional[dict]:
-    """agy stream-json events carry usage metadata (promptTokenCount, candidatesTokenCount). Prompt tokens
-    repeat across events so the largest is taken; candidate tokens are summed. Nothing found -> None (estimate)."""
+    """agy stream-json: the terminal event carries result.usage = {input_tokens, output_tokens, total_tokens,
+    cache_read_tokens, ...} and result.num_turns. Older builds (and the ai-dev-director reference) put
+    promptTokenCount / candidatesTokenCount in the events instead; that form is the fallback.
+    Nothing recognised -> None, so the call is shown as a labelled estimate."""
+    for line in reversed((stdout or "").splitlines()):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not (isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict)):
+            continue
+        result = event["result"]
+        use = result.get("usage")
+        if isinstance(use, dict):
+            try:
+                tin, tout = int(use.get("input_tokens") or 0), int(use.get("output_tokens") or 0)
+                total = int(use.get("total_tokens") or (tin + tout))
+                cached = int(use.get("cache_read_tokens") or 0)
+            except (TypeError, ValueError):
+                break
+            if total:
+                out = {"in": tin, "out": tout, "total": total}
+                if cached:
+                    out["cache_read"] = cached
+                if isinstance(result.get("num_turns"), int) and result["num_turns"] > 0:
+                    out["turns"] = result["num_turns"]
+                return out
+        break
     ins = [int(x) for x in re.findall(r'"promptTokenCount"\s*:\s*(\d+)', stdout or "")]
     outs = [int(x) for x in re.findall(r'"candidatesTokenCount"\s*:\s*(\d+)', stdout or "")]
     if not ins and not outs:
