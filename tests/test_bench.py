@@ -113,3 +113,42 @@ def test_goal_text_never_leaks_the_hidden_tests():
         hidden = (t.path / "hidden" / bench.HIDDEN_NAME).read_text()
         assert "test_hidden" not in t.goal and "hidden" not in t.goal.lower()
         assert hidden.strip() not in t.goal
+
+
+def test_cli_bench_run_and_validate_and_report_paths(tmp_path, monkeypatch, capsys):
+    from solomon import cli
+
+    seen = {}
+
+    def fake_run_bench(tasks, names, out, settings, repeat=1, keep=False, **kw):
+        seen.update(tasks=[t.id for t in tasks], names=names, repeat=repeat)
+        return []
+
+    monkeypatch.setattr(cli.bench_mod, "run_bench", fake_run_bench)
+    base = ["--tasks", str(TASKS), "--out", str(tmp_path)]
+    assert cli.main(["bench", "run", "--only", "t01", "--repeat", "2", *base]) == 0
+    assert seen["tasks"] == ["t01_intervals"] and seen["repeat"] == 2 and len(seen["names"]) == 4
+    assert cli.main(["bench", "run", "--only", "t01", "--configs", "codex_solo", *base]) == 0
+    assert seen["names"] == ["codex_solo"]
+    assert cli.main(["bench", "validate", "--only", "t01", *base]) == 0
+    assert cli.main(["bench", "report", *base]) == 0
+
+
+def test_cli_bench_rejects_unknown_config_before_spending_anything(tmp_path, monkeypatch, capsys):
+    from solomon import cli
+
+    def must_not_run(*a, **k):
+        raise AssertionError("an experiment must not start with an unknown config")
+
+    monkeypatch.setattr(cli.bench_mod, "run_bench", must_not_run)
+    code = cli.main(["bench", "run", "--only", "t01", "--configs", "typo", "--tasks", str(TASKS), "--out", str(tmp_path)])
+    assert code == 2
+    assert "unknown config 'typo'" in capsys.readouterr().err
+    assert not (tmp_path / "results.jsonl").exists()
+
+
+def test_cli_bench_reports_an_unknown_task_filter_as_a_message(tmp_path, capsys):
+    from solomon import cli
+
+    assert cli.main(["bench", "validate", "--only", "zzz", "--tasks", str(TASKS), "--out", str(tmp_path)]) == 2
+    assert "no task matches" in capsys.readouterr().err

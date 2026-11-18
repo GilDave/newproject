@@ -95,8 +95,6 @@ def _bench(args: argparse.Namespace) -> int:
     only = [t for t in (args.only or "").split(",") if t]
     tasks = bench_mod.load_tasks(tasks_dir, only or None)
     if args.action == "validate":
-        import tempfile
-
         with tempfile.TemporaryDirectory() as scratch:
             problems = bench_mod.validate_tasks(tasks, Path(scratch))
         for p in problems:
@@ -156,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, gitops.GitError) as exc:
+    except (ConfigError, gitops.GitError, ValueError) as exc:  # user mistakes: show a message, not a traceback
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
