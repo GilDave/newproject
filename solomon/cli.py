@@ -11,6 +11,7 @@ from .env import present_api_keys
 from .orchestrator import Orchestrator
 from .providers import PROVIDER_CLASSES, build_providers
 from .runner import run_process
+from .status import load_runs, render
 from .settings import ConfigError, load_settings
 
 EXIT = {"PASSED": 0, "FAILED": 1, "BLOCKED_QUOTA": 3, "ERROR": 2}
@@ -67,6 +68,19 @@ def _run(args: argparse.Namespace) -> int:
     return EXIT.get(result.status, 2)
 
 
+def _status(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    project = Path(args.project or settings.project_path or ".").expanduser().resolve()
+    runs = load_runs(project, settings.state_dir)
+    if args.run:
+        runs = [r for r in runs if r.run_id.startswith(args.run)]
+        if not runs:
+            print(f"error: no run starting with '{args.run}'", file=sys.stderr)
+            return 2
+    print(render(runs, project, limit=args.limit))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="solomon", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -84,6 +98,13 @@ def main(argv: list[str] | None = None) -> int:
     doc = sub.add_parser("doctor", help="check that the CLIs are installed")
     doc.add_argument("--config", help="path to solomon.toml")
     doc.set_defaults(func=_doctor)
+
+    st = sub.add_parser("status", help="show progress of recent runs (read-only)")
+    st.add_argument("--project", help="local path of the project (default: `project` in solomon.toml, else the current folder)")
+    st.add_argument("--config", help="path to solomon.toml")
+    st.add_argument("--run", help="show the run whose id starts with this text")
+    st.add_argument("--limit", type=int, default=5, help="how many recent runs to list")
+    st.set_defaults(func=_status)
 
     args = parser.parse_args(argv)
     try:

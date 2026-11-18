@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..tokens import claude_usage
 from .base import CliProvider, ProviderError, QuotaExhausted, looks_like_quota, parse_json_envelope
 
 
@@ -25,3 +26,6 @@ class ClaudeProvider(CliProvider):
                 raise QuotaExhausted(f"claude: {result[:500]}")
             raise ProviderError(f"claude reported an error: {result[:500]}")
         return result
+
+    def extract_usage(self, stdout: str, stderr: str):
+        return claude_usage(stdout)

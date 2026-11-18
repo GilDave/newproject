@@ -40,6 +40,8 @@ solomon run "..." --project ~/work/my-app --apply           # 통과한 패치�
 ```
 설정은 `solomon.example.toml`을 `solomon.toml`로 복사해 수정합니다. 기본 역할은 planner=claude, builder=codex, reviewer=claude 입니다 (모델별 강점에 대한 확정 사실이 아니라 시작 가설).
 
+진행 현황은 `solomon status [--project 경로]`로 봅니다 (최근 실행, 단계, AI별 호출 수·CLI 시간·토큰, 진행 기록). 토큰은 CLI가 알려주면 **정확**, 아니면 글자 수로 **추정**(`~` 표시)합니다.
+
 결과는 `<project>/.solomon/runs/<run_id>/` 에 남습니다: `events.jsonl`(단계별 로그), `result.json`, `result.patch`(통과 시), `last_attempt.patch`(마지막 실패 시도).
 
 ## 안전 장치

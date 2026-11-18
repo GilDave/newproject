@@ -36,6 +36,7 @@ class ProviderResult:
     exit_code: int
     duration_sec: float
     provider: str
+    tokens: Optional[dict] = None  # exact counts reported by the CLI, when it reports them
 
 
 # Phrases are matched case-insensitively against CLI output. Matching text is
@@ -86,6 +87,10 @@ class CliProvider(Provider):
     def parse_output(self, stdout: str) -> str:
         return stdout
 
+    def extract_usage(self, stdout: str, stderr: str) -> Optional[dict]:
+        """Token counts the CLI reported (exact), or None. Subclasses override."""
+        return None
+
     def locate(self) -> Optional[str]:
         return self.executable or resolve_cli(self.cli_name)
 
@@ -119,11 +124,16 @@ class CliProvider(Provider):
             if looks_like_quota(detail):
                 raise QuotaExhausted(f"{self.name}: {detail}")
             raise ProviderError(f"{self.name} exited with {res.exit_code}: {detail}")
+        try:
+            tokens = self.extract_usage(res.stdout, res.stderr)
+        except Exception:  # accounting must never break a call
+            tokens = None
         return ProviderResult(
             text=self.parse_output(res.stdout),
             exit_code=res.exit_code,
             duration_sec=res.duration_sec,
             provider=self.name,
+            tokens=tokens,
         )
 
 

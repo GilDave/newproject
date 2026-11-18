@@ -19,6 +19,7 @@ from .jsonutil import extract_json
 from .providers import Provider, ProviderError, ProviderResult, QuotaExhausted, build_providers
 from .runlog import RunLog
 from .schemas import Order, ReviewResult
+from .tokens import estimate_tokens
 from .settings import ROLES, ConfigError, Settings
 from .verifier import VerifyResult, verify
 
@@ -95,7 +96,10 @@ class Orchestrator:
                 role=role,
                 provider=provider.name,
                 duration_sec=res.duration_sec,
+                prompt_chars=len(prompt),
                 output_chars=len(res.text),
+                tokens=res.tokens,  # exact, reported by the CLI (None if it did not report)
+                tokens_est={"in": estimate_tokens(prompt), "out": estimate_tokens(res.text)},
             )
             return res
 
