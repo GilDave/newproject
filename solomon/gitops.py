@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import fnmatch
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from .scope_guard import Change
@@ -12,7 +15,8 @@ class GitError(RuntimeError):
     pass
 
 
-def git(args: list[str], cwd: str | Path, check: bool = True, timeout: float = 120.0) -> subprocess.CompletedProcess:
+def git(args: list[str], cwd: str | Path, check: bool = True, timeout: float = 120.0,
+        env: dict | None = None) -> subprocess.CompletedProcess:
     proc = subprocess.run(
         ["git", "-c", "core.quotepath=false", *args],
         cwd=str(cwd),
@@ -22,6 +26,7 @@ def git(args: list[str], cwd: str | Path, check: bool = True, timeout: float = 1
         errors="replace",
         timeout=timeout,
         shell=False,
+        env=env,
     )
     if check and proc.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
@@ -130,3 +135,36 @@ def full_diff(wt: Path, binary: bool = False) -> str:
 def apply_patch(project: Path, patch_file: Path) -> None:
     git(["apply", "--check", str(patch_file)], project)
     git(["apply", str(patch_file)], project)
+
+
+SECRET_PATTERNS = (".env", ".env.*", "*.pem", "*.key", "*.p12", "id_rsa*", "id_ed25519*", "*.keystore", "credentials*.json", "secrets*.json")
+
+
+def _is_secret(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return any(fnmatch.fnmatch(name, pat) for pat in SECRET_PATTERNS)
+
+
+def snapshot_worktree(project: Path) -> tuple[str, list[str]]:
+    """A commit object holding the project exactly as it is on disk right now (tracked edits and new files that are
+    not git-ignored), built in a temporary index: the user's branch, index and files are not touched.
+    Secret-looking files are left at their committed state (or left out), so they never reach an AI.
+    Returns (commit id, files that differ from HEAD)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        git(["read-tree", "HEAD"], project, env=env)
+        git(["add", "-A"], project, env=env)
+        changed = git(["diff", "--cached", "--name-only", "HEAD"], project, env=env).stdout.splitlines()
+        kept = []
+        for path in changed:
+            if _is_secret(path):
+                if git(["cat-file", "-e", f"HEAD:{path}"], project, check=False).returncode == 0:
+                    git(["reset", "-q", "HEAD", "--", path], project, env=env)
+                else:
+                    git(["rm", "--cached", "-q", "--", path], project, env=env)
+            else:
+                kept.append(path)
+        tree = git(["write-tree"], project, env=env).stdout.strip()
+    commit = git(["-c", "user.name=Solomon", "-c", "user.email=solomon@localhost", "commit-tree", tree, "-p", "HEAD",
+                  "-m", "Solomon snapshot of the working folder"], project).stdout.strip()
+    return commit, kept

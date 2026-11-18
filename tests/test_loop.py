@@ -155,3 +155,42 @@ def test_loop_settings_from_toml(tmp_path):
     f.write_text("[loop]\nstagnation_limit=1\n")
     with pytest.raises(ConfigError):
         load_settings(f)
+
+
+def test_uncommitted_edits_are_included_automatically_and_secrets_are_not(tmp_path):
+    import subprocess
+    repo = make_repo(tmp_path)
+    (repo / "src" / "app.py").write_text("print('edited but not committed')\n")
+    (repo / ".env").write_text("TOKEN=abc\n")
+    (repo / "src" / "fresh.py").write_text("y = 1\n")
+    seen = {}
+
+    def spy(prompt, cwd):
+        seen["app"] = (Path(cwd) / "src" / "app.py").read_text()
+        seen["fresh"] = (Path(cwd) / "src" / "fresh.py").exists()
+        seen["env"] = (Path(cwd) / ".env").exists()
+        return write_file("src/new.py")(prompt, cwd)
+
+    orch, p = three(make_settings(), [order_json(), review_json()], [spy])
+    r = orch.run("goal", repo)
+    assert r.status == "PASSED"
+    assert "edited but not committed" in seen["app"] and seen["fresh"] and not seen["env"]
+    assert any("SNAPSHOT" in w for w in r.warnings)
+    # the user's checkout, index and branch are untouched by the snapshot
+    st = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
+    assert " M src/app.py" in st and "?? src/fresh.py" in st and "A " not in st.replace("?? ", "")
+    assert (repo / "src" / "app.py").read_text() == "print('edited but not committed')\n"
+
+
+def test_snapshot_can_be_turned_off(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "src" / "app.py").write_text("changed\n")
+    seen = {}
+
+    def spy(prompt, cwd):
+        seen["app"] = (Path(cwd) / "src" / "app.py").read_text()
+        return write_file("src/new.py")(prompt, cwd)
+
+    orch, p = three(make_settings(include_uncommitted=False), [order_json(), review_json()], [spy])
+    r = orch.run("goal", repo)
+    assert seen["app"] == "print('hi')\n" and any("NOT part" in w for w in r.warnings)

@@ -159,6 +159,21 @@ def _autofix(args: argparse.Namespace) -> int:
     return {"DONE": 0, "NOTHING": 0, "PARTIAL": 1, "FAILED": 1, "STOPPED": 130}.get(res.status, 2)
 
 
+def _runtests(args: argparse.Namespace) -> int:
+    """Run the project's test command in the working folder (used by the dashboard's test button)."""
+    from .verifier import verify
+
+    settings = load_settings(args.config)
+    if args.test_command:
+        settings.test_command = shlex.split(args.test_command)
+    project = Path(args.project or settings.project_path or ".").expanduser()
+    res = verify(settings, project)
+    print(f"명령: {res.command or '(없음)'}")
+    print(res.output_tail)
+    print("결과: " + ("통과" if res.passed and not res.skipped else "테스트 없음" if res.skipped else f"실패 (종료 코드 {res.exit_code})"))
+    return 0 if res.passed else 1
+
+
 def _status(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     project = Path(args.project or settings.project_path or ".").expanduser().resolve()
@@ -260,6 +275,12 @@ def main(argv: list[str] | None = None) -> int:
     for role in ("planner", "builder", "reviewer", "reviewer2"):
         af.add_argument(f"--{role}")
     af.set_defaults(func=_autofix)
+
+    rt = sub.add_parser("runtests", help="run the project's test command in its working folder")
+    rt.add_argument("--project")
+    rt.add_argument("--config")
+    rt.add_argument("--test-command")
+    rt.set_defaults(func=_runtests)
 
     st = sub.add_parser("status", help="show progress of recent runs (read-only)")
     st.add_argument("--project", help="local path of the project (default: `project` in solomon.toml, else the current folder)")

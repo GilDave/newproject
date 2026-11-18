@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops
+from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import Settings
 from .status import load_runs
@@ -396,24 +396,59 @@ class DashboardApp:
         args += self._role_args(opts.get("roles"))
         return self._spawn("autofix", args, project, f"밤샘 자동 수정 ({sev} 이상 · 최대 {fixes}건)")
 
-    def apply_batch(self, project: str, batch_id: str) -> dict:
+    def _busy_here(self, project: str) -> bool:
+        return bool(self.job and self.job["popen"].poll() is None and self.job.get("project") == project)
+
+    def act(self, project: str, key: str, action: str, message: str = "") -> dict:
         project = self._known(project)
-        if not re.match(r"^\d{8}-\d{6}-[0-9a-f]{4}$", batch_id or ""):
-            raise ApiError(400, "배치 번호가 올바르지 않습니다.")
-        bdir = Path(project) / self.settings.state_dir / "batches" / batch_id
-        patch = bdir / "combined.patch"
-        if not patch.is_file():
-            raise ApiError(404, "적용할 패치가 없습니다 (수정이 통과한 배치에만 만들어집니다).")
-        if (bdir / "applied.json").exists():
-            raise ApiError(409, "이미 적용한 배치입니다.")
-        if self.job and self.job["popen"].poll() is None and self.job.get("project") == project:
-            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝난 뒤 적용하세요.")
         try:
-            gitops.apply_patch(Path(project), patch)
+            return manage.perform(Path(project), self.settings.state_dir, key, action, message, self._busy_here(project))
+        except manage.ManageError as exc:
+            raise ApiError(exc.status, exc.message) from exc
         except gitops.GitError as exc:
-            raise ApiError(409, f"패치를 적용하지 못했습니다 (원본이 그사이 바뀌었을 수 있습니다): {exc}") from exc
-        (bdir / "applied.json").write_text(json.dumps({"applied_at": time.strftime("%Y-%m-%dT%H:%M:%S")}), encoding="utf-8")
-        return {"ok": True, "message": "원본 작업 폴더에 적용했습니다. 커밋은 하지 않았습니다. git diff로 확인하고, 라이브 프로그램이면 테스트 후 반영하세요."}
+            raise ApiError(409, str(exc)) from exc
+
+    def inbox(self, project: str) -> dict:
+        project = self._known(project)
+        if not self.is_git(project):
+            return {"entries": [], "dirty": [], "branch": "", "pending": 0, "not_git": True}
+        try:
+            data = manage.list_inbox(Path(project), self.settings.state_dir)
+        except Exception as exc:
+            raise ApiError(500, f"결과함을 읽지 못했습니다: {type(exc).__name__}: {exc}") from exc
+        cmd, source = self.effective_test_command(project)
+        data["test_command"] = " ".join(cmd) if cmd else ""
+        data["history"] = manage.list_history(Path(project), self.settings.state_dir)
+        return data
+
+    def describe(self, project: str, key: str) -> dict:
+        project = self._known(project)
+        try:
+            return manage.describe(Path(project), self.settings.state_dir, key)
+        except manage.ManageError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        except Exception as exc:  # a broken record must show an error, not drop the connection
+            raise ApiError(500, f"기록을 읽지 못했습니다: {type(exc).__name__}: {exc}") from exc
+
+    def diff(self, project: str, key: str) -> dict:
+        project = self._known(project)
+        try:
+            return manage.read_diff(Path(project), self.settings.state_dir, key)
+        except manage.ManageError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+
+    def start_tests(self, project: str) -> dict:
+        project = self._known(project)
+        cmd, _ = self.effective_test_command(project)
+        if not cmd:
+            raise ApiError(400, "이 프로젝트에는 테스트 명령이 없습니다. 명령 카드의 '프로젝트 설정: 테스트 명령'에서 지정하세요.")
+        args = [sys.executable, "-m", "solomon", "runtests", "--project", project, "--test-command", shlex.join(cmd)]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        return self._spawn("tests", args, project, "작업 폴더 테스트")
+
+    def apply_batch(self, project: str, batch_id: str) -> dict:
+        return self.act(project, f"batch:{batch_id}", "apply")
 
     def _spawn(self, kind: str, args: list[str], project: str, label: str) -> dict:
         with self._lock:
@@ -451,23 +486,7 @@ class DashboardApp:
         return self.job_info()
 
     def apply_run(self, project: str, run_id: str) -> dict:
-        project = self._known(project)
-        if not RUN_ID.match(run_id or ""):
-            raise ApiError(400, "실행 번호가 올바르지 않습니다.")
-        run_dir = Path(project) / self.settings.state_dir / "runs" / run_id
-        patch = run_dir / "result.patch"
-        if not patch.is_file():
-            raise ApiError(404, "이 실행에는 적용할 패치가 없습니다 (PASSED 상태에서만 만들어집니다).")
-        if (run_dir / "applied.json").exists():
-            raise ApiError(409, "이미 적용한 실행입니다.")
-        if self.job and self.job["popen"].poll() is None and self.job.get("project") == project:
-            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝난 뒤 적용하세요.")
-        try:
-            gitops.apply_patch(Path(project), patch)
-        except gitops.GitError as exc:
-            raise ApiError(409, f"패치를 적용하지 못했습니다 (원본이 그사이 바뀌었을 수 있습니다): {exc}") from exc
-        (run_dir / "applied.json").write_text(json.dumps({"applied_at": time.strftime("%Y-%m-%dT%H:%M:%S")}), encoding="utf-8")
-        return {"ok": True, "message": "원본 작업 폴더에 적용했습니다. 커밋은 하지 않았습니다. git diff로 확인하세요."}
+        return self.act(project, f"run:{run_id}", "apply")
 
 
 def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
@@ -515,6 +534,18 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 state = app.build_state((query.get("project") or [None])[0], (query.get("run") or [None])[0],
                                         (query.get("analysis") or [None])[0])
                 return self._json(200, state)
+            if url.path in ("/api/inbox", "/api/diff", "/api/describe"):
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    project = (query.get("project") or [""])[0]
+                    if url.path == "/api/inbox":
+                        return self._json(200, app.inbox(project))
+                    if url.path == "/api/describe":
+                        return self._json(200, app.describe(project, (query.get("key") or [""])[0]))
+                    return self._json(200, app.diff(project, (query.get("key") or [""])[0]))
+                except ApiError as exc:
+                    return self._json(exc.status, {"error": exc.message})
             return self._json(404, {"error": "not found"})
 
         # ---------------------------------------------------------- POST
@@ -548,6 +579,11 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_autofix(str(body.get("project", "")), body)})
                 if path == "/api/apply-batch":
                     return self._json(200, app.apply_batch(str(body.get("project", "")), str(body.get("batch_id", ""))))
+                if path == "/api/inbox/action":
+                    return self._json(200, app.act(str(body.get("project", "")), str(body.get("key", "")),
+                                                   str(body.get("action", "")), str(body.get("message", ""))))
+                if path == "/api/tests":
+                    return self._json(200, {"job": app.start_tests(str(body.get("project", "")))})
                 if path == "/api/stop":
                     return self._json(200, {"job": app.stop_run()})
                 if path == "/api/apply":

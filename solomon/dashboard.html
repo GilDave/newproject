@@ -29,6 +29,24 @@ textarea,input[type=text]{width:100%;background:#08101a;color:var(--text);border
 textarea{min-height:120px;resize:vertical}
 textarea:focus,input:focus{outline:none;border-color:#34507a}
 .roles{display:grid;gap:6px}
+.mg{display:grid;grid-template-columns:minmax(320px,430px) 1fr;gap:16px;padding:16px 24px 24px;align-items:start}
+.ent{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#0a121c}
+.ent.sel{border-color:#34507a;background:#0f1d2e}
+.ent .hd{display:flex;gap:8px;align-items:flex-start;cursor:pointer}
+.ent .ttl{flex:1;font-weight:600}
+.ent .meta{font-size:12px;color:var(--dim);margin-top:4px}
+.ent .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.ent .btns button{padding:5px 11px;font-size:12px}
+.tag.pending{background:#3a2d10;color:#f7d98b}.tag.applied{background:#123469;color:#cfe0ff}.tag.committed{background:#0f3a2b;color:#9df0cf}.tag.discarded{background:#2a2a35;color:#c4c8d6}
+.w5{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.w5 .card{margin:0}
+.w5 .card h2{color:var(--text);font-size:13px;letter-spacing:0}
+.kvr{display:grid;grid-template-columns:92px 1fr;gap:6px;font-size:13px;margin:3px 0;word-break:break-word}
+.kvr b{color:var(--dim);font-weight:600}
+.ln{font-size:12px;color:#b9c6d8;border-left:2px solid var(--line);padding-left:8px;margin:3px 0;word-break:break-word}
+pre.diff{max-height:420px;overflow:auto;background:#08101a;border:1px solid var(--line);border-radius:9px;padding:8px;font:12px/1.5 ui-monospace,Menlo,monospace;margin:8px 0 0}
+pre.diff .a{color:#7ee2b0}pre.diff .d{color:#ff9aa5}pre.diff .h{color:#8fb4ff}
+.hl{font-size:17px;font-weight:700;margin:0 0 10px}
 .chk{display:flex;gap:8px;align-items:flex-start;font-size:12px;margin-top:8px}
 .rr{display:grid;grid-template-columns:44px 1fr;align-items:center}
 .rr small{color:var(--dim);font-size:12px}
@@ -147,7 +165,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
 <body>
 <header>
   <div class="brand">SOLOMON<small>여러 AI가 서로 검증하며 만듭니다</small></div>
-  <nav class="tabs" aria-label="화면 선택"><button id="tab-dash" class="on">대시보드</button><button id="tab-work">작업실</button></nav>
+  <nav class="tabs" aria-label="화면 선택"><button id="tab-dash" class="on">대시보드</button><button id="tab-work">작업실</button><button id="tab-mg">관리 <span id="mgBadge"></span></button></nav>
   <div class="spacer"></div>
   <div><span class="dot" id="dot"></span><span id="conn">연결 중…</span></div>
 </header>
@@ -235,6 +253,19 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
   </section>
 </main>
 
+<main class="mg" id="view-mg" hidden>
+  <section class="col">
+    <div class="card"><h2>작업 폴더</h2>
+      <div id="mgTree" class="hint"></div>
+      <div class="row"><button id="mgTest">작업 폴더 테스트 실행</button></div>
+      <div id="mgJob" class="hint"></div>
+    </div>
+    <div class="card"><h2>결과함 — 적용 · 테스트 · 커밋 · 되돌리기 · 폐기</h2><div id="mgEntries"></div></div>
+    <div class="card"><h2>모든 기록 (번호를 누르면 5W1H)</h2><div class="runs" id="mgHistory"></div></div>
+  </section>
+  <section class="col" id="mgDetail"><div class="card"><div class="hint">왼쪽에서 항목을 고르면 누가·무엇을·언제·어디서·왜·어떻게를 한눈에 봅니다.</div></div></section>
+</main>
+
 <main class="work" id="view-work" hidden>
   <div class="card w-top" id="w-top"></div>
   <div class="w-steps" id="w-steps"></div>
@@ -306,6 +337,7 @@ async function poll(){
 }
 
 function warnKo(x){
+  if (x.indexOf("SNAPSHOT:") >= 0) return "작업 폴더의 커밋 안 된 변경까지 포함해서 작업했습니다 (비밀 파일 제외). 따로 커밋할 필요가 없습니다.";
   if (x.indexOf("uncommitted changes") >= 0) return "작업 폴더에 커밋되지 않은 변경이 있습니다. 격리된 복사본에는 커밋된 내용만 들어가므로 그 변경은 이번 작업에 반영되지 않습니다. 필요하면 먼저 커밋하세요.";
   if (x.indexOf("REDUCED_INDEPENDENCE") >= 0) return "작성과 검수에 같은 AI를 썼습니다 (독립성이 낮습니다).";
   if (x.indexOf("without automatic tests") >= 0 || x.indexOf("UNVERIFIED") >= 0) return "자동 테스트 없이 통과했습니다. 결과가 검증되지 않았습니다.";
@@ -350,8 +382,8 @@ function fillAnalysisChecks(){
 }
 
 function setTab(t){
-  tab = t; $("view-dash").hidden = t !== "dash"; $("view-work").hidden = t !== "work";
-  $("tab-dash").className = t === "dash" ? "on" : ""; $("tab-work").className = t === "work" ? "on" : "";
+  tab = t; $("view-dash").hidden = t !== "dash"; $("view-work").hidden = t !== "work"; $("view-mg").hidden = t !== "mg";
+  $("tab-dash").className = t === "dash" ? "on" : ""; $("tab-work").className = t === "work" ? "on" : ""; $("tab-mg").className = t === "mg" ? "on" : "";
   try { history.replaceState(null, "", t === "work" ? "#work" : location.pathname); } catch (e) {}
   if (state) render();
 }
@@ -411,7 +443,9 @@ $("bf-go").onclick = async () => {
 function render(){
   renderCommand();
   renderBatches();
-  if (tab === "dash") renderDash(); else renderWork();
+  if (tab === "dash") renderDash(); else if (tab === "work") renderWork();
+  renderResultCard();
+  if (tab === "mg") loadInbox();
   tick();
 }
 
@@ -803,6 +837,175 @@ function tick(){
   $("timer").textContent = fmt((cur.elapsed_sec || 0) + extra);
 }
 
+// ------------------------------------------------------------------ 관리 탭: 결과함 · 5W1H
+let inbox = null, mgKey = null, mgDetail = null, mgDiff = null, mgBusy = false, mgLoading = false, mgLast = 0;
+const ST_KO = {pending: "적용 전", applied: "적용됨(미커밋)", committed: "커밋됨", discarded: "폐기됨"};
+const KIND_KO = {run: "개선", batch: "밤샘 수정", item: "수정 항목", analysis: "분석"};
+const W5 = [["who", "누가 · Who"], ["what", "무엇을 · What"], ["when", "언제 · When"], ["where", "어디서 · Where"], ["why", "왜 · Why"], ["how", "어떻게 · How"]];
+
+function mgProject(){ return state && state.project; }
+async function loadInbox(force){
+  const project = mgProject();
+  if (!project || mgLoading || mgBusy) return;
+  if (!force && Date.now() - mgLast < 2500) return;
+  mgLoading = true;
+  try {
+    inbox = await api("/api/inbox?project=" + encodeURIComponent(project));
+    mgLast = Date.now();
+    $("mgBadge").textContent = inbox.pending ? "(" + inbox.pending + ")" : "";
+    renderManage();
+  } catch (e) { toast(e.message, true); }
+  mgLoading = false;
+}
+async function openKey(key){
+  mgKey = key; mgDetail = null; mgDiff = null; renderManage();
+  try { mgDetail = await api("/api/describe?project=" + encodeURIComponent(mgProject()) + "&key=" + encodeURIComponent(key)); } catch (e) { toast(e.message, true); }
+  renderManage();
+}
+async function doAct(key, action, extra){
+  mgBusy = true;
+  try {
+    const r = await api("/api/inbox/action", Object.assign({project: mgProject(), key, action}, extra || {}));
+    toast(r.message); mgBusy = false; mgDiff = null;
+    await loadInbox(true); if (mgKey === key) openKey(key);
+  } catch (e) { toast(e.message, true); mgBusy = false; }
+}
+function defaultMsg(e){
+  if (e.kind === "batch") return "autofix: 밤샘 자동 수정 " + e.id;
+  return (e.kind === "run" ? "" : "") + String(e.title || e.id).split("\n")[0].slice(0, 70);
+}
+function entryButtons(e){
+  const row = el("div", "btns");
+  const add = (label, cls, fn, dis, why) => { const b = el("button", cls || "", label); b.disabled = !!dis; if (why) b.title = why; b.onclick = (ev) => { ev.stopPropagation(); fn(); }; row.appendChild(b); };
+  add("변경 보기", "", async () => { await openKey(e.key); showDiff(e.key); });
+  if (e.state === "pending"){
+    add("적용", "good", () => confirm("작업 폴더에 적용합니다 (커밋은 하지 않습니다). 계속할까요?") && doAct(e.key, "apply"), e.applicable === false, e.reason);
+    add("폐기", "danger", () => confirm("이 항목을 폐기합니다. 원본은 바뀌지 않습니다." + (e.kind === "batch" ? " 수정 브랜치도 삭제됩니다." : "") + " 계속할까요?") && doAct(e.key, "discard"));
+  } else if (e.state === "applied"){
+    add("테스트 실행", "", () => runTests());
+    add("커밋", "good", () => { const m = prompt("커밋 메시지 (이 항목의 파일만 커밋됩니다)", defaultMsg(e)); if (m) doAct(e.key, "commit", {message: m}); });
+    add("되돌리기", "danger", () => confirm("적용을 되돌립니다. 계속할까요?") && doAct(e.key, "revert"), e.revertible === false, e.reason);
+  }
+  return row;
+}
+async function showDiff(key){
+  try { mgDiff = await api("/api/diff?project=" + encodeURIComponent(mgProject()) + "&key=" + encodeURIComponent(key)); } catch (e) { toast(e.message, true); }
+  renderManage();
+}
+async function runTests(){ try { await api("/api/tests", {project: mgProject()}); toast("작업 폴더 테스트를 시작했습니다."); poll(); } catch (e) { toast(e.message, true); } }
+
+function renderEntry(e, parent, nested){
+  const box = el("div", "ent" + (mgKey === e.key ? " sel" : ""));
+  const hd = el("div", "hd");
+  hd.appendChild(el("span", "tag " + (e.state || "pending"), ST_KO[e.state] || e.state || ""));
+  const t = el("div", "ttl", (KIND_KO[e.kind] || e.kind) + " · " + clip(e.title, 90)); hd.appendChild(t);
+  if (e.key) hd.onclick = () => openKey(e.key);
+  box.appendChild(hd);
+  const meta = [];
+  if (e.when) meta.push(e.when);
+  if (e.files) meta.push("파일 " + e.files.length + "개 (+" + e.added + " −" + e.removed + ")");
+  if (e.commit) meta.push("커밋 " + e.commit);
+  if (e.attempts) meta.push("시도 " + e.attempts + "번");
+  box.appendChild(el("div", "meta", meta.join(" · ")));
+  if (e.note) box.appendChild(el("div", "meta", e.note));
+  if (e.state === "pending" && e.applicable === false && e.reason) box.appendChild(el("div", "meta", "⚠ 지금은 적용할 수 없습니다: " + e.reason));
+  if (e.overlap && e.overlap.length && e.state === "pending") box.appendChild(el("div", "meta", "⚠ 작업 폴더에서 이미 바뀐 파일과 겹침: " + e.overlap.slice(0, 4).join(", ")));
+  if (e.key && e.kind !== "analysis") box.appendChild(entryButtons(e));
+  if (e.items){
+    const sub = el("div"); sub.style.marginTop = "8px";
+    e.items.forEach(it => {
+      const row = it.key && it.files ? it : null;
+      const r = el("div", "ent"); r.style.marginBottom = "6px";
+      const h = el("div", "hd");
+      h.appendChild(el("span", "tag " + (it.state || (it.status === "PASSED" ? "pending" : it.status)), it.state ? (ST_KO[it.state] || it.state) : (STATUS_KO[it.status] || it.status)));
+      h.appendChild(el("div", "ttl", clip(it.title, 80)));
+      if (it.key) h.onclick = () => openKey(it.key);
+      r.appendChild(h);
+      r.appendChild(el("div", "meta", [it.severity, it.file, it.commit && ("커밋 " + it.commit), it.attempts && ("시도 " + it.attempts + "번")].filter(Boolean).join(" · ") + (it.status !== "PASSED" && it.summary ? " — " + clip(String(it.summary).split("\n")[0], 90) : "")));
+      if (it.key && it.state && it.files) r.appendChild(entryButtons(Object.assign({kind: "item", id: e.id}, it)));
+      sub.appendChild(r);
+    });
+    box.appendChild(sub);
+  }
+  parent.appendChild(box);
+}
+
+function renderManage(){
+  if (!inbox) return;
+  const tree = $("mgTree"); clear(tree);
+  if (inbox.not_git){ tree.textContent = "git 저장소가 아니어서 적용·커밋 관리를 할 수 없습니다 (분석 결과 보기는 가능)."; }
+  else {
+    tree.appendChild(el("div", "", "브랜치 " + inbox.branch + " · 변경된 파일 " + inbox.dirty.length + "개" + (inbox.dirty.length ? "" : " (깨끗함)")));
+    if (inbox.dirty.length) { const d = el("div", "hint", inbox.dirty.slice(0, 12).join(", ") + (inbox.dirty.length > 12 ? " …" : "")); tree.appendChild(d); }
+    tree.appendChild(el("div", "hint", "테스트 명령: " + (inbox.test_command || "없음")));
+  }
+  $("mgTest").disabled = !inbox.test_command || (state.job.state === "running");
+  const job = $("mgJob"); clear(job);
+  if (state.job.kind === "tests"){ job.appendChild(el("div", "", state.job.state === "running" ? "🔄 테스트 실행 중…" : "테스트 끝 (종료 코드 " + state.job.exit_code + ")")); if (state.job.log_tail){ const p = el("pre", "diff"); p.textContent = state.job.log_tail; job.appendChild(p); } }
+  const box = $("mgEntries"); clear(box);
+  const open = inbox.entries.filter(e => e.state === "pending" || e.state === "applied");
+  const done = inbox.entries.filter(e => !(e.state === "pending" || e.state === "applied"));
+  if (!inbox.entries.length) box.appendChild(el("div", "hint", "아직 적용할 결과가 없습니다. 개선 실행이 통과하거나 밤샘 수정이 끝나면 여기에 나타납니다."));
+  open.forEach(e => renderEntry(e, box));
+  if (done.length){ const d = el("details"); d.appendChild(el("summary", "", "처리 완료 " + done.length + "건 (커밋·폐기)")); done.forEach(e => renderEntry(e, d)); box.appendChild(d); }
+  const hist = $("mgHistory"); clear(hist);
+  (inbox.history || []).forEach(h => { const b = el("button", mgKey === h.key ? "sel" : ""); b.appendChild(el("span", "tag " + (h.status === "PASSED" || h.status === "DONE" ? "PASSED" : h.status), h.status_ko || h.status)); b.appendChild(document.createTextNode((KIND_KO[h.kind] || h.kind) + " · " + clip(h.title, 50) + " ")); b.appendChild(el("small", "", h.when)); b.onclick = () => openKey(h.key); hist.appendChild(b); });
+  renderDetail();
+}
+
+function renderDetail(){
+  const box = $("mgDetail"); clear(box);
+  if (!mgKey){ const c = el("div", "card"); c.appendChild(el("div", "hint", "왼쪽에서 항목을 고르면 누가·무엇을·언제·어디서·왜·어떻게를 한눈에 봅니다.")); box.appendChild(c); return; }
+  if (!mgDetail){ const c = el("div", "card"); c.appendChild(el("div", "hint", "불러오는 중…")); box.appendChild(c); return; }
+  const head = el("div", "card");
+  head.appendChild(el("div", "hl", mgDetail.headline));
+  head.appendChild(el("div", "hint", (KIND_KO[mgDetail.kind] || mgDetail.kind) + " 번호 " + mgDetail.id));
+  const ent = inbox && inbox.entries.find(e => e.key === mgKey);
+  if (ent && ent.kind !== "analysis") head.appendChild(entryButtons(ent));
+  box.appendChild(head);
+  const grid = el("div", "w5");
+  W5.forEach(([k, label]) => {
+    const sec = mgDetail.sections[k]; const c = el("div", "card");
+    c.appendChild(el("h2", "", label));
+    sec.rows.forEach(([a, b]) => { const r = el("div", "kvr"); r.appendChild(el("b", "", a)); r.appendChild(el("span", "", String(b))); c.appendChild(r); });
+    sec.lines.forEach(l => c.appendChild(el("div", "ln", String(l))));
+    if (!sec.rows.length && !sec.lines.length) c.appendChild(el("div", "hint", "기록 없음"));
+    grid.appendChild(c);
+  });
+  box.appendChild(grid);
+  if (mgDiff && mgDiff.key === mgKey){
+    const c = el("div", "card"); c.appendChild(el("h2", "", "변경 내용 (" + mgDiff.files.length + "개 파일)"));
+    const pre = el("pre", "diff");
+    mgDiff.text.split("\n").forEach(line => { const sp = el("span", line.startsWith("+") && !line.startsWith("+++") ? "a" : line.startsWith("-") && !line.startsWith("---") ? "d" : line.startsWith("@@") || line.startsWith("diff ") ? "h" : "", line + "\n"); pre.appendChild(sp); });
+    c.appendChild(pre); if (mgDiff.truncated) c.appendChild(el("div", "hint", "너무 길어 앞부분만 보여줍니다."));
+    box.appendChild(c);
+  }
+}
+
+// 대시보드의 '결과' 카드: 줄글 대신 구조화된 요약 + 관리 탭 바로가기
+let resCache = {};
+async function renderResultCard(){
+  const cur = state && state.current;
+  const box = $("summary");
+  if (tab !== "dash" || mode === "analyze" || !cur || !cur.finished || !state.project) return;
+  const key = "run:" + cur.run_id;
+  let d = resCache[key];
+  if (!d){
+    resCache[key] = "loading";
+    try { resCache[key] = await api("/api/describe?project=" + encodeURIComponent(state.project) + "&key=" + encodeURIComponent(key)); render(); } catch (e) { delete resCache[key]; }
+    return;
+  }
+  if (d === "loading") return;
+  clear(box);
+  box.appendChild(el("div", "hl", d.headline));
+  [["what", ["바뀐 파일", "결과"]], ["how", ["시도 횟수", "테스트", "토큰"]], ["when", ["걸린 시간"]]].forEach(([k, labels]) => {
+    d.sections[k].rows.filter(r => labels.includes(r[0])).forEach(([a, b]) => { const r = el("div", "kvr"); r.appendChild(el("b", "", a)); r.appendChild(el("span", "", clip(b, 160))); box.appendChild(r); });
+  });
+  const go = el("div", "row"), b = el("button", "good", "5W1H 자세히 · 적용 · 커밋 (관리 탭)");
+  b.onclick = () => { setTab("mg"); loadInbox(true); openKey(key); };
+  go.appendChild(b); box.appendChild(go);
+}
+
 // ------------------------------------------------------------------ actions
 $("run").onclick = async () => {
   const goal = $("goal").value.trim(), project = $("project").value.trim(), isAn = mode === "analyze";
@@ -841,6 +1044,7 @@ $("savetest").onclick = async () => {
 };
 ["r-planner", "r-builder", "r-reviewer", "r-reviewer2"].forEach(id => $(id).addEventListener("change", () => { rolesDirty = true; if (state) render(); }));
 $("project").addEventListener("change", () => { const v = $("project").value.trim(); if (state && state.projects.includes(v)){ selectedProject = v; selectedRun = null; selectedAnalysis = null; poll(); } });
+$("tab-mg").onclick = () => { setTab("mg"); loadInbox(true); };
 $("tab-dash").onclick = () => setTab("dash"); $("tab-work").onclick = () => setTab("work");
 $("m-run").onclick = () => setMode("run"); $("m-an").onclick = () => setMode("analyze");
 

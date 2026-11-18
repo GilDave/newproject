@@ -215,8 +215,15 @@ class Orchestrator:
         )
         if self.reduced_independence:
             result.warnings.append("REDUCED_INDEPENDENCE: builder and reviewer use the same provider")
-        if gitops.is_dirty(project):
-            result.warnings.append("project has uncommitted changes; they are NOT part of the isolated worktree")
+        if base_ref == "HEAD" and gitops.is_dirty(project):
+            if self.s.include_uncommitted:
+                try:
+                    base_ref, changed = gitops.snapshot_worktree(project)
+                    result.warnings.append(f"SNAPSHOT: worked on the folder as it is on disk, including {len(changed)} uncommitted file(s)")
+                except gitops.GitError as exc:
+                    result.warnings.append(f"project has uncommitted changes; snapshot failed ({exc}), using the committed state")
+            else:
+                result.warnings.append("project has uncommitted changes; they are NOT part of the isolated worktree")
         log.event("run_start", goal=goal, roles=self.s.roles, warnings=result.warnings)
 
         wt = state / "worktrees" / run_id

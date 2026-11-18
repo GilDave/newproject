@@ -41,6 +41,7 @@ class Settings:
     stagnation_limit: int = 3  # this many IDENTICAL failures in a row = the approach is stuck: restart from clean
     max_restarts: int = 2  # clean restarts allowed before giving up as "no progress"
     double_check_tests: bool = True  # run the tests a second time before declaring a pass (catches flaky passes)
+    include_uncommitted: bool = True  # work on the folder as it is on disk (uncommitted edits included), not only on HEAD
     baseline_check: bool = True  # run the tests on the untouched code first: a broken test setup must not burn tokens
     on_quota: str = "stop"  # "stop" ends the run; "wait" sleeps and retries the same call
     quota_wait_sec: float = 900.0
@@ -110,6 +111,7 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
     s.max_restarts = int(loop.get("max_restarts", s.max_restarts))
     s.double_check_tests = bool(loop.get("double_check_tests", s.double_check_tests))
     s.baseline_check = bool(loop.get("baseline_check", s.baseline_check))
+    s.include_uncommitted = bool(loop.get("include_uncommitted", s.include_uncommitted))
     s.on_quota = str(loop.get("on_quota", s.on_quota))
     s.quota_wait_sec = float(loop.get("quota_wait_sec", s.quota_wait_sec))
     s.quota_max_waits = int(loop.get("quota_max_waits", s.quota_max_waits))

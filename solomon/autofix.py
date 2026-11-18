@@ -145,7 +145,7 @@ def run_autofix(
 
     def log(kind: str, **fields) -> None:
         with events.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"ts": clock(), "event": kind, **fields}, ensure_ascii=False) + "\n")
+            fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(clock())), "event": kind, **fields}, ensure_ascii=False) + "\n")
 
     log("batch_start", analysis=analysis.get("analysis_id"), items=[dataclasses.asdict(i) for i in result.items],
         branch=branch, budget_minutes=budget_minutes)
