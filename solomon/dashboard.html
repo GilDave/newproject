@@ -163,8 +163,8 @@ function clear(n){ while (n.firstChild) n.removeChild(n.firstChild); }
 
 const ROLE_KO = {planner:"계획", builder:"구현", reviewer:"검수"};
 const ROLE_LABEL = {planner:"PLANNER · 계획", builder:"BUILDER · 구현", reviewer:"REVIEWER · 검수"};
-const NAMES = {claude:"Claude", codex:"Codex", gemini:"Gemini"};
-const COLORS = {claude:"var(--claude)", codex:"var(--codex)", gemini:"var(--gemini)"};
+const NAMES = {claude:"Claude", codex:"Codex", antigravity:"Antigravity", gemini:"Gemini"};
+const COLORS = {claude:"var(--claude)", codex:"var(--codex)", antigravity:"var(--gemini)", gemini:"var(--gemini)"};
 const STAGES = [["plan","계획"],["build","구현"],["scope","범위"],["test","테스트"],["review","검수"],["decide","판정"]];
 const STATUS_KO = {PASSED:"통과", FAILED:"실패", BLOCKED_QUOTA:"한도 소진", STOPPED:"중지됨", ERROR:"오류"};
 const pname = (p) => NAMES[p] || p;

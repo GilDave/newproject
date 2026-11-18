@@ -60,6 +60,10 @@ class Orchestrator:
             name = settings.roles[role]
             if name not in self.providers:
                 raise ConfigError(f"role '{role}' uses unknown provider '{name}' (known: {sorted(self.providers)})")
+        if not getattr(self.providers[settings.roles["builder"]], "supports_write", True):
+            raise ConfigError(
+                f"'{settings.roles['builder']}' cannot be the builder (it is limited to read-only roles: planner, reviewer)"
+            )
         self.reduced_independence = settings.roles["builder"] == settings.roles["reviewer"]
         if self.reduced_independence and not settings.allow_same_provider:
             raise ConfigError(

@@ -33,12 +33,11 @@ CONFIGS: dict[str, dict] = {
     "claude_build_codex_review": {"roles": {"planner": "codex", "builder": "claude", "reviewer": "codex"}, "same": False},
 }
 
-# Extra configurations with Gemini; run them by name with --configs (they are not part of the default G2 set).
+# Extra configurations with Antigravity (planner and reviewer only); run them by name with --configs.
 CONFIGS.update({
-    "gemini_solo": {"roles": {"planner": "gemini", "builder": "gemini", "reviewer": "gemini"}, "same": True},
-    "codex_build_gemini_review": {"roles": {"planner": "gemini", "builder": "codex", "reviewer": "gemini"}, "same": False},
-    "claude_build_gemini_review": {"roles": {"planner": "gemini", "builder": "claude", "reviewer": "gemini"}, "same": False},
-    "gemini_build_claude_review": {"roles": {"planner": "claude", "builder": "gemini", "reviewer": "claude"}, "same": False},
+    "codex_build_antigravity_review": {"roles": {"planner": "antigravity", "builder": "codex", "reviewer": "antigravity"}, "same": False},
+    "claude_build_antigravity_review": {"roles": {"planner": "antigravity", "builder": "claude", "reviewer": "antigravity"}, "same": False},
+    "codex_build_antigravity_review_claude_plan": {"roles": {"planner": "claude", "builder": "codex", "reviewer": "antigravity"}, "same": False},
 })
 DEFAULT_CONFIGS = ["codex_solo", "claude_solo", "codex_build_claude_review", "claude_build_codex_review"]
 

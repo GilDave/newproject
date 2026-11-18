@@ -64,6 +64,7 @@ def looks_like_quota(text: str) -> bool:
 
 class Provider(abc.ABC):
     name: str
+    supports_write = True  # False for providers limited to read-only roles (planner, reviewer)
 
     @abc.abstractmethod
     def run(
@@ -88,6 +89,10 @@ class CliProvider(Provider):
 
     def parse_output(self, stdout: str) -> str:
         return stdout
+
+    def prepare_stdin(self, prompt: str) -> str:
+        """What is written to the CLI's stdin. Most CLIs take the prompt as is."""
+        return prompt
 
     def extract_usage(self, stdout: str, stderr: str) -> Optional[dict]:
         """Token counts the CLI reported (exact), or None. Subclasses override."""
@@ -115,7 +120,7 @@ class CliProvider(Provider):
                 env=sanitized_env(),
                 timeout=timeout,
                 no_output_timeout=no_output_timeout,
-                stdin_data=prompt,
+                stdin_data=self.prepare_stdin(prompt),
             )
         except OSError as exc:
             raise ProviderUnavailable(f"could not start {self.cli_name}: {exc}") from exc

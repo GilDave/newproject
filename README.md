@@ -89,21 +89,20 @@ solomon bench report --out bench_results             # 구성별 비교표
 - worktree는 커밋된 HEAD 기준이라, 작업 폴더의 미커밋 변경은 포함되지 않습니다 (경고 표시).
 - 웹 대시보드, 미션, 토론 모드, Gemini는 MVP 범위 밖입니다.
 
-## Gemini
-`gemini`(Google Gemini CLI)가 세 번째 공급자로 등록돼 있습니다. 설치 후 **구독/계정 로그인**(Google 계정)으로 한 번 직접 실행해 로그인해 두세요.
-`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`는 실행 전에 환경에서 제거되므로 API 과금으로는 돌지 않습니다.
-```toml
-# solomon.toml: 예) 검수를 Gemini에게
-[roles]
-planner  = "claude"
-builder  = "codex"
-reviewer = "gemini"
+## Google AI: Antigravity (`agy`)
+개인 계정용 **Gemini CLI의 Google 로그인은 지원이 끝났습니다**(로그인 시 "Antigravity로 옮기라"는 안내가 나옴). 구독으로 Google AI를 쓰는 경로는 **Antigravity CLI(`agy`)** 입니다.
+설치와 로그인은 [antigravity.google](https://antigravity.google)의 안내를 따르고, **로그인 방식은 계정 로그인**을 고르세요. API 키·Vertex AI 항목은 사용량만큼 과금됩니다. `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_USE_VERTEXAI`는 실행 전에 환경에서 제거됩니다.
 
-[extra_args]
-gemini = ["-m", "gemini-2.5-pro"]   # 모델 지정이 필요하면
+```toml
+# solomon.toml: 예) 계획과 검수를 Antigravity에게, 구현은 Codex에게
+[roles]
+planner  = "antigravity"
+builder  = "codex"
+reviewer = "antigravity"
 ```
-**주의:** Gemini 어댑터의 옵션(`--output-format json`, `-p`, `--approval-mode auto_edit`)은 문서상의 형태를 기준으로 만들었고 **실제 Gemini CLI로는 아직 실행해 보지 않았습니다.** `solomon doctor`와 `gemini --help`로 확인하고, 다르면 `providers/gemini.py`의 `build_argv`를 고치세요. 토큰 값을 못 읽으면 `~` 추정으로 표시됩니다.
-Gemini 구성의 비교 실험은 `solomon bench run --configs gemini_solo,codex_build_gemini_review,gemini_build_claude_review`처럼 이름으로 고릅니다(기본 4구성에는 포함되지 않음).
+- **지금은 계획·검수만** 맡습니다. 빈 임시 폴더에서 도구 없이 프롬프트에 담긴 근거만으로 판단하므로 안전합니다. **구현(builder) 역할로 지정하면 시작을 거부합니다.** 파일 쓰기 범위를 강제하는 장치(레퍼런스는 권한 규칙과 훅을 설치)가 아직 없기 때문입니다.
+- 호출 방식(`--input-format stream-json --output-format stream-json --sandbox`)은 레퍼런스가 쓰는 형태를 따랐지만 **이 프로젝트에서 실제 `agy`로는 아직 실행해 보지 않았습니다.** `agy --help`와 `solomon doctor`로 확인하세요.
+- 비교 실험: `solomon bench run --configs codex_build_antigravity_review,claude_build_antigravity_review` (기본 4구성에는 포함되지 않음).
 
 다른 AI를 더 붙이려면 `providers/<이름>.py`에 `CliProvider` 하위 클래스를 만들고 `providers/__init__.py`의 `PROVIDER_CLASSES`에 한 줄 추가합니다.
 

@@ -44,12 +44,17 @@ def _posix_candidates(name: str) -> list[Path]:
     return [d / name for d in dirs]
 
 
+def _extra_candidates(name: str) -> list[Path]:
+    home = Path.home()
+    return {"agy": [home / ".agy" / "bin" / "agy"]}.get(name, [])
+
+
 def resolve_cli(name: str) -> Optional[str]:
     """Find an installed CLI on PATH or in the usual macOS/Linux install folders."""
     found = shutil.which(name)
     if found:
         return str(Path(found).resolve())
-    for cand in _posix_candidates(name):
+    for cand in _posix_candidates(name) + _extra_candidates(name):
         try:
             if cand.is_file() and os.access(cand, os.X_OK):
                 return str(cand.resolve())
