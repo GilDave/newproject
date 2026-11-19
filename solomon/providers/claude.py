@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..tokens import claude_usage
 from .base import CliProvider, ProviderError, ProviderResult, QuotaExhausted, looks_like_quota, parse_json_envelope
 
@@ -28,13 +30,20 @@ class ClaudeProvider(CliProvider):
         # the builder to file tools. Off by default until its saving is measured on your machine.
         self.write_args = list(write_args or [])
 
+    image_capable = True  # reads image files with its Read tool (verified per machine by `solomon vision-probe`)
+
     def build_argv(self, exe: str, write: bool) -> list[str]:
         argv = [exe, "--print", "--output-format", "json"]
+        imgs = [] if write else list(getattr(self, "_images", []) or [])
+        if imgs:  # a review that must look at pictures: the Read tool only, and only the folders that hold them
+            dirs = list(dict.fromkeys(str(Path(i).resolve().parent) for i in imgs))
+            argv += ["--tools", "Read", "--strict-mcp-config"] + [a for d in dirs for a in ("--add-dir", d)]
+            return argv + self.extra_args
         argv += ["--permission-mode", "acceptEdits", *self.write_args] if write else self.readonly_args
         return argv + self.extra_args
 
-    def run(self, prompt, cwd, write, timeout, no_output_timeout=None) -> ProviderResult:
-        return super().run(prompt, cwd, write, max(timeout, MIN_WRITE_TIMEOUT) if write else timeout, no_output_timeout=None)
+    def run(self, prompt, cwd, write, timeout, no_output_timeout=None, images=None) -> ProviderResult:
+        return super().run(prompt, cwd, write, max(timeout, MIN_WRITE_TIMEOUT) if write else timeout, no_output_timeout=None, images=images)
 
     def parse_output(self, stdout: str) -> str:
         envelope = parse_json_envelope(stdout)

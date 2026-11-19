@@ -18,8 +18,8 @@ class ScriptedProvider(Provider):
         self.steps = list(steps)
         self.calls: list[dict] = []
 
-    def run(self, prompt, cwd, write, timeout, no_output_timeout=None):
-        self.calls.append({"prompt": prompt, "cwd": cwd, "write": write})
+    def run(self, prompt, cwd, write, timeout, no_output_timeout=None, images=None):
+        self.calls.append({"prompt": prompt, "cwd": cwd, "write": write, "images": images})
         if not self.steps:
             raise AssertionError(f"{self.name}: no scripted step left for call #{len(self.calls)}")
         step = self.steps.pop(0)

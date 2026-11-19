@@ -89,6 +89,22 @@ def _doctor(args: argparse.Namespace) -> int:
     return 0 if not errors else 2
 
 
+def _vision_probe(args: argparse.Namespace) -> int:
+    """Which installed AIs can really look at a picture? A test image is shown and the colours it contains are asked for."""
+    from . import vision
+    from .providers import build_providers
+
+    settings = load_settings(args.config)
+    provs = build_providers(settings)
+    names = [n for n, p in provs.items() if getattr(p, "image_capable", False)]
+    print("이미지 입력이 연결된 AI:", ", ".join(names) or "없음")
+    out = vision.probe(provs, names)
+    for n, r in out.items():
+        print(f"[{'ok' if r['ok'] else '실패'}] {n}" + ("" if r["ok"] else f": {r['error']}"))
+    print("통과한 AI만 화면 캡처 관문에서 이미지를 보고 검수합니다. 결과는 ~/.solomon/vision.json 에 저장했습니다.")
+    return 0 if any(r["ok"] for r in out.values()) else 1
+
+
 def _ollama(args: argparse.Namespace) -> int:
     """Check the local Ollama connection with a small decision-style question: reachable? valid JSON? how fast?"""
     import json
@@ -452,6 +468,10 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("--bars", type=int, default=10, help="holding period in candles for the counterfactual (default 10)")
     sh.add_argument("--fee", type=float, default=0.0008, help="round-trip cost subtracted from each counterfactual return (default 0.0008)")
     sh.set_defaults(func=_shadow)
+
+    vp = sub.add_parser("vision-probe", help="test which AIs can really look at an image (needed for the screen-capture gate)")
+    vp.add_argument("--config", help="path to solomon.toml")
+    vp.set_defaults(func=_vision_probe)
 
     stt = sub.add_parser("selftest", help="check the installation end to end with fake AIs (no subscription use, no tokens)")
     stt.set_defaults(func=_selftest)

@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import arbiter as arbiter_mod, context, gitops, policy as policy_mod, prompts, scope_guard
+from . import arbiter as arbiter_mod, context, gitops, policy as policy_mod, prompts, scope_guard, vision as vision_mod, visual as visual_mod
 from .jsonutil import extract_json
 from .providers import Provider, ProviderError, ProviderResult, QuotaExhausted, build_providers
 from .runlog import RunLog
@@ -50,7 +50,8 @@ class RunResult:
     reduced_independence: bool = False
     warnings: list[str] = field(default_factory=list)
     arbiter: Optional[dict] = None  # the decision-maker's answer on the accepted result (decision, final, confidence, reason)
-    needs_human: bool = False  # the arbiter asked a person to look before this is applied
+    needs_human: bool = False  # the arbiter (or the visual gate) asked a person to look before this is applied
+    visual: Optional[dict] = None  # the screen-capture gate: pictures taken, who looked at them
 
 
 class Orchestrator:
@@ -93,18 +94,20 @@ class Orchestrator:
         return [x for x in pool if self._can_write(x[1])], [x for x in pool if not self._can_write(x[1])]
 
     # ------------------------------------------------------------------ calls
-    def _call(self, role: str, prompt: str, cwd: Path, write: bool, log: RunLog) -> ProviderResult:
+    def _call(self, role: str, prompt: str, cwd: Path, write: bool, log: RunLog, images: Optional[list[str]] = None) -> ProviderResult:
         provider = self.providers[self.s.roles[role]]
         waits = 0
         while True:
             log.event("call_start", role=role, provider=provider.name, write=write, prompt_chars=len(prompt))
             try:
+                extra = {"images": images} if images else {}
                 res = provider.run(
                     prompt,
                     cwd=str(cwd),
                     write=write,
                     timeout=self.s.timeouts.get(role, self.s.timeouts["reviewer"]),
                     no_output_timeout=self.s.timeouts["no_output"],
+                    **extra,
                 )
             except QuotaExhausted as exc:
                 log.event("quota", role=role, provider=provider.name, detail=str(exc), waits=waits)
@@ -184,6 +187,7 @@ class Orchestrator:
                 continue
             order = self._plan_review(goal, order, project, log)
             pol = policy_mod.load(project, self.s.state_dir)
+            self._policy = pol
             if pol["protect"]:  # the project's own protected paths: no plan may drop them
                 order.protected_paths = list(dict.fromkeys(order.protected_paths + pol["protect"]))
             if pol["shadow"]:
@@ -193,8 +197,12 @@ class Orchestrator:
         raise PlanError(f"planner did not produce a valid ORDER: {error}")
 
     # ----------------------------------------------------------------- review
+    def _can_see(self, name: str) -> bool:
+        prov = self.providers.get(name)
+        return bool(prov is not None and getattr(prov, "image_capable", False) and vision_mod.verified(name, prov))
+
     def _review_role(self, role: str, order: Order, wt: Path, verification: VerifyResult, warnings: list[str],
-                     log: RunLog, attempt: int) -> ReviewResult:
+                     log: RunLog, attempt: int, visual: Optional["visual_mod.VisualResult"] = None) -> ReviewResult:
         """One reviewer's verdict. No verdict (timeout, crash, garbage) is asked again about the SAME code."""
         summary = (
             "tests skipped (UNVERIFIED)"
@@ -202,12 +210,20 @@ class Orchestrator:
             else f"command: {verification.command}\nexit code: {verification.exit_code}\n{verification.output_tail[-1500:]}"
         )
         prompt = prompts.reviewer(order, gitops.full_diff(wt), summary, warnings)
+        images: Optional[list[str]] = None
+        if visual and visual.ok and visual.shots:
+            if self._can_see(self.s.roles[role]):
+                images = [str(p.resolve()) for p in visual.shots]
+                prompt += prompts.visual_note(images, can_see=True)
+                self._visual_seers.append(self.s.roles[role])
+            else:
+                prompt += prompts.visual_note([], can_see=False)
         last = ReviewResult("FAIL", ["no verdict"], error=True)
         for retry in range(1 + REVIEW_RETRIES):
             if retry:
                 log.event("review_retry", attempt=attempt, role=role, retry=retry, reason=last.issues[0] if last.issues else "")
             try:
-                res = self._call(role, prompt, wt, False, log)
+                res = self._call(role, prompt, wt, False, log, images=images)
             except BlockedByQuota:
                 raise
             except ProviderError as exc:
@@ -220,12 +236,13 @@ class Orchestrator:
         return last
 
     def _review(self, order: Order, wt: Path, verification: VerifyResult, warnings: list[str], log: RunLog,
-                attempt: int = 0, builder_name: Optional[str] = None) -> ReviewResult:
+                attempt: int = 0, builder_name: Optional[str] = None, visual: Optional["visual_mod.VisualResult"] = None) -> ReviewResult:
         """Cross-check: the reviewer, and the second reviewer when configured. Every reviewer must say PASS.
         The second one is only asked about code the first already accepted (time is money)."""
         agg = ReviewResult("PASS", [], "")
         builder_name = builder_name or self.s.roles["builder"]
         self._last_reviews = []
+        self._visual_seers = []
         roles = [r for r in ("reviewer", "reviewer2", "reviewer3") if self.s.roles.get(r)]
         if not self.s.allow_same_provider:
             skipped = [r for r in roles if self.s.roles[r] == builder_name]
@@ -236,8 +253,8 @@ class Orchestrator:
                 return ReviewResult("FAIL", [f"no reviewer is independent of the builder ({builder_name})"], error=True)
         for role in roles:
             who = self.s.roles[role]
-            one = self._review_role(role, order, wt, verification, warnings, log, attempt)
-            log.event("review_role", role=role, provider=who, verdict=one.verdict, error=one.error, issues=one.issues)
+            one = self._review_role(role, order, wt, verification, warnings, log, attempt, visual)
+            log.event("review_role", role=role, provider=who, verdict=one.verdict, error=one.error, issues=one.issues, saw_images=who in self._visual_seers)
             self._last_reviews.append({"role": role, "provider": who, "verdict": one.verdict, "issues": list(one.issues)})
             if one.error:
                 return ReviewResult("FAIL", [f"[{who}] {i}" for i in one.issues], error=True)
@@ -340,6 +357,16 @@ class Orchestrator:
                 dec = arbiter_mod.apply_policy(dec, self.s.arbiter_min_confidence, rejects, self.s.arbiter_max_rejects, risky)
         log.event("arbiter", attempt=attempt, provider=name, **dec.to_dict(), risky=risky)
         return dec
+
+    def _visual_gate(self, wt: Path, run_dir: Path, attempt: int, verification: VerifyResult, log: RunLog) -> Optional["visual_mod.VisualResult"]:
+        """Screenshots of the candidate, when the project defines a capture command and the tests passed (no point photographing a failure)."""
+        cfg = (getattr(self, "_policy", None) or {}).get("visual")
+        if not cfg or not verification.passed:
+            return None
+        res = visual_mod.run_capture(cfg, wt, run_dir / "shots" / f"attempt-{attempt}")
+        gitops.clean_untracked(wt)
+        log.event("visual", attempt=attempt, ok=res.ok, broken=res.broken, infra=res.infra, shots=[p.name for p in res.shots])
+        return res
 
     def _shadow_judge(self, order: Order, wt: Path, changes: list, verification: VerifyResult, double_passed: Optional[bool],
                       history: list[str], attempt: int, builder_name: str, log: RunLog) -> None:
@@ -494,7 +521,12 @@ class Orchestrator:
             log.event("verify", passed=verification.passed, skipped=verification.skipped, exit_code=verification.exit_code,
                       command=verification.command, output_tail=verification.output_tail[-1500:])
             warnings = ["tests were not run: result is UNVERIFIED"] if verification.skipped else []
-            review = self._review(order, wt, verification, warnings, log, attempt, bname)
+            visual = self._visual_gate(wt, run_dir, attempt, verification, log)
+            if visual and visual.broken:  # the product does not even render: no reviewer needs to be asked
+                self._last_reviews, self._visual_seers = [], []
+                review = ReviewResult("FAIL", ["Screen capture: the page did not render properly: " + visual.broken])
+            else:
+                review = self._review(order, wt, verification, warnings, log, attempt, bname, visual)
             if review.error:
                 (run_dir / "last_attempt.patch").write_text(gitops.full_diff(wt, binary=True), encoding="utf-8")
                 result.status = "ERROR"
@@ -536,6 +568,15 @@ class Orchestrator:
                         result.warnings.append(f"ARBITER_NEEDS_HUMAN: {decision.note or decision.reason}")
                 if verification.skipped:
                     result.warnings.append("no test command configured: passed without automatic tests")
+                if visual:
+                    rel = [str(p.relative_to(run_dir)) for p in visual.shots]
+                    result.visual = {"attempt": attempt, "shots": rel, "viewed_by": sorted(set(self._visual_seers)), "infra": visual.infra}
+                    if visual.infra:
+                        result.needs_human = True
+                        result.warnings.append(f"VISUAL_SKIPPED: 화면 캡처를 하지 못했습니다 — 사람이 직접 화면을 확인하세요 ({visual.infra})")
+                    elif not self._visual_seers:
+                        result.needs_human = True
+                        result.warnings.append("VISUAL_UNVIEWED: 화면은 찍혔지만 이미지를 볼 수 있는 검수 AI가 없었습니다 (시험을 통과한 AI만 봅니다) — 사람이 직접 화면을 확인하세요")
                 return
 
             problems = []

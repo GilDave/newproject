@@ -149,8 +149,8 @@ def test_policy_roundtrip_and_bad_patterns(tmp_path):
     with pytest.raises(ValueError):
         policy.save(tmp_path, ".solomon", ["/etc/passwd"], False)
     policy.save(tmp_path, ".solomon", ["data/", "data/", ".env"], True)
-    assert policy.load(tmp_path, ".solomon") == {"protect": ["data/", ".env"], "shadow": True}
-    assert policy.load(tmp_path / "nope", ".solomon") == {"protect": [], "shadow": False}
+    assert policy.load(tmp_path, ".solomon") == {"protect": ["data/", ".env"], "shadow": True, "visual": None}
+    assert policy.load(tmp_path / "nope", ".solomon") == {"protect": [], "shadow": False, "visual": None}
 
 
 def test_policy_shadow_turns_the_arbiter_into_a_recorder(tmp_path):
@@ -198,7 +198,7 @@ def test_policy_endpoint_validates(env, tmp_path):
     env.call("POST", "/api/botlab/config", {"bot_dir": str(bot)})
     assert env.call("POST", "/api/botlab/policy", {"protect": ["../x"], "shadow": True})[0] == 400
     st, body, _ = env.call("POST", "/api/botlab/policy", {"protect": ["data/", "ena_bot/risk.py"], "shadow": False})
-    assert st == 200 and body["policy"] == {"protect": ["data/", "ena_bot/risk.py"], "shadow": False}
+    assert st == 200 and body["policy"] == {"protect": ["data/", "ena_bot/risk.py"], "shadow": False, "visual": None}
 
 
 def test_the_scheduler_evaluates_then_starts_one_analysis_and_does_not_repeat(env, tmp_path):

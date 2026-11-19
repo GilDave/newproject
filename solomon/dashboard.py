@@ -30,7 +30,7 @@ from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
 from . import (__version__, analysis as analysis_mod, autofix as autofix_mod, botlab as botlab_mod, folders, gitops, manage, policy as policy_mod,
-               portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod)
+               portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
 from .status import load_runs
@@ -307,7 +307,50 @@ class DashboardApp:
         return {"version": __version__, "python": platform.python_version(), "git": folders.git_identity(), "ytdlp": resolve_cli("yt-dlp") or "",
                 "can_update": self.source_root() is not None, "can_restart": self.source_root() is not None and self.started_by_script(),
                 "can_open": folders.open_command() is not None, "projects_root": str(self.projects_root()),
-                "ollama": self._ollama_tools()}
+                "ollama": self._ollama_tools(), "vision": vision_mod.load()}
+
+    _SHOT_RUN = re.compile(r"^[0-9A-Za-z_.-]{1,80}$")
+    _SHOT_NAME = re.compile(r"^[0-9A-Za-z_.-]{1,120}\.png$")
+
+    def shot_path(self, project: str, run: str, attempt: str, name: str) -> Path:
+        """One screenshot of a run, by validated parts only (no path is ever taken from the request as is)."""
+        project = self._known(project)
+        if not (self._SHOT_RUN.match(run) and attempt.isdigit() and len(attempt) <= 4 and self._SHOT_NAME.match(name)) or ".." in run:
+            raise ApiError(400, "잘못된 요청입니다.")
+        root = (Path(project) / self.settings.state_dir / "runs" / run / "shots" / f"attempt-{int(attempt)}").resolve()
+        f = (root / name).resolve()
+        if root not in f.parents or not f.is_file():
+            raise ApiError(404, "이미지를 찾지 못했습니다.")
+        return f
+
+    def project_policy(self, path: str, body: Optional[dict] = None) -> dict:
+        path = self._known(path)
+        root = Path(path)
+        cur = policy_mod.load(root, self.settings.state_dir)
+        if body is not None:
+            visual = cur["visual"]
+            if "visual" in body:
+                v = body["visual"]
+                if v in (None, "", {}):
+                    visual = None
+                else:
+                    cmd = v.get("command") if isinstance(v, dict) else v
+                    cmd = shlex.split(cmd) if isinstance(cmd, str) else cmd
+                    if not isinstance(cmd, list) or not cmd:
+                        raise ApiError(400, "캡처 명령을 입력하세요 (예: {python} scripts/visual_capture.py {out}).")
+                    visual = {"command": [str(c) for c in cmd], "timeout": (v.get("timeout") if isinstance(v, dict) else None) or 180,
+                              "max_shots": (v.get("max_shots") if isinstance(v, dict) else None) or 6}
+            protect = body.get("protect", cur["protect"])
+            if not isinstance(protect, list):
+                raise ApiError(400, "보호 경로 형식이 올바르지 않습니다.")
+            try:
+                cur = policy_mod.save(root, self.settings.state_dir, [str(x) for x in protect], bool(body.get("shadow", cur["shadow"])), visual)
+            except ValueError as exc:
+                raise ApiError(400, str(exc)) from exc
+        suggest = None
+        if (root / "scripts" / "visual_capture.py").is_file():
+            suggest = ["{python}", "scripts/visual_capture.py", "{out}"]
+        return {"policy": cur, "suggest_visual": suggest, "vision": vision_mod.load()}
 
     def make_ollama_alias(self) -> dict:
         from .providers import ollama as ollama_mod
@@ -340,6 +383,8 @@ class DashboardApp:
         cfg = ["--config", self.config_path] if self.config_path else []
         if tool == "doctor":
             return self._spawn("tool", py + ["solomon", "doctor"] + cfg, None, "환경 점검")
+        if tool == "vision":
+            return self._spawn("tool", py + ["solomon", "vision-probe"] + cfg, None, "화면 보기 능력 시험 (AI별)")
         if tool == "ollama":
             return self._spawn("tool", py + ["solomon", "ollama"] + cfg, None, "Ollama 연결 시험")
         if tool == "selftest":
@@ -1012,7 +1057,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
             query = parse_qs(url.query)
             if url.path in ("/", "/index.html"):
                 csp = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
-                       "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'")
+                       "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'")
                 return self._send(200, HTML_PATH.read_bytes(), "text/html; charset=utf-8", {"Content-Security-Policy": csp})
             if url.path == "/guide":
                 from .mdhtml import page
@@ -1043,6 +1088,22 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
                 return self._json(200, app.portfolio())
+            if url.path == "/api/shot":
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    q = lambda k: (query.get(k) or [""])[0]
+                    f = app.shot_path(q("project"), q("run"), q("attempt"), q("name"))
+                    return self._send(200, f.read_bytes(), "image/png")
+                except ApiError as exc:
+                    return self._json(exc.status, {"error": exc.message})
+            if url.path == "/api/projects/policy":
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    return self._json(200, app.project_policy((query.get("path") or [""])[0]))
+                except ApiError as exc:
+                    return self._json(exc.status, {"error": exc.message})
             if url.path == "/api/botlab":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1122,6 +1183,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, app.create_project(body))
                 if path == "/api/folders/mkdir":
                     return self._json(200, app.make_folder(str(body.get("parent", "")), str(body.get("name", ""))))
+                if path == "/api/projects/policy":
+                    return self._json(200, app.project_policy(str(body.get("path", "")), body))
                 if path == "/api/projects/meta":
                     return self._json(200, app.project_meta(str(body.get("path", "")), str(body.get("alias", "")), str(body.get("memo", ""))))
                 if path == "/api/projects/rename":

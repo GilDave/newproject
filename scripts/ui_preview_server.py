@@ -11,7 +11,8 @@ repo = make_repo(d)
 app = DashboardApp(Settings(), [str(repo)], store_path=d / "store.json", launcher=lambda a, l: None)
 app.providers_info = lambda: [{"name": n, "installed": True, "supports_write": n != "ollama", "default": n != "ollama", "local": n == "ollama", "model": "qwen3:8b" if n == "ollama" else ""} for n in ("claude", "codex", "antigravity", "ollama")]
 hosts = set()
-srv = ThreadingHTTPServer(("127.0.0.1", 8799), make_handler(app, "tok", hosts))
-hosts.update({"127.0.0.1:8799", "localhost:8799"})
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8799
+srv = ThreadingHTTPServer(("127.0.0.1", PORT), make_handler(app, "tok", hosts))
+hosts.update({f"127.0.0.1:{PORT}", f"localhost:{PORT}"})
 print("ready", flush=True)
 srv.serve_forever()

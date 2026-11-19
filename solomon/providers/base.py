@@ -74,6 +74,7 @@ class Provider(abc.ABC):
         write: bool,
         timeout: float,
         no_output_timeout: Optional[float] = None,
+        images: Optional[list[str]] = None,
     ) -> ProviderResult: ...
 
 
@@ -108,10 +109,14 @@ class CliProvider(Provider):
         write: bool,
         timeout: float,
         no_output_timeout: Optional[float] = None,
+        images: Optional[list[str]] = None,
     ) -> ProviderResult:
         exe = self.locate()
         if not exe:
             raise ProviderUnavailable(f"'{self.cli_name}' CLI not found. Install it and sign in with your subscription.")
+        if images and not getattr(self, "image_capable", False):
+            raise ProviderError(f"{self.name}: 이미지 입력을 지원하지 않습니다")
+        self._images = list(images or [])  # read by build_argv of image-capable CLIs (reviews run one at a time)
         argv = self.build_argv(exe, write)
         try:
             res = run_process(

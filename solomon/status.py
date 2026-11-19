@@ -106,7 +106,7 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.timeline.append(f"{clock}  시작")
         elif kind == "attempt_start":
             run.attempts = int(ev.get("attempt", run.attempts + 1))
-            attempt = {"attempt": run.attempts, "builder": None, "changes": [], "violations": [], "verify": None, "review": None, "arbiter": None}
+            attempt = {"attempt": run.attempts, "builder": None, "changes": [], "violations": [], "verify": None, "visual": None, "review": None, "arbiter": None}
             run.attempt_details.append(attempt)
             run.timeline.append(f"{clock}  시도 {run.attempts}")
         elif kind == "call_start":
@@ -185,6 +185,11 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.stage = _STAGE_BY_EVENT[kind]
             label = "생략" if ev.get("skipped") else ("통과" if ev.get("passed") else "실패")
             run.timeline.append(f"{clock}  테스트 {label}")
+        elif kind == "visual":
+            if attempt is not None:
+                attempt["visual"] = {"ok": bool(ev.get("ok")), "broken": str(ev.get("broken") or ""), "infra": str(ev.get("infra") or ""),
+                                     "shots": [str(x) for x in ev.get("shots", [])]}
+            run.timeline.append(f"{clock}  화면 캡처 " + ("통과" if ev.get("ok") else "실패(화면 깨짐)" if ev.get("broken") else "건너뜀"))
         elif kind == "review":
             if attempt is not None:
                 attempt["review"] = {"verdict": str(ev.get("verdict")), "issues": [str(i) for i in ev.get("issues", [])]}

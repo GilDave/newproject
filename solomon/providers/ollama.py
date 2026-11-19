@@ -91,7 +91,10 @@ class OllamaProvider(CliProvider):
     def build_argv(self, exe: str, write: bool) -> list[str]:  # pragma: no cover - HTTP, not a process
         raise NotImplementedError
 
-    def run(self, prompt: str, cwd: str, write: bool, timeout: float, no_output_timeout: Optional[float] = None) -> ProviderResult:
+    def run(self, prompt: str, cwd: str, write: bool, timeout: float, no_output_timeout: Optional[float] = None,
+            images: Optional[list[str]] = None) -> ProviderResult:
+        if images:
+            raise ProviderError("ollama: 이미지 입력은 쓰지 않습니다")
         if write:
             raise ProviderError("ollama는 읽기 전용 역할(계획 검토·검수·분석 등)에만 쓸 수 있습니다.")
         if estimate_tokens(prompt) > self.num_ctx * 0.9:

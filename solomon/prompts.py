@@ -103,3 +103,14 @@ def build_advisor(order: Order, feedback: str | None) -> str:
         f"ORDER:\n{json.dumps(order.to_dict(), indent=2, ensure_ascii=False)}\n"
         + (f"\nPREVIOUS FAILURE:\n{feedback[:2500]}\n" if feedback else "")
     )
+
+
+def visual_note(images: list[str], can_see: bool) -> str:
+    if not can_see:
+        return ("\n\nSCREENSHOTS: the running result was photographed, but you cannot view images. Do NOT judge how it looks; "
+                "judge only code and tests.\n")
+    return ("\n\nSCREENSHOTS of the running result (image files, open and LOOK at each one with your file viewer):\n"
+            + "\n".join(f"- {p}" for p in images)
+            + "\nFAIL if: the layout is broken, text overlaps or is cut off, something looks empty or glitched, an error is shown, "
+              "or the picture does not look like what the goal asks for. Say in \"issues\" (Korean) what you saw in the pictures. "
+              "Do not use PASS unless you actually looked at them.\n")
