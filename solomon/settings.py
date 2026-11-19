@@ -58,6 +58,9 @@ class Settings:
     on_quota: str = "stop"  # "stop" ends the run; "wait" sleeps and retries the same call
     quota_wait_sec: float = 900.0
     quota_max_waits: int = 8
+    auto_failover: bool = True  # plan B: when an AI runs out of usage the work moves to another signed-in AI (never to a paid API key)
+    quota_cooldown_min: float = 120.0  # how long an AI is avoided after a limit when the CLI does not say when it resets
+    failover: dict = field(default_factory=dict)  # stage -> ordered AIs to try instead; empty = built-in order
     allow_same_provider: bool = False
     state_dir: str = ".solomon"
     project_path: Optional[str] = None  # default target repository (local folder)
@@ -171,6 +174,10 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
     s.on_quota = str(loop.get("on_quota", s.on_quota))
     s.quota_wait_sec = float(loop.get("quota_wait_sec", s.quota_wait_sec))
     s.quota_max_waits = int(loop.get("quota_max_waits", s.quota_max_waits))
+    fo = _section(data, "failover")
+    s.auto_failover = bool(fo.get("auto", s.auto_failover))
+    s.quota_cooldown_min = float(fo.get("cooldown_min", s.quota_cooldown_min))
+    s.failover = {k: [str(x) for x in v] for k, v in fo.items() if k in ("planner", "builder", "reviewer", "arbiter") and isinstance(v, list)}
     s.allow_same_provider = bool(loop.get("allow_same_provider", s.allow_same_provider))
     s.state_dir = str(data.get("state_dir", s.state_dir))
     s.projects_root = str(data.get("projects_root", s.projects_root))

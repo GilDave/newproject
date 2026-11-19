@@ -23,7 +23,7 @@ def test_cli_role_flags_override_the_config(monkeypatch, tmp_path):
     seen = {}
 
     class FakeOrch:
-        def __init__(self, settings):
+        def __init__(self, settings, **kw):
             seen["roles"] = dict(settings.roles)
 
         def run(self, goal, project, keep_worktree=False):
@@ -91,7 +91,7 @@ def test_cli_persist_flags_set_the_loop_budgets(monkeypatch, tmp_path):
     seen = {}
 
     class FakeOrch:
-        def __init__(self, settings):
+        def __init__(self, settings, **kw):
             seen["s"] = settings
 
         def run(self, goal, project, keep_worktree=False):

@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import arbiter as arbiter_mod, context, gitops, policy as policy_mod, prompts, scope_guard, vision as vision_mod, visual as visual_mod
+from . import quota as quota_mod, arbiter as arbiter_mod, context, gitops, policy as policy_mod, prompts, scope_guard, vision as vision_mod, visual as visual_mod
 from .jsonutil import extract_json
 from .providers import Provider, ProviderError, ProviderResult, QuotaExhausted, build_providers
 from .runlog import RunLog
@@ -61,8 +61,12 @@ class Orchestrator:
         providers: Optional[dict[str, Provider]] = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
+        quota_board: Optional["quota_mod.QuotaBoard"] = None,
     ):
         self.s = settings
+        self.board = quota_board if quota_board is not None else quota_mod.QuotaBoard()
+        self._base_roles = dict(settings.roles)
+        self._builder_now: Optional[str] = None
         self.providers = providers if providers is not None else build_providers(settings)
         self._sleep = sleep
         self._clock = clock
@@ -94,10 +98,63 @@ class Orchestrator:
         return [x for x in pool if self._can_write(x[1])], [x for x in pool if not self._can_write(x[1])]
 
     # ------------------------------------------------------------------ calls
+    DEFAULT_FAILOVER = {"builder": ("codex", "claude"), "planner": ("claude", "codex", "antigravity"),
+                        "reviewer": ("claude", "codex", "antigravity"), "arbiter": ()}  # the arbiter fails safe (a person decides)
+
+    def _candidates(self, role: str, current: str) -> list[str]:
+        """AIs that may take over `role` from `current`, best first: signed in, not out of usage, allowed for the stage."""
+        base = role.rstrip("23") if role[:-1] in ("planner", "builder", "reviewer") else role
+        order = list(self.s.failover.get(base) or self.DEFAULT_FAILOVER.get(base, ()))
+        now = self._clock()
+        out = []
+        for name in order:
+            prov = self.providers.get(name)
+            if prov is None or name == current or self.board.exhausted(name, now):
+                continue
+            if getattr(prov, "locate", None) and not prov.locate():
+                continue
+            if base == "builder" and not self._can_write(name):
+                continue
+            if not self.s.allow_same_provider:
+                reviewers = [self.s.roles[r] for r in ("reviewer", "reviewer2", "reviewer3") if self.s.roles.get(r)]
+                if base == "builder" and reviewers and all(r == name for r in reviewers):
+                    continue  # the new builder would be its own only reviewer
+                if base == "reviewer" and name == self._builder_now:
+                    continue
+                if base == "arbiter" and name == self._builder_now:
+                    continue
+            out.append(name)
+        return out
+
+    def _switch(self, role: str, current: str, log: RunLog, reason: str) -> bool:
+        """Plan B: put the next available AI on this stage for the rest of the run. False when nobody can take over."""
+        if not self.s.auto_failover:
+            return False
+        cands = self._candidates(role, current)
+        if not cands:
+            return False
+        self.s.roles[role] = cands[0]
+        if role.startswith("builder"):
+            self._builder_now = cands[0]
+        log.event("failover", role=role, **{"from": current, "to": cands[0]}, reason=reason)
+        return True
+
+    def _apply_board(self, log: RunLog) -> None:
+        """A new run starts from the configured roles, then routes around every AI the board knows is out of usage."""
+        self.s.roles.clear()
+        self.s.roles.update(self._base_roles)
+        for role in list(self.s.roles):
+            name = self.s.roles[role]
+            if self.board.exhausted(name, self._clock()):
+                self._switch(role, name, log, "limit already known")
+
     def _call(self, role: str, prompt: str, cwd: Path, write: bool, log: RunLog, images: Optional[list[str]] = None) -> ProviderResult:
-        provider = self.providers[self.s.roles[role]]
         waits = 0
         while True:
+            name = self.s.roles[role]
+            if self.s.auto_failover and self.board.exhausted(name, self._clock()) and self._switch(role, name, log, "limit already known"):
+                continue
+            provider = self.providers[self.s.roles[role]]
             log.event("call_start", role=role, provider=provider.name, write=write, prompt_chars=len(prompt))
             try:
                 extra = {"images": images} if images else {}
@@ -110,8 +167,19 @@ class Orchestrator:
                     **extra,
                 )
             except QuotaExhausted as exc:
-                log.event("quota", role=role, provider=provider.name, detail=str(exc), waits=waits)
-                if self.s.on_quota == "wait" and waits < self.s.quota_max_waits:
+                until = self.board.mark(provider.name, str(exc), self._clock(), self.s.quota_cooldown_min)
+                log.event("quota", role=role, provider=provider.name, detail=str(exc), waits=waits, until=until)
+                if self._switch(role, provider.name, log, "usage limit"):
+                    continue  # plan B takes the very same call
+                if self.s.auto_failover:  # nobody else can do it: wait for the earliest reset instead of ending the night
+                    resets = [u for u in (self.board.until(n, self._clock()) for n in set(self.s.roles.values())) if u] or [until]
+                    if waits < max(self.s.quota_max_waits, 8):
+                        waits += 1
+                        wait = max(60.0, min(min(resets) - self._clock() + 30, 3600.0))
+                        log.event("quota_wait", role=role, provider=provider.name, seconds=round(wait), waits=waits)
+                        self._sleep(wait)
+                        continue
+                elif self.s.on_quota == "wait" and waits < self.s.quota_max_waits:
                     waits += 1
                     self._sleep(self.s.quota_wait_sec)
                     continue
@@ -301,6 +369,7 @@ class Orchestrator:
                     result.warnings.append(f"project has uncommitted changes; snapshot failed ({exc}), using the committed state")
             else:
                 result.warnings.append("project has uncommitted changes; they are NOT part of the isolated worktree")
+        self._apply_board(log)
         log.event("run_start", goal=goal, roles=self.s.roles, warnings=result.warnings)
 
         wt = state / "worktrees" / run_id
@@ -491,8 +560,11 @@ class Orchestrator:
                 advice = "\n".join(notes) or None
                 advise_next = False
             log.event("builder_pick", attempt=attempt, role=brole, provider=bname)
+            self._builder_now = bname
             try:
                 self._call(brole, prompts.builder(order, feedback, advice), wt, True, log)
+                bname = self.s.roles[brole]  # plan B may have put another AI on the job during the call
+                self._builder_now = bname
             except ProviderError as exc:
                 if (why := failed([f"The builder CLI failed: {exc}"], f"builder CLI failed: {exc}", reset=True)):
                     result.status, result.summary = "FAILED", why

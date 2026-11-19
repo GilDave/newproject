@@ -62,3 +62,14 @@ on_quota            = "stop"     # "stop" ends the run when a subscription limit
 quota_wait_sec      = 900
 quota_max_waits     = 8
 allow_same_provider = false
+
+
+[failover]
+# Plan B: when an AI runs out of subscription usage, another signed-in AI takes over the same step (never a paid API key).
+# If every AI is out, the run waits for the earliest reset instead of ending the night.
+auto = true
+cooldown_min = 120   # how long an AI is avoided when the CLI does not say when it resets
+# Optional: who may stand in, best first. Defaults: builder = codex, claude; planner/reviewer = claude, codex, antigravity.
+# The arbiter never fails over (a person decides). Reviewers always stay different from the builder.
+# builder  = ["codex", "claude"]
+# reviewer = ["antigravity", "claude"]

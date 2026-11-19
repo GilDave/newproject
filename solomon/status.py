@@ -55,6 +55,7 @@ class RunSummary:
     calls: list[dict] = field(default_factory=list)  # one entry per finished or failed AI call
     active: Optional[dict] = None  # the call in flight right now: {role, provider, since}
     quota_providers: list[str] = field(default_factory=list)
+    failovers: list[dict] = field(default_factory=list)  # plan B switches: {role, from, to, reason}
     attempt_details: list[dict] = field(default_factory=list)  # one entry per attempt: builder, changes, scope, tests, review
 
     def elapsed_sec(self, now: Optional[datetime] = None) -> Optional[float]:
@@ -69,7 +70,7 @@ class RunSummary:
             "started": self.started.isoformat() if self.started else None,
             "elapsed_sec": self.elapsed_sec(), "roles": self.roles, "warnings": self.warnings,
             "timeline": self.timeline, "calls": self.calls, "active": self.active,
-            "quota_providers": self.quota_providers, "attempt_details": self.attempt_details,
+            "quota_providers": self.quota_providers, "failovers": self.failovers, "attempt_details": self.attempt_details,
             "providers": {
                 name: {"calls": st.calls, "failures": st.failures, "cli_sec": round(st.cli_sec, 1), "tokens": st.tokens,
                        "cache_read": st.cache_read, "estimated_calls": st.estimated_calls}
@@ -161,6 +162,12 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                               "error": str(ev.get("error", ""))[:140]})
             _stats(run, str(ev.get("provider"))).failures += 1
             run.timeline.append(f"{clock}  {ev.get('role')} 호출 실패 · {str(ev.get('error', ''))[:60]}")
+        elif kind == "failover":
+            run.failovers.append({"role": str(ev.get("role")), "from": str(ev.get("from")), "to": str(ev.get("to")), "reason": str(ev.get("reason", ""))})
+            run.stage_key = {"planner": "plan", "builder": "build", "reviewer": "review", "arbiter": "decide"}.get(_base(str(ev.get("role"))), run.stage_key)
+            run.timeline.append(f"{clock}  ⚡ {ev.get('from')} 한도 소진 → {ev.get('to')}로 자동 전환 ({ev.get('role')})")
+        elif kind == "quota_wait":
+            run.timeline.append(f"{clock}  모든 AI가 한도 소진 — {int(ev.get('seconds') or 0) // 60}분 기다린 뒤 이어서 진행")
         elif kind == "quota":
             run.stage_key = "quota"
             if str(ev.get("provider")) not in run.quota_providers:

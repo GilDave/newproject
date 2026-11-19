@@ -163,7 +163,7 @@ def test_cli_uses_configured_project_when_flag_is_missing(tmp_path, monkeypatch)
     seen = {}
 
     class FakeOrch:
-        def __init__(self, settings):
+        def __init__(self, settings, **kw):
             pass
 
         def run(self, goal, project, keep_worktree=False):

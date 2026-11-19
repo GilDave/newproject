@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import gitops
+from . import quota as quota_mod, gitops
 from .analysis import SEVERITY_RANK
 from .orchestrator import Orchestrator
 from .settings import ConfigError, Settings
@@ -204,7 +204,7 @@ def run_autofix(
         s = dataclasses.replace(settings, roles=dict(settings.roles), max_attempts=0,
                                 max_files_changed=min(settings.max_files_changed, ITEM_FILES),
                                 max_diff_lines=min(settings.max_diff_lines, ITEM_LINES))
-        orchestrator = Orchestrator(s)
+        orchestrator = Orchestrator(s, quota_board=quota_mod.QuotaBoard.persistent())
     orch = orchestrator
     started = clock()
     failures = 0

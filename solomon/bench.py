@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import gitops
+from . import quota as quota_mod, gitops
 from .env import sanitized_env
 from .orchestrator import Orchestrator
 from .runner import run_process
@@ -127,6 +127,7 @@ def settings_for(base: Settings, config: str) -> Settings:
     s = copy.deepcopy(base)
     s.roles = dict(CONFIGS[config]["roles"])
     s.allow_same_provider = bool(CONFIGS[config]["same"])
+    s.auto_failover = False  # a benchmark measures THIS combination of AIs; plan B would silently change who did the work
     s.validate()
     return s
 
@@ -149,7 +150,7 @@ def _run_one(task, cname, rep, out_dir, base, keep, factory) -> dict:
     work = out_dir / "work" / key
     prepare_repo(task, work)
     settings = settings_for(base, cname)
-    orch = factory(settings) if factory else Orchestrator(settings)
+    orch = factory(settings) if factory else Orchestrator(settings, quota_board=quota_mod.QuotaBoard.persistent())
     started = time.time()
     result = orch.run(task.goal, work)
     elapsed = round(time.time() - started, 1)

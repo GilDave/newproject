@@ -306,3 +306,131 @@ def test_roles_validation_and_toml(tmp_path):
     f.write_text('[roles]\nplanner4 = "x"\n')
     with pytest.raises(ConfigError):
         load_settings(f)
+
+
+# ---------------------------------------------------------------- plan B: usage limits never end the night
+def _failover_orch(tmp_path, claude, codex, agy=None, **settings):
+    from solomon.quota import QuotaBoard
+    s = make_settings(auto_failover=True, **settings)
+    ps = {"claude": ScriptedProvider("claude", claude), "codex": ScriptedProvider("codex", codex)}
+    if agy is not None:
+        ps["agy"] = ScriptedProvider("agy", agy)
+        ps["agy"].supports_write = False
+    sleeps = []
+    return Orchestrator(s, ps, sleep=sleeps.append, quota_board=QuotaBoard()), ps, sleeps
+
+
+def _events(r):
+    return [json.loads(l) for l in (Path(r.run_dir) / "events.jsonl").read_text().splitlines()]
+
+
+def test_when_the_reviewer_runs_out_the_next_ai_takes_the_same_call(tmp_path):
+    from solomon.providers import QuotaExhausted
+    repo = make_repo(tmp_path)
+    s = make_settings(auto_failover=True)
+    s.roles.update({"planner": "claude", "builder": "codex", "reviewer": "claude"})
+    s.failover = {"reviewer": ["agy"], "planner": ["agy"]}
+    from solomon.quota import QuotaBoard
+    # claude plans, then is out of usage when asked to review: agy takes the review
+    ps = {"claude": ScriptedProvider("claude", [order_json(), QuotaExhausted("usage limit reached")]),
+          "codex": ScriptedProvider("codex", [write_file("src/new.py")]), "agy": ScriptedProvider("agy", [review_json()])}
+    r = Orchestrator(s, ps, sleep=lambda x: None, quota_board=QuotaBoard()).run("add module", repo)
+    assert r.status == "PASSED"
+    fo = [e for e in _events(r) if e["event"] == "failover"]
+    assert fo and fo[0]["from"] == "claude" and fo[0]["to"] == "agy" and fo[0]["role"] == "reviewer"
+
+
+def test_when_the_builder_runs_out_the_other_writer_continues_the_same_attempt(tmp_path):
+    from solomon.providers import QuotaExhausted
+    from solomon.quota import QuotaBoard
+    repo = make_repo(tmp_path)
+    s = make_settings(auto_failover=True)
+    s.roles.update({"planner": "agy", "builder": "claude", "reviewer": "agy"})
+    agy = ScriptedProvider("agy", [order_json(), review_json()])
+    agy.supports_write = False
+    ps = {"claude": ScriptedProvider("claude", [QuotaExhausted("usage limit reached")]), "codex": ScriptedProvider("codex", [write_file("src/new.py")]), "agy": agy}
+    r = Orchestrator(s, ps, sleep=lambda x: None, quota_board=QuotaBoard()).run("add module", repo)
+    assert r.status == "PASSED" and r.attempts == 1  # no extra attempt was burnt
+    fo = [e for e in _events(r) if e["event"] == "failover"]
+    assert fo[0]["role"] == "builder" and fo[0]["from"] == "claude" and fo[0]["to"] == "codex"
+    assert ps["codex"].calls[0]["write"] is True
+
+
+def test_known_limit_is_avoided_from_the_start_of_the_next_run(tmp_path):
+    from solomon.quota import QuotaBoard
+    repo = make_repo(tmp_path)
+    board = QuotaBoard()
+    board.mark("claude", "usage limit reached", 1000.0, 120)
+    s = make_settings(auto_failover=True)
+    s.roles.update({"planner": "claude", "builder": "codex", "reviewer": "claude"})
+    s.failover = {"reviewer": ["agy"], "planner": ["agy"]}
+    ps = {"claude": ScriptedProvider("claude", []), "codex": ScriptedProvider("codex", [write_file("src/new.py")]),
+          "agy": ScriptedProvider("agy", [order_json(), review_json()])}
+    o = Orchestrator(s, ps, sleep=lambda x: None, clock=lambda: 1500.0, quota_board=board)
+    r = o.run("add module", repo)
+    assert r.status == "PASSED" and not ps["claude"].calls  # claude was never even asked
+    fo = [e for e in _events(r) if e["event"] == "failover"]
+    assert {e["role"] for e in fo} == {"planner", "reviewer"} and all(e["to"] == "agy" for e in fo)
+    # a later run restores the configured roles once the limit has passed
+    o._clock = lambda: 1000.0 + 121 * 60
+    ps["claude"].steps = [order_json(), review_json()]
+    ps["codex"].steps = [write_file("src/new.py")]
+    r2 = o.run("add module", repo)
+    assert r2.status == "PASSED" and ps["claude"].calls
+
+
+def test_when_every_ai_is_out_it_waits_for_the_reset_and_carries_on(tmp_path):
+    from solomon.providers import QuotaExhausted
+    from solomon.quota import QuotaBoard
+    repo = make_repo(tmp_path)
+    s = make_settings(auto_failover=True)
+    s.roles.update({"planner": "claude", "builder": "codex", "reviewer": "claude"})
+    s.failover = {"planner": ["claude"], "reviewer": ["claude"]}  # nobody else is allowed to stand in
+    ps = {"claude": ScriptedProvider("claude", [QuotaExhausted("usage limit reached"), order_json(), review_json()]),
+          "codex": ScriptedProvider("codex", [write_file("src/new.py")])}
+    sleeps = []
+    r = Orchestrator(s, ps, sleep=sleeps.append, quota_board=QuotaBoard()).run("add module", repo)
+    assert r.status == "PASSED" and sleeps and sleeps[0] >= 60
+    assert any(e["event"] == "quota_wait" for e in _events(r))
+
+
+def test_plan_b_can_be_switched_off_and_the_arbiter_never_fails_over(tmp_path):
+    from solomon.providers import QuotaExhausted
+    from solomon.quota import QuotaBoard
+    repo = make_repo(tmp_path)
+    s = make_settings(auto_failover=False)
+    ps = {"claude": ScriptedProvider("claude", [QuotaExhausted("usage limit reached")]), "codex": ScriptedProvider("codex", [])}
+    r = Orchestrator(s, ps, sleep=lambda x: None, quota_board=QuotaBoard()).run("add module", repo)
+    assert r.status == "BLOCKED_QUOTA"
+    o = Orchestrator(make_settings(auto_failover=True), ps, quota_board=QuotaBoard())
+    assert o._candidates("arbiter", "claude") == []
+
+
+def test_reset_time_in_the_message_is_used_and_the_board_forgets_after_it():
+    from solomon.quota import QuotaBoard, parse_reset
+    assert parse_reset("Claude AI usage limit reached|1900000000", 1000.0) == 1900000000.0
+    assert parse_reset("usage limit reached", 1000.0) is None
+    b = QuotaBoard()
+    assert b.mark("claude", "limit", 1000.0, 60) == 4600.0
+    assert b.exhausted("claude", 4599.0) and not b.exhausted("claude", 4601.0)
+    b.clear("claude")
+    assert not b.exhausted("claude", 1001.0)
+
+
+def test_failover_is_visible_in_the_status_and_configurable_from_toml(tmp_path):
+    from solomon import status
+    from solomon.providers import QuotaExhausted
+    from solomon.quota import QuotaBoard
+    repo = make_repo(tmp_path)
+    s = make_settings(auto_failover=True)
+    s.roles.update({"planner": "agy", "builder": "claude", "reviewer": "agy"})
+    agy = ScriptedProvider("agy", [order_json(), review_json()])
+    agy.supports_write = False
+    ps = {"claude": ScriptedProvider("claude", [QuotaExhausted("usage limit reached")]), "codex": ScriptedProvider("codex", [write_file("src/new.py")]), "agy": agy}
+    r = Orchestrator(s, ps, sleep=lambda x: None, quota_board=QuotaBoard()).run("add module", repo)
+    d = status.summarize_run(r.run_id, _events(r)).to_dict()
+    assert d["failovers"][0]["to"] == "codex" and any("자동 전환" in t for t in d["timeline"])
+    cfg = tmp_path / "s.toml"
+    cfg.write_text('[failover]\nauto = false\ncooldown_min = 30\nbuilder = ["claude"]\n')
+    loaded = load_settings(cfg)
+    assert loaded.auto_failover is False and loaded.quota_cooldown_min == 30 and loaded.failover == {"builder": ["claude"]}

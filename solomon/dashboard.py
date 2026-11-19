@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analysis as analysis_mod, autofix as autofix_mod, botlab as botlab_mod, folders, gitops, manage, policy as policy_mod,
+from . import (__version__, analysis as analysis_mod, autofix as autofix_mod, botlab as botlab_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
                portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
@@ -307,7 +307,7 @@ class DashboardApp:
         return {"version": __version__, "python": platform.python_version(), "git": folders.git_identity(), "ytdlp": resolve_cli("yt-dlp") or "",
                 "can_update": self.source_root() is not None, "can_restart": self.source_root() is not None and self.started_by_script(),
                 "can_open": folders.open_command() is not None, "projects_root": str(self.projects_root()),
-                "ollama": self._ollama_tools(), "vision": vision_mod.load()}
+                "ollama": self._ollama_tools(), "vision": vision_mod.load(), "quota": quota_mod.QuotaBoard.persistent().snapshot()}
 
     _SHOT_RUN = re.compile(r"^[0-9A-Za-z_.-]{1,80}$")
     _SHOT_NAME = re.compile(r"^[0-9A-Za-z_.-]{1,120}\.png$")
@@ -351,6 +351,10 @@ class DashboardApp:
         if (root / "scripts" / "visual_capture.py").is_file():
             suggest = ["{python}", "scripts/visual_capture.py", "{out}"]
         return {"policy": cur, "suggest_visual": suggest, "vision": vision_mod.load()}
+
+    def clear_quota(self) -> dict:
+        quota_mod.QuotaBoard.persistent().clear(None)
+        return {"ok": True, "message": "한도 기록을 지웠습니다. 다음 실행부터 원래 역할 배정대로 시작합니다."}
 
     def make_ollama_alias(self) -> dict:
         from .providers import ollama as ollama_mod
@@ -1197,6 +1201,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.run_tool(str(body.get("tool", "")))})
                 if path == "/api/tools/git-identity":
                     return self._json(200, app.set_git_identity(str(body.get("name", "")), str(body.get("email", ""))))
+                if path == "/api/tools/quota-clear":
+                    return self._json(200, app.clear_quota())
                 if path == "/api/tools/ollama-alias":
                     return self._json(200, app.make_ollama_alias())
                 if path == "/api/tools/restart":

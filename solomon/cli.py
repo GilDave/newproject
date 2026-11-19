@@ -10,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, analysis as analysis_mod, gitops
+from . import quota as quota_mod, __version__, analysis as analysis_mod, gitops
 from .env import present_api_keys, resolve_cli
 from .orchestrator import Orchestrator
 from .providers import PROVIDER_CLASSES, build_providers
@@ -87,6 +87,22 @@ def _doctor(args: argparse.Namespace) -> int:
     print("로그인 상태는 여기서 확인하지 않습니다. 각 CLI를 직접 한 번 실행해 로그인돼 있는지 확인하세요 (가이드 1-3).")
     print("결과: " + ("문제 없음" if not errors else f"고쳐야 할 항목 {errors}개"))
     return 0 if not errors else 2
+
+
+def _quota(args: argparse.Namespace) -> int:
+    """Show (or clear) which AIs are currently avoided because their subscription usage ran out."""
+    import time as _t
+
+    board = quota_mod.QuotaBoard.persistent()
+    if args.clear:
+        board.clear(None if args.clear == "all" else args.clear)
+        print("한도 기록을 지웠습니다:", args.clear)
+    snap = board.snapshot()
+    if not snap:
+        print("지금 한도에 걸려 피하는 AI는 없습니다.")
+    for name, v in snap.items():
+        print(f"{name}: {_t.strftime('%m-%d %H:%M', _t.localtime(float(v['until'])))} 까지 피합니다 ({v.get('detail', '')[:60]})")
+    return 0
 
 
 def _vision_probe(args: argparse.Namespace) -> int:
@@ -212,7 +228,7 @@ def _run(args: argparse.Namespace) -> int:
         settings.test_command = None
     elif args.test_command:
         settings.test_command = shlex.split(args.test_command)
-    orch = Orchestrator(settings)
+    orch = Orchestrator(settings, quota_board=quota_mod.QuotaBoard.persistent())
     project = Path(args.project or settings.project_path or ".").expanduser()
 
     def _stop(signum, frame):  # the dashboard's stop button sends SIGTERM
@@ -468,6 +484,10 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("--bars", type=int, default=10, help="holding period in candles for the counterfactual (default 10)")
     sh.add_argument("--fee", type=float, default=0.0008, help="round-trip cost subtracted from each counterfactual return (default 0.0008)")
     sh.set_defaults(func=_shadow)
+
+    qp = sub.add_parser("quota", help="show which AIs are avoided because their usage limit was reached (plan B routes around them)")
+    qp.add_argument("--clear", help="forget a limit: an AI name, or 'all' (for when you know it has reset)")
+    qp.set_defaults(func=_quota)
 
     vp = sub.add_parser("vision-probe", help="test which AIs can really look at an image (needed for the screen-capture gate)")
     vp.add_argument("--config", help="path to solomon.toml")

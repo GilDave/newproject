@@ -80,6 +80,7 @@ def make_settings(**overrides) -> Settings:
     s.test_command = ["python3", "-c", "import pathlib,sys; sys.exit(0 if pathlib.Path('src/new.py').exists() else 1)"]
     s.max_attempts = 3
     s.baseline_check = False
+    s.auto_failover = False  # the older tests expect a limit to stop the run; failover tests turn it on
     for key, value in overrides.items():
         setattr(s, key, value)
     s.validate()
