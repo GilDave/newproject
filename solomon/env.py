@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -46,7 +47,10 @@ def _posix_candidates(name: str) -> list[Path]:
 
 def _extra_candidates(name: str) -> list[Path]:
     home = Path.home()
-    return {"agy": [home / ".agy" / "bin" / "agy"]}.get(name, [])
+    found = {"agy": [home / ".agy" / "bin" / "agy"]}.get(name, [])
+    # a tool installed with `.venv/bin/python -m pip install <tool>` (e.g. yt-dlp) lives next to the interpreter running Solomon;
+    # the folder is NOT resolved (a venv's python is a symlink to the system one)
+    return found + [Path(os.path.dirname(sys.executable)) / name]
 
 
 def resolve_cli(name: str) -> Optional[str]:

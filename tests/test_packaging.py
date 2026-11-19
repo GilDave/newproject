@@ -157,3 +157,15 @@ def test_print_version_of_the_guide_has_cover_and_contents():
     assert 'class="cover"' in html and "버전 1.2.0" in html and 'class="toc"' in html
     assert html.count('<h1') == 1  # the cover's title only; the guide's own h1 is dropped
     assert "@page" in html and "<script" not in html.lower()
+
+
+def test_a_tool_pip_installed_into_the_same_venv_is_found(tmp_path, monkeypatch):
+    from solomon import env
+    exe = tmp_path / "bin" / "yt-dlp"
+    exe.parent.mkdir()
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(env.sys, "executable", str(tmp_path / "bin" / "python"))
+    monkeypatch.setattr(env, "_posix_candidates", lambda name: [])
+    monkeypatch.setenv("PATH", "/nonexistent")
+    assert env.resolve_cli("yt-dlp") == str(exe.resolve())

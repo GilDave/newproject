@@ -69,7 +69,7 @@ def _doctor(args: argparse.Namespace) -> int:
             print(f"[error] {name}: {exc}")
             errors += 1
     ytdlp = resolve_cli("yt-dlp")
-    print(f"[ok] yt-dlp: {ytdlp} (영상 분석의 자막 수집)" if ytdlp else "[optional] yt-dlp: 설치 안 됨 (영상 분석의 자막 수집에 권장. 없어도 유튜브 자막을 직접 가져오거나 붙여넣을 수 있음. 맥: brew install yt-dlp)")
+    print(f"[ok] yt-dlp: {ytdlp} (영상 분석의 자막 수집)" if ytdlp else "[optional] yt-dlp: 설치 안 됨 (영상 분석의 자막 수집에 권장. 없어도 유튜브 자막을 직접 가져오거나 붙여넣을 수 있음. 설치: .venv/bin/python -m pip install yt-dlp)")
     root = Path(settings.projects_root).expanduser()
     probe = root if root.exists() else root.parent
     print(("[ok]" if probe.exists() and os.access(probe, os.W_OK) else "[warn]") + f" 새 프로젝트 폴더 위치: {root}")

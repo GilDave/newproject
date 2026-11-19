@@ -391,11 +391,19 @@ AI들이 **서로 독립적으로** 읽기 전용으로 분석합니다. 파일 
 
 **준비 (권장)**: 자막을 자동으로 가져오는 성공률을 높이려면 한 번만 설치하세요.
 
+Homebrew가 있으면:
+
 ```
 brew install yt-dlp
 ```
 
-없어도 동작은 시도합니다 (유튜브 자막을 직접 가져옴). 그래도 안 되면 자막을 직접 붙여넣을 수 있습니다.
+`brew: command not found` 가 나오면 Homebrew가 없거나 이 터미널이 못 찾는 것입니다. **brew 없이** Solomon 가상환경에 설치하면 됩니다 (Solomon 폴더에서):
+
+```
+.venv/bin/python -m pip install yt-dlp
+```
+
+Solomon이 같은 가상환경의 yt-dlp를 자동으로 찾습니다 (설치 뒤 대시보드를 재시작하세요: `bash scripts/stop.sh` 후 `bash scripts/start.sh`). 확인은 `.venv/bin/solomon doctor` 의 `yt-dlp` 줄입니다. 둘 다 안 해도 동작은 시도합니다 (유튜브 자막을 직접 가져옴). 그래도 안 되면 자막을 직접 붙여넣을 수 있습니다.
 
 **10-1. 각 AI가 영상을 직접 볼 수 있는지 시험 (선택, 1~3분)**
 
