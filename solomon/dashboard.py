@@ -29,7 +29,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analysis as analysis_mod, autofix as autofix_mod, folders, gitops, manage, portfolio, projects as projects_mod, video as video_mod
+from . import (__version__, analysis as analysis_mod, autofix as autofix_mod, botlab as botlab_mod, folders, gitops, manage, policy as policy_mod,
+               portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
 from .status import load_runs
@@ -94,6 +95,8 @@ class DashboardApp:
         self._providers_cache: tuple[float, list[dict]] = (0.0, [])
         self._git_cache: dict[str, tuple[float, bool]] = {}
         self._portfolio_cache: Optional[tuple[float, dict]] = None
+        self.botlab = botlab_mod.BotLab(self.store_path.parent / "botlab")
+        self._scheduler_stop = threading.Event()
         self.boot = f"{time.time():.3f}"  # changes when the dashboard restarts, so an open page knows to reload itself
         self._load_store()
         for p in list(projects or []) + ([settings.project_path] if settings.project_path else []):
@@ -561,6 +564,88 @@ class DashboardApp:
         view["interrupted"] = bool(not view["finished"] and not view["live"])
         state["analysis"] = view
 
+    # ------------------------------------------------------------- bot lab (a live bot, evaluated and improved automatically)
+    def botlab_state(self) -> dict:
+        lab, cfg = self.botlab, self.botlab.config()
+        proj = cfg["bot_dir"]
+        hist = lab.history()
+        out = {"config": cfg, "suggest": botlab_mod.detect(list(self._projects)) if not proj else "", "running": lab.running,
+               "message": lab.last_message, "next_eval": (cfg["last_eval"] + cfg["interval_hours"] * 3600) if cfg["enabled"] and cfg["last_eval"] else None,
+               "next_analyze": (cfg["last_analyze"] + cfg["analyze_hours"] * 3600) if cfg["auto_analyze"] and cfg["last_analyze"] else None,
+               "default_protect": botlab_mod.DEFAULT_PROTECT, "latest": hist[-1] if hist else None, "series": lab.series(hist),
+               "services": lab.services(), "health": lab.health(proj) if proj else None, "policy": None, "arbiter_shadow": None,
+               "ollama": next((p for p in self.providers_info() if p["name"] == "ollama"), None)}
+        if proj and proj in self._projects:
+            out["policy"] = policy_mod.load(Path(proj), self.settings.state_dir)
+            try:
+                out["arbiter_shadow"] = shadow_mod.evaluate(Path(proj), self.settings.state_dir)
+            except Exception:
+                out["arbiter_shadow"] = None
+        return out
+
+    def botlab_config(self, body: dict) -> dict:
+        try:
+            cfg = self.botlab.update(body)
+        except botlab_mod.BotLabError as exc:
+            raise ApiError(400, str(exc)) from exc
+        if "bot_dir" in body and cfg["bot_dir"]:
+            path = self.add_project(cfg["bot_dir"])
+            if not policy_mod.path_of(Path(path), self.settings.state_dir).is_file():  # first time: the safe defaults
+                policy_mod.save(Path(path), self.settings.state_dir, botlab_mod.DEFAULT_PROTECT, True)
+        self._portfolio_cache = None
+        return self.botlab_state()
+
+    def botlab_policy(self, body: dict) -> dict:
+        proj = self.botlab.config()["bot_dir"]
+        if not proj or proj not in self._projects:
+            raise ApiError(400, "먼저 봇 폴더를 지정하세요.")
+        protect = body.get("protect")
+        if not isinstance(protect, list) or len(protect) > 200:
+            raise ApiError(400, "보호 경로 형식이 올바르지 않습니다.")
+        try:
+            policy_mod.save(Path(proj), self.settings.state_dir, [str(x) for x in protect], bool(body.get("shadow")))
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from exc
+        return self.botlab_state()
+
+    def botlab_run(self) -> dict:
+        if not self.botlab.config()["bot_dir"]:
+            raise ApiError(400, "먼저 봇 폴더를 지정하세요.")
+        if self.botlab.running:
+            raise ApiError(409, "평가가 이미 진행 중입니다.")
+        threading.Thread(target=self._botlab_eval_safe, daemon=True).start()
+        return {"ok": True, "message": "평가를 시작했습니다. 가격을 받는 데 1~2분 걸릴 수 있습니다."}
+
+    def _botlab_eval_safe(self) -> None:
+        try:
+            self.botlab.evaluate()
+        except botlab_mod.BotLabError as exc:
+            self.botlab.last_message = str(exc)
+
+    def botlab_tick(self) -> None:
+        """One scheduler beat (every minute): evaluate when due, and start the periodic 3-AI analysis when due and nothing else runs."""
+        lab = self.botlab
+        if lab.due_eval():
+            self._botlab_eval_safe()
+        if lab.due_analyze() and not (self.job and self.job["popen"].poll() is None):
+            hist = lab.history(1)
+            try:
+                self.start_analysis(lab.config()["bot_dir"], lab.analysis_focus(hist[-1] if hist else None))
+                lab.mark_analyze()
+            except ApiError as exc:
+                if exc.status != 409:  # busy: try again next minute; anything else: record and wait for the next period
+                    lab.mark_analyze(exc.message)
+
+    def start_scheduler(self) -> None:
+        def loop() -> None:
+            while not self._scheduler_stop.wait(60):
+                try:
+                    self.botlab_tick()
+                except Exception:
+                    pass  # the scheduler must never die
+
+        threading.Thread(target=loop, daemon=True, name="botlab-scheduler").start()
+
     # ------------------------------------------------------------- commands
     def _role_args(self, roles: Optional[dict]) -> list[str]:
         """Validate the roles chosen on the page and turn them into `solomon run` flags."""
@@ -934,6 +1019,10 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
                 return self._json(200, app.portfolio())
+            if url.path == "/api/botlab":
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                return self._json(200, app.botlab_state())
             if url.path == "/api/shadow":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -992,6 +1081,12 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_video(str(body.get("project", "")), body)})
                 if path == "/api/video-probe":
                     return self._json(200, {"job": app.start_video_probe(str(body.get("project", "")), body)})
+                if path == "/api/botlab/config":
+                    return self._json(200, app.botlab_config(body))
+                if path == "/api/botlab/policy":
+                    return self._json(200, app.botlab_policy(body))
+                if path == "/api/botlab/run":
+                    return self._json(200, app.botlab_run())
                 if path == "/api/autofix":
                     return self._json(200, {"job": app.start_autofix(str(body.get("project", "")), body)})
                 if path == "/api/apply-batch":
@@ -1074,6 +1169,7 @@ def serve(
 ) -> int:
     token = _persistent_token()
     app = DashboardApp(settings, projects, config_path)
+    app.start_scheduler()
     server = None
     for candidate in range(port, port + 10):
         hosts = {f"127.0.0.1:{candidate}", f"localhost:{candidate}"}

@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import arbiter as arbiter_mod, context, gitops, prompts, scope_guard
+from . import arbiter as arbiter_mod, context, gitops, policy as policy_mod, prompts, scope_guard
 from .jsonutil import extract_json
 from .providers import Provider, ProviderError, ProviderResult, QuotaExhausted, build_providers
 from .runlog import RunLog
@@ -183,6 +183,11 @@ class Orchestrator:
                 log.event("plan_invalid", error=error)
                 continue
             order = self._plan_review(goal, order, project, log)
+            pol = policy_mod.load(project, self.s.state_dir)
+            if pol["protect"]:  # the project's own protected paths: no plan may drop them
+                order.protected_paths = list(dict.fromkeys(order.protected_paths + pol["protect"]))
+            if pol["shadow"]:
+                self.s.arbiter_shadow = True
             log.event("order", order=order.to_dict())
             return order
         raise PlanError(f"planner did not produce a valid ORDER: {error}")

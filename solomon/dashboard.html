@@ -81,6 +81,10 @@ pre.diff .a{color:#7ee2b0}pre.diff .d{color:#ff9aa5}pre.diff .h{color:#8fb4ff}
 .arbarrow{text-align:center;color:#8b78e0;font-size:12px;margin:-2px 0 4px}
 .node.arbiter .orb{box-shadow:0 0 0 3px rgba(139,120,224,.35),0 0 28px rgba(139,120,224,.45)}.node.arbiter .who{color:#d9ccff}
 .edge.arb{stroke:#7b5cd6;stroke-width:1.2;stroke-dasharray:2 5}.edge.arb.hot{stroke:#b69cff;stroke-width:1.8}
+.pbar{height:8px;border-radius:5px;background:#142034;overflow:hidden;margin-top:6px}.pbar i{display:block;height:100%;background:#4f86d6}.pbar.full i{background:#3ecf8e}
+.bot-tbl{width:100%;border-collapse:collapse;font-size:12.5px}.bot-tbl td,.bot-tbl th{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left}.bot-tbl th{color:var(--dim);font-weight:600}
+.banner{border:1px solid #6b5a22;background:#2a2410;color:#f7d98b;border-radius:10px;padding:10px 14px;font-size:13px}.banner.ok{border-color:#1f6b47;background:#0f2a1d;color:#8be0b3}
+.frow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0}.frow input[type=number]{width:90px}.frow input[type=text]{flex:1;min-width:240px}
 .arbgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.arbgrid .kpi b{font-size:20px}
 .sd{grid-template-columns:repeat(7,minmax(0,1fr))}
 .modal{position:fixed;inset:0;background:rgba(2,6,12,.72);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:6vh 12px;overflow:auto}
@@ -228,7 +232,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
 <body>
 <header>
   <div class="brand" id="brand" style="cursor:pointer" title="대시보드로">SOLOMON<small>여러 AI가 서로 검증하며 만듭니다</small></div>
-  <nav class="tabs" aria-label="화면 선택"><button id="tab-dash" class="on">대시보드</button><button id="tab-work">작업실</button><button id="tab-mg">관리 <span id="mgBadge"></span></button><button id="tab-pj">프로젝트</button></nav>
+  <nav class="tabs" aria-label="화면 선택"><button id="tab-dash" class="on">대시보드</button><button id="tab-work">작업실</button><button id="tab-mg">관리 <span id="mgBadge"></span></button><button id="tab-pj">프로젝트</button><button id="tab-bot">🤖 봇 연구실</button></nav>
   <div class="strip" id="strip" title="지금 하고 있는 일"><span class="led"></span><span id="stripText">대기 중</span><span class="need" id="stripNeed"></span></div>
   <div class="spacer"></div>
   <a href="/guide" target="_blank" rel="noopener" style="color:var(--dim);font-size:13px;margin-right:16px">사용 가이드</a>
@@ -349,6 +353,10 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
   </section>
 </main>
 
+<main class="pjw" id="view-bot" hidden>
+  <section class="kpis" id="botKpi"></section>
+  <div id="botBody" class="pjw" style="padding:0"></div>
+</main>
 <main class="pjw" id="view-pj" hidden>
   <section class="kpis" id="pjKpi"></section>
   <section class="card"><h2>단계별 AI 참여 도식 — 단계마다 최대 3개 AI</h2><div id="flowDiagram"></div>
@@ -444,7 +452,7 @@ if (new URLSearchParams(location.search).has("t")) history.replaceState(null, ""
 
 let state = null, receivedAt = 0, selectedRun = null, selectedAnalysis = null, selectedProject = null, lastProject = null, busy = false;
 let tab = "dash", mode = "run", rolesDirty = false;
-try { const h = location.hash.replace("#", ""); if (["work", "mg", "pj"].includes(h)) tab = h; } catch (e) {}
+try { const h = location.hash.replace("#", ""); if (["work", "mg", "pj", "bot"].includes(h)) tab = h; } catch (e) {}
 
 function toast(msg, bad){ const t = $("toast"); t.textContent = msg; t.className = bad ? "bad" : ""; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", 4500); }
 
@@ -529,11 +537,109 @@ function fillAnalysisChecks(){
 }
 
 function setTab(t){
-  tab = t; $("view-dash").hidden = t !== "dash"; $("view-work").hidden = t !== "work"; $("view-mg").hidden = t !== "mg"; $("view-pj").hidden = t !== "pj";
+  tab = t; $("view-dash").hidden = t !== "dash"; $("view-work").hidden = t !== "work"; $("view-mg").hidden = t !== "mg"; $("view-pj").hidden = t !== "pj"; $("view-bot").hidden = t !== "bot";
+  $("tab-bot").className = t === "bot" ? "on" : "";
   $("tab-dash").className = t === "dash" ? "on" : ""; $("tab-work").className = t === "work" ? "on" : ""; $("tab-mg").className = t === "mg" ? "on" : ""; $("tab-pj").className = t === "pj" ? "on" : "";
   try { history.replaceState(null, "", t === "dash" ? location.pathname : "#" + t); } catch (e) {}
   if (state) render();
 }
+
+// ---------------------------------------------------------------- 봇 연구실: 실계좌 봇을 읽기 전용으로 평가하고 자동으로 개선안을 만든다
+let bot = null, botBusy = false;
+const fmtTs = ts => ts ? new Date(ts * 1000).toLocaleString("ko-KR", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "아직 없음";
+const pct = v => v === null || v === undefined ? "-" : Math.round(v * 1000) / 10 + "%";
+async function loadBot(){ if (botBusy) return; try { bot = await api("/api/botlab"); } catch (e) { return; } renderBot(); }
+async function botPost(path, body, okMsg){ botBusy = true; try { bot = await api(path, body || {}); if (okMsg) toast(okMsg); } catch (e) { toast(e.message || String(e), true); } finally { botBusy = false; } if (bot && bot.config) renderBot(); else loadBot(); }
+function bcard(title, ...kids){ const c = el("section", "card"); c.appendChild(el("h2", "", title)); kids.forEach(k => k && c.appendChild(k)); return c; }
+function btable(head, rows){ const t = el("table", "bot-tbl"), h = el("tr"); head.forEach(x => h.appendChild(el("th", "", x))); t.appendChild(h); rows.forEach(r => { const tr = el("tr"); r.forEach(x => tr.appendChild(el("td", "", String(x)))); t.appendChild(tr); }); return t; }
+function bprog(n, goal){ const w = el("div", "pbar" + (n >= goal ? " full" : "")), i = el("i"); i.style.width = Math.min(100, n / goal * 100) + "%"; w.appendChild(i); return w; }
+function renderBot(){
+  const root = $("botBody"), kp = $("botKpi"); clear(root); clear(kp);
+  if (!bot) return;
+  const cfg = bot.config;
+  if (!cfg.bot_dir) {
+    const inp = el("input"); inp.type = "text"; inp.value = bot.suggest || "/Users/dave_gil/00.Claud/01.ena-bot"; inp.style.width = "100%";
+    const b = el("button", "primary", "이 봇 연결하기"); b.onclick = () => botPost("/api/botlab/config", {bot_dir: inp.value.trim(), enabled: true}, "연결했습니다. 안전 설정(보호 구역·그림자 모드)이 기본으로 켜졌습니다.");
+    root.appendChild(bcard("봇 연결", el("div", "hint", "ena-bot 폴더를 한 번만 지정하면 이후 평가·분석이 모두 자동입니다. 봇의 코드·설정·DB·서비스는 읽기만 하고 바꾸지 않습니다."), inp, b));
+    return;
+  }
+  const lat = bot.latest, sig = lat && lat.signals, ml = sig && sig.ml2.overall, nw = sig && sig.news, h = bot.health;
+  const tile = (v, l, cls) => { const k = el("div", "kpi" + (cls ? " " + cls : "")); k.appendChild(el("b", "", v)); k.appendChild(el("small", "", l)); kp.appendChild(k); };
+  tile(h && h.ok ? (h.alive ? "정상" : "확인 필요") : "읽기 실패", h && h.ok && h.last_cycle_age_hours !== null ? "봇 마지막 판단 " + h.last_cycle_age_hours + "시간 전" : "봇 상태", h && h.ok && h.alive ? "" : "alert");
+  tile(h && h.ok ? String(h.errors_24h) : "-", "최근 24시간 오류", h && h.errors_24h ? "alert" : "");
+  tile(ml ? ml.n + " / 30" : "-", "예측 채점 건수", "");
+  tile(nw ? Math.min(nw.high_risk.n, nw.low_risk.n) + " / 30" : "-", "뉴스 점수 표본(적은 쪽)", "");
+  tile(sig ? String(sig.waiting_for_price) : "-", "가격 대기 중(24시간 후 채점)", "");
+  const ol = bot.ollama; tile(ol && ol.installed ? "연결됨" : "없음", "Ollama" + (ol && ol.model ? " · " + ol.model : ""), ol && ol.installed ? "" : "alert");
+
+  const enough = ml && ml.enough && nw && nw.enough;
+  root.appendChild(el("div", "banner" + (enough ? " ok" : ""), enough ? "표본이 충분합니다. 아래 성적을 근거로 개선안을 판단할 수 있습니다." :
+    "지금은 데이터를 쌓는 단계입니다. 표본이 30건 미만이라 어떤 결론도 내지 않고, 봇은 아무것도 바뀌지 않습니다. 평가와 분석은 자동으로 계속됩니다."));
+  if (lat && lat.stale_prices) root.appendChild(el("div", "banner", "가격 새로 받기에 실패해 이전 가격으로 계산했습니다: " + lat.fetch_error));
+
+  // 자동화
+  const bf = {}, tg = (id, label, on) => { const l = el("label", "chk"), i = el("input"); i.type = "checkbox"; i.id = id; bf[id] = i; i.checked = on; l.appendChild(i); l.appendChild(document.createTextNode(" " + label)); return l; };
+  const num = (id, v) => { const i = el("input"); i.type = "number"; i.id = id; bf[id] = i; i.value = v; i.min = 1; return i; };
+  const auto = el("div");
+  auto.appendChild(tg("bl-en", "신호 평가 자동 실행 (가격은 별도 폴더에 저장, 봇 파일은 건드리지 않음)", cfg.enabled));
+  const r1 = el("div", "frow"); r1.appendChild(document.createTextNode("평가 주기(시간)")); r1.appendChild(num("bl-int", cfg.interval_hours)); r1.appendChild(document.createTextNode("가격 기간(일)")); r1.appendChild(num("bl-days", cfg.fetch_days)); auto.appendChild(r1);
+  auto.appendChild(tg("bl-an", "3개 AI 개선 분석 자동 실행 (읽기 전용 분석, 구독 사용량 소모)", cfg.auto_analyze));
+  const r2 = el("div", "frow"); r2.appendChild(document.createTextNode("분석 주기(시간)")); r2.appendChild(num("bl-ah", cfg.analyze_hours)); auto.appendChild(r2);
+  const sv = el("button", "primary", "자동화 설정 저장"); sv.onclick = () => botPost("/api/botlab/config", {enabled: bf["bl-en"].checked, interval_hours: bf["bl-int"].value, fetch_days: bf["bl-days"].value, auto_analyze: bf["bl-an"].checked, analyze_hours: bf["bl-ah"].value}, "저장했습니다.");
+  const now = el("button", "", bot.running ? "평가 중…" : "지금 평가하기"); now.disabled = bot.running; now.onclick = () => botPost("/api/botlab/run", {}, "평가를 시작했습니다.");
+  const rw = el("div", "row"); rw.appendChild(sv); rw.appendChild(now); auto.appendChild(rw);
+  auto.appendChild(el("div", "hint", "마지막 평가 " + fmtTs(cfg.last_eval) + " · 다음 평가 " + fmtTs(bot.next_eval) + " · 마지막 분석 " + fmtTs(cfg.last_analyze) + " · 다음 분석 " + fmtTs(bot.next_analyze) +
+    (cfg.last_analyze_error ? " · 분석 오류: " + cfg.last_analyze_error : "") + (bot.message ? " · " + bot.message : "") + " · 봇 폴더 " + cfg.bot_dir));
+  root.appendChild(bcard("⚙ 자동화", auto));
+
+  // 예측 / 뉴스
+  if (sig) {
+    const rows = Object.entries(sig.ml2.by_probability).map(([k, v]) => [k, v.n, v.hits, pct(v.rate), pct(v.ci[0]) + " ~ " + pct(v.ci[1]), v.enough ? "" : "표본 부족"]);
+    root.appendChild(bcard("📈 예측(ml2) 성적 — 24시간 뒤 방향", bprog(ml.n, 30), el("div", "hint", `전체 ${ml.n}건 중 ${ml.hits}건 적중 (95% 구간 ${pct(ml.ci[0])} ~ ${pct(ml.ci[1])}) ${ml.enough ? "" : "· 표본 부족, 결론 아님"}`),
+      rows.length ? btable(["확률 구간", "건수", "적중", "적중률", "95% 구간", ""], rows) : el("div", "hint", "채점된 예측이 아직 없습니다."), el("div", "hint", sig.ml2.note + " 24시간 구간이 겹치는 건들은 서로 독립이 아니라 표본보다 신뢰가 낮습니다.")));
+    const f = x => x === null ? "-" : pct(x);
+    root.appendChild(bcard("📰 뉴스 위험 점수 성적", bprog(Math.min(nw.high_risk.n, nw.low_risk.n), 30),
+      btable(["점수", "건수", "24시간 평균 절대 변동", "평균 최대 낙폭"], [["높음 (≥0.5)", nw.high_risk.n, f(nw.high_risk.mean_abs_return), f(nw.high_risk.mean_drawdown)], ["낮음 (<0.5)", nw.low_risk.n, f(nw.low_risk.mean_abs_return), f(nw.low_risk.mean_drawdown)]]), el("div", "hint", nw.note)));
+  } else root.appendChild(bcard("📈 신호 성적", el("div", "hint", "아직 평가 결과가 없습니다. 위에서 '지금 평가하기'를 누르거나 자동 실행을 기다리세요.")));
+
+  // 추이
+  if (bot.series.length > 1) {
+    const W = 520, H = 70, pts = bot.series, mx = Math.max(30, ...pts.map(p => p.ml_n)), xs = i => 6 + i * (W - 12) / (pts.length - 1), ys = v => H - 6 - v / mx * (H - 12);
+    const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg"); svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.style.width = "100%"; svg.style.maxWidth = W + "px";
+    const path = document.createElementNS(ns, "polyline"); path.setAttribute("points", pts.map((p, i) => xs(i) + "," + ys(p.ml_n)).join(" ")); path.setAttribute("fill", "none"); path.setAttribute("stroke", "#4f86d6"); path.setAttribute("stroke-width", "2"); svg.appendChild(path);
+    const goal = document.createElementNS(ns, "line"); goal.setAttribute("x1", 0); goal.setAttribute("x2", W); goal.setAttribute("y1", ys(30)); goal.setAttribute("y2", ys(30)); goal.setAttribute("stroke", "#3ecf8e"); goal.setAttribute("stroke-dasharray", "4 4"); svg.appendChild(goal);
+    root.appendChild(bcard("📊 채점 건수 추이 (초록 점선 = 결론 가능선 30건)", svg, el("div", "hint", pts.length + "번의 평가 기록 · 최근 " + fmtTs(pts[pts.length - 1].ts))));
+  }
+
+  // Ollama 육성 (그림자)
+  const as = bot.arbiter_shadow;
+  if (as) {
+    const rows = as.cells.map(c => [c.tests, c.votes, c.decision, Object.entries(c.truth).map(([k, v]) => k + " " + v).join(", ")]);
+    root.appendChild(bcard("👑 Ollama 육성 — 그림자 판정 성적 (이 프로젝트의 작업)", bprog(as.labelled, 30),
+      el("div", "hint", as.note + ` · 판정 ${as.cases}건 · 정답 확인 ${as.labelled}건 · 위험한 오판 ${as.danger.wrong_adopt}/${as.danger.of_adopts}`),
+      rows.length ? btable(["테스트", "검수 투표", "Ollama 판정", "정답 분포"], rows) : el("div", "hint", "아직 그림자 판정이 없습니다. 아래 '개선 작업'이나 작업실 실행에서 결정권자를 Ollama로 두면 쌓입니다."),
+      el("div", "hint", "권한 사다리: 표본이 충분하고 위험한 오판이 적다고 숫자로 확인될 때만 사람이 한 단계씩 올립니다.")));
+  }
+
+  // 서비스
+  const sv2 = bot.services;
+  root.appendChild(bcard("🛰 봇 서비스 상태 (읽기 전용)", sv2.available && sv2.items.length ? btable(["서비스", "상태", "마지막 종료 코드"], sv2.items.map(x => [x.label, x.running ? "● 실행 중" : "○ 중지", x.last_exit])) :
+    el("div", "hint", sv2.available ? "com.ena.* 서비스를 찾지 못했습니다." : "서비스 상태는 맥미니에서만 읽을 수 있습니다."), h && h.ok ? btable(["이벤트 종류", "건수", "마지막"], h.kinds.map(k => [k.kind, k.count, fmtTs(k.last_ms / 1000)])) : null));
+
+  // 보호 구역
+  const ta = el("textarea"); ta.id = "bl-protect"; ta.rows = 9; ta.style.width = "100%"; ta.value = (bot.policy ? bot.policy.protect : bot.default_protect).join("\n");
+  const sh = tg("bl-shadow", "그림자 모드 — 결정권자(Ollama)가 모든 시도를 판정하되 따르지 않고 기록만", bot.policy ? bot.policy.shadow : true);
+  const sp = el("button", "primary", "보호 구역 저장"); sp.onclick = () => botPost("/api/botlab/policy", {protect: ta.value.split("\n").map(x => x.trim()).filter(Boolean), shadow: bf["bl-shadow"].checked}, "저장했습니다. 이후 모든 실행에 적용됩니다.");
+  const rs = el("button", "", "기본값으로"); rs.onclick = () => { ta.value = bot.default_protect.join("\n"); };
+  const pr = el("div", "row"); pr.appendChild(sp); pr.appendChild(rs);
+  root.appendChild(bcard("🛡 보호 구역 — AI가 절대 바꿀 수 없는 파일 (한 줄에 하나)", ta, sh, pr, el("div", "hint", "계획 AI가 빼려 해도 빠지지 않으며, 어떤 경로로 실행해도 적용됩니다. 주문·리스크·실행 루프·키·데이터·서비스 정의가 기본 보호 대상입니다. 이 파일들의 변경은 사람이 직접 합니다.")));
+
+  // 개선 작업
+  const go = el("button", "primary", "개선 분석 지금 시작 (3개 AI, 읽기 전용)"); go.onclick = async () => { try { await api("/api/analyze", {project: cfg.bot_dir, focus: bot.focus_hint || "예측과 뉴스 점수를 수익률 개선에 쓸모 있게 만들 방법 (표본 밖 검증 방법 포함)"}); toast("분석을 시작했습니다. 대시보드 탭에서 진행을 볼 수 있습니다."); setTab("dash"); poll(); } catch (e) { toast(e.message || String(e), true); } };
+  const fix = el("button", "", "개선 작업 열기 (작업실에서 3AI 구현)"); fix.onclick = () => { selectedProject = cfg.bot_dir; $("goal").value = "ena-bot의 예측(learn.py/learn2.py)과 뉴스 점수 사용 방식을 개선하세요. 보호 구역 파일은 바꾸지 말고, 변경은 표본 밖 워크포워드로 검증할 수 있게 하세요."; setMode("run"); setTab("dash"); toast("목표를 채웠습니다. 역할을 확인하고 실행하세요 (보호 구역·그림자 모드가 자동 적용됩니다)."); };
+  root.appendChild(bcard("🔧 개선 작업", el("div", "hint", "분석은 자동으로 주기마다 실행되고, 결과는 대시보드·관리 탭에 쌓입니다. 코드 변경은 격리된 복사본에서만 만들어지며 원본은 사람이 적용할 때만 바뀝니다. 수익률 관문(표본 밖 백테스트로 합격 판정)은 다음 단계입니다: 그 전까지 변경 후보는 반드시 사람이 검토하세요."), (() => { const r = el("div", "row"); r.appendChild(go); r.appendChild(fix); return r; })()));
+}
+
 function setMode(m){
   mode = m; $("m-run").className = m === "run" ? "on" : ""; $("m-an").className = m === "analyze" ? "on" : ""; $("m-new").className = m === "new" ? "on" : ""; $("m-vid").className = m === "video" ? "on" : "";
   if (state) render();
@@ -1761,6 +1867,7 @@ $("pjSort").onchange = () => renderProjects();
 $("mgProjectSel").onchange = (ev) => openProject(ev.target.value, {tab: "mg"});
 $("tab-mg").onclick = () => { setTab("mg"); loadInbox(true); };
 $("tab-pj").onclick = () => { setTab("pj"); loadProjects(); loadTools(); };
+$("tab-bot").onclick = () => { setTab("bot"); loadBot(); }; setInterval(() => { if (tab === "bot") loadBot(); }, 15000);
 $("tab-dash").onclick = () => setTab("dash"); $("tab-work").onclick = () => setTab("work");
 $("m-run").onclick = () => setMode("run"); $("m-an").onclick = () => setMode("analyze"); $("m-new").onclick = () => setMode("new"); $("m-vid").onclick = () => setMode("video");
 
