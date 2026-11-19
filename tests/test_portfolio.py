@@ -49,8 +49,8 @@ def test_card_numbers_come_from_the_logs(env):
     assert c["recent"] == ["PASSED", "FAILED"] and c["last_run"]["status"] == "FAILED"
     assert c["counts"]["pending"] == 1 and c["next"]["action"] == "manage"
     claude, codex = c["ais"]["claude"], c["ais"]["codex"]
-    assert claude["calls"] == 4 and claude["roles"] == {"planner": 2, "reviewer": 2}  # 2 runs x (plan + review)
-    assert claude["reviews"] == {"pass": 1, "fail": 1}
+    assert claude["calls"] == 3 and claude["roles"] == {"planner": 2, "reviewer": 1}  # 2 runs x plan, and the review only where the tests passed
+    assert claude["reviews"] == {"pass": 1, "fail": 0}  # a run whose tests failed is not reviewed
     assert codex["calls"] == 2 and codex["builds"] == {"attempts": 2, "passed": 1}
     assert claude["tokens"] > 0 and codex["tokens"] > 0
     assert c["tokens"] == claude["tokens"] + codex["tokens"]

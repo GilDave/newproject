@@ -326,6 +326,7 @@ class Orchestrator:
             self._last_reviews.append({"role": role, "provider": who, "verdict": one.verdict, "issues": list(one.issues)})
             if one.error:
                 return ReviewResult("FAIL", [f"[{who}] {i}" for i in one.issues], error=True)
+            agg.notes += one.notes
             if not agg.summary:
                 agg.summary = one.summary
             if one.verdict != "PASS":
@@ -478,11 +479,28 @@ class Orchestrator:
 
     @staticmethod
     def _signature(problems: list[str]) -> str:
-        """What a failure looks like, with the noise (numbers, paths, timings) taken out, to spot a repeated one."""
-        text = " ".join(problems).lower()
-        text = re.sub(r"/[\w./-]+", "<path>", text)
-        text = re.sub(r"\d+(\.\d+)?", "#", text)
-        return re.sub(r"\s+", " ", text).strip()[:400]
+        """What KIND of failure this was, without the noise, to spot a repeated one.
+
+        Only stable facts count: which tests failed, which rule was broken, that a review said FAIL. The words an AI writes in a
+        review, timings, paths and counts change every time and must never make two identical failures look different."""
+        parts: list[str] = []
+        for p in problems:
+            head = p.split("\n", 1)[0].lower()
+            if p.startswith("Tests failed"):
+                ids = sorted(set(re.findall(r"(?:FAILED|ERROR)\s+(\S+?)(?:\s+-|\s*$)", p, re.M)))
+                last = next((ln for ln in reversed(p.splitlines()) if ln.strip()), "")
+                parts.append("tests:" + (",".join(ids[:10]) if ids else re.sub(r"\d+(\.\d+)?", "#", re.sub(r"/[\w./-]+", "<path>", last.lower()))[:80]))
+            elif p.startswith("Reviewer issues"):
+                parts.append("review-fail")
+            elif p.startswith("Scope violations"):
+                parts.append("scope:" + ",".join(sorted(set(re.findall(r"(protected path|outside allowed_paths|diff lines|files changed|deletion)", p)))))
+            elif "REJECTED this result" in p:
+                parts.append("arbiter-reject")
+            elif "FAILED when run again" in p:
+                parts.append("flaky-tests")
+            else:
+                parts.append(re.sub(r"\s+", " ", re.sub(r"\d+(\.\d+)?", "#", re.sub(r"/[\w./-]+", "<path>", head)))[:60])
+        return " + ".join(sorted(set(parts)))
 
     def _build_loop(self, order: Order, wt: Path, run_dir: Path, result: RunResult, log: RunLog) -> None:
         s = self.s
@@ -533,11 +551,13 @@ class Orchestrator:
                 signatures.append(self._signature(problems))
                 feedback = "\n\n".join(problems)
                 reset_next = reset
-                if len(signatures) >= s.stagnation_limit and len(set(signatures[-s.stagnation_limit:])) == 1:
+                recent = signatures[-2 * s.stagnation_limit:]  # the same kind of failure keeps coming back, even when other kinds are mixed in
+                if len(recent) >= s.stagnation_limit and max(recent.count(x) for x in set(recent)) >= s.stagnation_limit:
                     restarts += 1
                     log.event("stagnation", attempt=attempt, restarts=restarts)
                     if restarts > s.max_restarts:
-                        return f"같은 실패가 {s.stagnation_limit}번씩 {restarts}차례 반복돼 중단했습니다 (진전 없음)"
+                        top = max(set(recent), key=recent.count)
+                        return (f"같은 실패가 {s.stagnation_limit}번씩 {restarts}차례 반복돼 중단했습니다 (진전 없음) — 반복된 실패: " + top[:160])
                     signatures.clear()
                     reset_next = True  # start over from clean code with a different approach
                     switch = True
@@ -597,6 +617,10 @@ class Orchestrator:
             if visual and visual.broken:  # the product does not even render: no reviewer needs to be asked
                 self._last_reviews, self._visual_seers = [], []
                 review = ReviewResult("FAIL", ["Screen capture: the page did not render properly: " + visual.broken])
+            elif not verification.passed and not verification.skipped:
+                # the tests already failed: the builder must fix those first, and a review of failing code only costs a call
+                self._last_reviews, self._visual_seers = [], []
+                review = ReviewResult("FAIL", [], "tests failed: review not asked yet", skipped=True)
             else:
                 review = self._review(order, wt, verification, warnings, log, attempt, bname, visual)
             if review.error:
@@ -606,7 +630,7 @@ class Orchestrator:
                                   f"(마지막 코드는 last_attempt.patch). 원인: {review.issues[0] if review.issues else '?'}")
                 log.event("review", verdict="ERROR", issues=review.issues)
                 return
-            log.event("review", verdict=review.verdict, issues=review.issues)
+            log.event("review", verdict="SKIPPED" if review.skipped else review.verdict, issues=review.issues, notes=review.notes)
 
             double_failed = False
             double_passed: Optional[bool] = None
@@ -640,6 +664,8 @@ class Orchestrator:
                         result.warnings.append(f"ARBITER_NEEDS_HUMAN: {decision.note or decision.reason}")
                 if verification.skipped:
                     result.warnings.append("no test command configured: passed without automatic tests")
+                if review.notes:
+                    result.warnings.append("REVIEW_NOTES: " + " | ".join(review.notes)[:600])
                 if visual:
                     rel = [str(p.relative_to(run_dir)) for p in visual.shots]
                     result.visual = {"attempt": attempt, "shots": rel, "viewed_by": sorted(set(self._visual_seers)), "infra": visual.infra}
@@ -656,7 +682,7 @@ class Orchestrator:
                 problems.append("The tests passed once and FAILED when run again (flaky or order-dependent). Make them deterministic.")
             if not verification.passed:
                 problems.append(f"Tests failed (exit {verification.exit_code}):\n{verification.output_tail[-1500:]}")
-            if review.verdict != "PASS":
+            if review.verdict != "PASS" and not review.skipped:
                 problems.append("Reviewer issues:\n- " + "\n- ".join(review.issues or ["(none given)"]))
             if decision and decision.final == "REJECT":
                 problems.append("The decision-maker (arbiter) REJECTED this result although tests and reviewers passed. Its reasons: " + decision.reason

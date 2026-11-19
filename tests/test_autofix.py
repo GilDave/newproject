@@ -230,7 +230,7 @@ def test_ids_select_exactly_the_ticked_findings_ignoring_the_filters():
 def test_group_by_file_merges_findings_of_one_file_up_to_the_limit():
     cs = [cluster(i, file="a.py") for i in range(1, 9)] + [cluster(20, file="b.py")]
     groups = autofix.group_by_file(cs)
-    assert [len(g) for g in groups] == [autofix.GROUP_MAX, 8 - autofix.GROUP_MAX, 1]
+    assert [len(g) for g in groups] == [autofix.GROUP_MAX, autofix.GROUP_MAX, 8 - 2 * autofix.GROUP_MAX, 1] and autofix.GROUP_MAX == 3
     goal = autofix.build_group_goal(groups[0])
     assert goal.count("quote:") == autofix.GROUP_MAX and "all of them" in goal and "secrets" in goal
     assert autofix.build_group_goal([cs[0]]) == autofix.build_goal(cs[0])  # a single one is the normal goal
@@ -292,3 +292,18 @@ def test_batch_5w1h_lists_every_finding_of_a_grouped_item(env):
     d = env.call("GET", f"/api/describe?project={quote(env.project)}&key=batch:{b.batch_id}")[1]
     why = d["sections"]["why"]["lines"]
     assert any("problem 1" in l for l in why) and any("problem 2" in l for l in why)
+
+
+def test_a_bundle_that_fails_is_retried_one_problem_at_a_time(tmp_path):
+    repo = make_repo(tmp_path)
+    put_analysis(repo, [cluster(1, file="src/app.py"), cluster(2, file="src/app.py")])
+    s = make_settings(max_attempts=1)  # the bundle gets one attempt and fails (the tests need src/new.py)
+    # bundle: plan + build that fails; then problem 1 alone: plan + build + review passes; problem 2 alone: plan + build + review passes
+    claude = [order_json(), order_json(), review_json(), order_json(), review_json()]
+    codex = [write_file("src/other.py", "x=1\n"), write_file("src/new.py"), write_file("src/new2.py") ]
+    s.test_command = ["python3", "-c", "import pathlib,sys; sys.exit(0 if pathlib.Path('src/new.py').exists() else 1)"]
+    o = Orchestrator(s, {"claude": ScriptedProvider("claude", claude), "codex": ScriptedProvider("codex", codex)})
+    r = autofix.run_autofix(s, repo, orchestrator=o, group=True, max_fixes=0, ids=[1, 2])
+    statuses = [i.status for i in r.items]
+    assert statuses[0] == "FAILED" and "하나씩 따로" in r.items[0].summary and len(r.items) == 3
+    assert statuses[1] == "PASSED"  # the first problem alone succeeds; the batch carries on instead of giving up

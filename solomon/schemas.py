@@ -87,6 +87,8 @@ class ReviewResult:
     issues: list[str] = field(default_factory=list)
     summary: str = ""
     error: bool = False  # True: the reviewer never gave a verdict (timeout, crash, garbage). Not a real FAIL.
+    skipped: bool = False  # True: nobody was asked (the tests had already failed, so the builder must fix those first)
+    notes: list[str] = field(default_factory=list)  # minor remarks that do not block: style, wishes, speculative edge cases
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ReviewResult":
@@ -96,7 +98,19 @@ class ReviewResult:
         issues = data.get("issues", [])
         if not isinstance(issues, list):
             raise ValueError("'issues' must be a list")
-        return cls(verdict=verdict, issues=[str(i) for i in issues], summary=str(data.get("summary", "")))
+        blockers: list[str] = []
+        notes: list[str] = []
+        for i in issues:
+            if isinstance(i, dict):  # {"severity": "blocker" | "minor", "text": "..."}
+                text = str(i.get("text") or i.get("issue") or i.get("description") or "").strip()
+                if not text:
+                    continue
+                (notes if str(i.get("severity", "blocker")).strip().lower() in ("minor", "nit", "suggestion", "low") else blockers).append(text)
+            else:
+                blockers.append(str(i))  # a plain string is a blocker, as before
+        if verdict == "FAIL" and not blockers and notes:
+            verdict = "PASS"  # the reviewer found only minor remarks: they are recorded, they do not send the work back
+        return cls(verdict=verdict, issues=blockers, summary=str(data.get("summary", "")), notes=notes)
 
 
 def normalize_path(path: str) -> str:

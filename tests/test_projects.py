@@ -154,7 +154,7 @@ def test_cli_no_baseline_flag(monkeypatch, tmp_path):
     seen = {}
 
     class FakeOrch:
-        def __init__(self, settings):
+        def __init__(self, settings, **kw):
             seen["b"] = settings.baseline_check
 
         def run(self, goal, project, keep_worktree=False):

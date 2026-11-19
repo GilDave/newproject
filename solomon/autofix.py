@@ -26,13 +26,14 @@ ITEM_FILES = 8  # a single overnight fix may touch at most this many files ...
 ITEM_LINES = 400  # ... and this many diff lines (stricter than a hand-started run)
 DEFAULT_BUDGET_MIN = 360.0
 DEFAULT_ITEM_MIN = 45.0
+ITEM_ATTEMPTS = 12  # a single overnight item is abandoned after this many attempts (a backstop behind repeated-failure detection)
 
 
 class AutofixError(RuntimeError):
     pass
 
 
-GROUP_MAX = 6  # findings in one file fixed together in a single run (one plan, one review) instead of one run each
+GROUP_MAX = 3  # findings in one file fixed together in a single run (one plan, one review); bigger bundles exceed the diff limit and fail more
 
 
 @dataclass
@@ -201,7 +202,7 @@ def run_autofix(
     base = gitops.resolve(project, "HEAD")
     gitops.create_branch(project, branch, base)
     if orchestrator is None:
-        s = dataclasses.replace(settings, roles=dict(settings.roles), max_attempts=0,
+        s = dataclasses.replace(settings, roles=dict(settings.roles), max_attempts=ITEM_ATTEMPTS,
                                 max_files_changed=min(settings.max_files_changed, ITEM_FILES),
                                 max_diff_lines=min(settings.max_diff_lines, ITEM_LINES))
         orchestrator = Orchestrator(s, quota_board=quota_mod.QuotaBoard.persistent())
@@ -210,7 +211,11 @@ def run_autofix(
     failures = 0
     stop: Optional[str] = None
 
-    for n, (item, unit) in enumerate(zip(result.items, units), 1):
+    queue = list(zip(result.items, units))
+    n = 0
+    while queue:
+        item, unit = queue.pop(0)
+        n += 1
         left = budget_minutes - (clock() - started) / 60
         if left <= 1:
             stop = "시간 예산을 다 써서 남은 항목은 건너뛰었습니다"
@@ -236,6 +241,12 @@ def run_autofix(
             item.attempts, item.commit = res.attempts, res.commit or ""
             log("item_end", n=n, status=res.status, attempts=res.attempts, summary=res.summary, commit=item.commit)
             failures = 0 if res.status == "PASSED" else failures + 1
+            if res.status == "FAILED" and len(unit) > 1:  # a bundle that could not be fixed together: each problem gets its own chance
+                singles = [Item(c["id"], c["members"][0]["title"], c["file"], c["severity"], [c["id"]]) for c in unit]
+                item.summary += " → 묶음이 안 되어 문제를 하나씩 따로 다시 시도합니다"
+                result.items.extend(singles)
+                queue[0:0] = [(it, [c]) for it, c in zip(singles, unit)]
+                log("item_split", n=n, into=[it.cluster for it in singles])
             if res.status in ("BLOCKED_QUOTA", "STOPPED"):
                 stop = {"BLOCKED_QUOTA": "구독 사용 한도에 도달해 멈췄습니다 (API 결제로 넘어가지 않습니다)",
                         "STOPPED": "사용자가 중지했습니다"}[res.status]

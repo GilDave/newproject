@@ -189,12 +189,13 @@ def test_process_and_assessment_for_a_passed_run(env):
 def test_a_failed_attempt_shows_why_in_the_process(env):
     s = make_settings(max_attempts=1)
     o = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json("FAIL", ["missing test"])]),
-                         "codex": ScriptedProvider("codex", [write_file("src/other.py")])})
+                         "codex": ScriptedProvider("codex", [write_file("src/new.py")])})
+    s.test_command = ["python3", "-c", "raise SystemExit(0)"]  # the tests pass, so the reviewer is asked and rejects
     r = o.run("goal", env.repo)
     key = f"run:{r.run_id}"
     d = env.call("GET", f"/api/describe?project={quote(env.project)}&key={key}")[1]
     names = {s["name"]: s for s in d["process"]["attempts"][0]["steps"]}
-    assert names["테스트"]["status"] == "fail"
+    assert names["테스트"]["status"] == "ok"
     rev = next(v for k, v in names.items() if k.startswith("검수 ·"))
     assert rev["status"] == "fail" and "missing test" in rev["lines"][0]
     assert d["assessment"]["recommendation"] == "block"

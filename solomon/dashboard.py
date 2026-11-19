@@ -37,6 +37,7 @@ from .status import load_runs
 
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 PERSIST_MINUTES = 180  # the dashboard's 'keep trying' stops after this long
+PERSIST_ATTEMPTS = 24  # ... or after this many attempts: a backstop behind the repeated-failure detection
 MAX_GOAL = 20000  # long enough to paste a stack trace
 MAX_BODY = 2 * 1024 * 1024  # a pasted video transcript can be long (the page is local-only and token-protected)
 HTML_PATH = Path(__file__).with_name("dashboard.html")
@@ -778,7 +779,7 @@ class DashboardApp:
         if shadow:
             args += ["--shadow"]
         if persist:
-            args += ["--persist", "--max-minutes", str(PERSIST_MINUTES)]
+            args += ["--persist", "--max-minutes", str(PERSIST_MINUTES), "--max-attempts", str(PERSIST_ATTEMPTS)]
         if fresh:
             args += ["--no-baseline"]  # a brand-new project has nothing to be 'healthy' yet
         cfg = self._projects[project]

@@ -24,7 +24,7 @@ def test_unlimited_attempts_keep_going_until_it_passes(tmp_path):
     repo = make_repo(tmp_path)
     s = make_settings(max_attempts=0, stagnation_limit=50)
     bad = [write_file("src/other.py", f"x = {i}\n") for i in range(5)]
-    orch, p = three(s, [order_json()] + [review_json("FAIL", [f"p{i}"]) for i in range(5)] + [review_json()],
+    orch, p = three(s, [order_json(), review_json()],  # failing attempts are not reviewed: only the passing one is
                     bad + [write_file("src/new.py")])
     r = orch.run("goal", repo)
     assert r.status == "PASSED" and r.attempts == 6
@@ -33,7 +33,7 @@ def test_unlimited_attempts_keep_going_until_it_passes(tmp_path):
 def test_attempt_cap_still_applies(tmp_path):
     repo = make_repo(tmp_path)
     s = make_settings(max_attempts=2, stagnation_limit=50)
-    orch, p = three(s, [order_json(), review_json("FAIL", ["a"]), review_json("FAIL", ["b"])],
+    orch, p = three(s, [order_json()],
                     [write_file("src/other.py", "x=1\n"), write_file("src/other.py", "x=2\n")])
     r = orch.run("goal", repo)
     assert r.status == "FAILED" and r.attempts == 2 and "시도 상한" in r.summary
@@ -75,7 +75,7 @@ def test_stagnation_restarts_then_gives_up(tmp_path):
 def test_stagnation_restart_tells_builder_to_change_approach(tmp_path):
     repo = make_repo(tmp_path)
     s = make_settings(max_attempts=0, stagnation_limit=2, max_restarts=2)
-    orch, p = three(s, [order_json()] + [review_json("FAIL", ["same"])] * 2 + [review_json()],
+    orch, p = three(s, [order_json(), review_json()],
                     [write_file("src/other.py", "x=1\n"), write_file("src/other.py", "x=2\n"), write_file("src/new.py")])
     r = orch.run("goal", repo)
     assert r.status == "PASSED"
@@ -266,9 +266,9 @@ def test_builders_take_turns_after_failures_and_advisors_help(tmp_path):
     s.roles.update(builder2="claude", builder3="agy", reviewer2="agy")
     s.roles["reviewer"] = "claude"  # claude reviews attempts that codex built; when claude builds, agy must review
     advisor = "스펙을 먼저 읽고 빈 입력을 처리하세요"
-    # attempt1 codex (fails review), attempt2 codex (fails; 2nd consecutive failure -> hand over), attempt3 claude builds
+    # attempt1 codex (tests fail), attempt2 codex (fails; 2nd consecutive failure -> hand over), attempt3 claude builds
     orch, p = make3(s,
-                    claude=[order_json(), review_json("FAIL", ["a"]), review_json("FAIL", ["b"]), write_file("src/new.py")],
+                    claude=[order_json(), write_file("src/new.py")],
                     codex=[write_file("src/other.py", "x=1\n"), write_file("src/other.py", "x=2\n")],
                     agy=[advisor, review_json()])
     r = orch.run("goal", repo)
@@ -434,3 +434,71 @@ def test_failover_is_visible_in_the_status_and_configurable_from_toml(tmp_path):
     cfg.write_text('[failover]\nauto = false\ncooldown_min = 30\nbuilder = ["claude"]\n')
     loaded = load_settings(cfg)
     assert loaded.auto_failover is False and loaded.quota_cooldown_min == 30 and loaded.failover == {"builder": ["claude"]}
+
+
+# ---------------------------------------------------------------- a failure that keeps coming back must end the run (37 attempts was a bug)
+def test_signature_ignores_timings_paths_and_the_words_an_ai_writes():
+    sig = Orchestrator._signature
+    t1 = "Tests failed (exit 1):\n=== short test summary ===\nFAILED tests/test_a.py::test_x - AssertionError: 1.23s\nFAILED tests/test_b.py::test_y - boom\n2 failed in 4.1s"
+    t2 = "Tests failed (exit 1):\nsome other header /tmp/xyz/run-9\nFAILED tests/test_b.py::test_y - different message\nFAILED tests/test_a.py::test_x\n2 failed in 99.9s"
+    assert sig([t1]) == sig([t2])
+    assert sig([t1]) != sig(["Tests failed (exit 1):\nFAILED tests/test_c.py::test_z - x"])
+    assert sig(["Reviewer issues:\n- 경계값 처리가 없습니다"]) == sig(["Reviewer issues:\n- 완전히 다른 문장으로 쓴 지적입니다", "x"[:0] or "Reviewer issues:\n- 또 다른"])
+    assert sig([t1, "Reviewer issues:\n- a"]) != sig([t1])
+
+
+def test_endless_look_alike_failures_stop_the_run_after_the_allowed_restarts(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings(max_attempts=0, stagnation_limit=3, max_restarts=1)
+    s.test_command = ["python3", "-c", "import random; print('FAILED tests/test_a.py::test_x - boom', random.random()); print('1 failed in', random.random(), 's'); raise SystemExit(1)"]
+    n = 40
+    ps = {"claude": ScriptedProvider("claude", [order_json()] + [review_json("FAIL", [f"지적 {i}번: 문장이 매번 다릅니다 {i * 7}"]) for i in range(n)]),
+          "codex": ScriptedProvider("codex", [write_file("src/new.py", f"x = {i}\n") for i in range(n)])}
+    r = Orchestrator(s, ps, sleep=lambda x: None).run("add module", repo)
+    assert r.status == "FAILED" and "반복돼 중단" in r.summary
+    assert r.attempts <= 3 * (1 + 1) + 1, r.attempts  # three look-alikes, one clean restart, three more -> stop
+
+
+def test_mixed_failure_kinds_do_not_hide_a_repeating_one(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings(max_attempts=0, stagnation_limit=3, max_restarts=0)
+    s.test_command = ["python3", "-c", "import sys, pathlib; print('FAILED tests/test_a.py::test_x - boom'); sys.exit(1)"]
+    n = 30
+    # every attempt fails the same test; the reviewer sometimes passes, sometimes fails: the recurring test failure must still be seen
+    reviews = [review_json("PASS" if i % 2 else "FAIL", [] if i % 2 else [f"x{i}"]) for i in range(n)]
+    ps = {"claude": ScriptedProvider("claude", [order_json()] + reviews), "codex": ScriptedProvider("codex", [write_file("src/new.py", f"x = {i}\n") for i in range(n)])}
+    r = Orchestrator(s, ps, sleep=lambda x: None).run("add module", repo)
+    assert r.status == "FAILED" and r.attempts <= 6, (r.status, r.attempts)
+
+
+# ---------------------------------------------------------------- fewer pointless failures
+def test_review_is_not_asked_while_the_tests_still_fail(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings(max_attempts=1)
+    orch, p = three(s, [order_json()], [write_file("src/other.py", "x=1\n")])  # a review call would exhaust the script
+    r = orch.run("goal", repo)
+    assert r.status == "FAILED" and len(p["claude"].calls) == 1
+    ev = [e for e in events(r) if e["event"] == "review"]
+    assert ev and ev[0]["verdict"] == "SKIPPED"
+
+
+def test_only_blockers_send_work_back_minor_remarks_become_notes(tmp_path):
+    from solomon.schemas import ReviewResult
+    r = ReviewResult.from_dict({"verdict": "FAIL", "issues": [{"severity": "minor", "text": "변수 이름을 바꾸면 좋겠습니다"}], "summary": "s"})
+    assert r.verdict == "PASS" and r.issues == [] and r.notes == ["변수 이름을 바꾸면 좋겠습니다"]
+    r = ReviewResult.from_dict({"verdict": "FAIL", "issues": [{"severity": "minor", "text": "m"}, {"severity": "blocker", "text": "경계값에서 죽습니다"}]})
+    assert r.verdict == "FAIL" and r.issues == ["경계값에서 죽습니다"] and r.notes == ["m"]
+    assert ReviewResult.from_dict({"verdict": "FAIL", "issues": ["old style string"]}).verdict == "FAIL"  # plain strings stay blockers
+    assert ReviewResult.from_dict({"verdict": "FAIL", "issues": []}).verdict == "FAIL"  # FAIL with nothing said is still a FAIL
+    repo = make_repo(tmp_path)
+    orch, p = three(make_settings(), [order_json(), json.dumps({"verdict": "FAIL", "issues": [{"severity": "minor", "text": "스타일"}], "summary": "ok"})],
+                    [write_file("src/new.py")])
+    res = orch.run("goal", repo)
+    assert res.status == "PASSED" and any(w.startswith("REVIEW_NOTES") and "스타일" in w for w in res.warnings)
+
+
+def test_the_reviewer_prompt_asks_for_severity():
+    from solomon import prompts
+    from solomon.schemas import Order
+    text = prompts.reviewer(Order("g", ["src/"]), "diff", "ok", [])
+    assert '"severity": "blocker" | "minor"' in text and "must NOT cause FAIL" in text

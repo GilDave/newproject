@@ -153,8 +153,8 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             agy = _Fake("agy", [json.dumps({"verdict": "CHANGE", "concerns": ["빈 입력"], "extra_acceptance_criteria": ["빈 입력 처리"]}),
                                 "조언: 빈 입력을 먼저 처리하세요", _review(), _review()])
             agy.supports_write = False
-            # attempt 1 (codex) is rejected by claude; attempt 2 (codex) too; attempt 3 is handed to claude, so agy must review it
-            claude = _Fake("claude", [_order(), _review("FAIL", ["a"]), _review("FAIL", ["b"]), _write("src/new.py")])
+            # attempts 1 and 2 (codex) fail the tests (nobody reviews code whose tests fail); attempt 3 is handed to claude, so agy must review it
+            claude = _Fake("claude", [_order(), _write("src/new.py")])
             codex = _Fake("codex", [_write("src/other.py", "x = 1\n"), _write("src/other.py", "x = 2\n")])
             st.max_attempts = 0
             st.stagnation_limit = 50

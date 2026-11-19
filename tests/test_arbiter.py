@@ -171,7 +171,7 @@ def test_the_builder_cannot_be_its_own_arbiter(tmp_path):
     s2 = make_settings()
     s2.roles.update(builder2="claude", arbiter="claude", reviewer="agy")  # claude builds on a hand-over: it must not judge itself
     s2.roles["reviewer"] = "agy"
-    agy = ScriptedProvider("agy", [review_json("FAIL", ["a"]), review_json("FAIL", ["b"]), review_json()]); agy.supports_write = False
+    agy = ScriptedProvider("agy", [review_json()]); agy.supports_write = False
     s2.max_attempts, s2.stagnation_limit = 0, 50
     ps = {"claude": ScriptedProvider("claude", [order_json(), write_file("src/new.py")]), "agy": agy,
           "codex": ScriptedProvider("codex", [write_file("src/other.py", "x=1\n"), write_file("src/other.py", "x=2\n")])}
