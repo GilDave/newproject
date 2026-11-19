@@ -139,7 +139,7 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 .runs small{color:var(--dim)} .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;margin-right:6px;background:#13202f;color:var(--dim)}
 .tag.PASSED{background:#0f3a2b;color:#9df0cf}.tag.FAILED,.tag.ERROR{background:#3a1820;color:#ffb3bd}.tag.BLOCKED_QUOTA{background:#3a2d10;color:#f7d98b}.tag.LIVE{background:#123469;color:#cfe0ff}.tag.STOPPED{background:#2a2a35;color:#c4c8d6}
 /* center */
-.stage{position:relative;height:520px;border-radius:18px;border:1px solid var(--line);background:radial-gradient(500px 300px at 50% 45%,#0d1b2c 0,#08101a 70%);overflow:hidden}
+.stage{position:relative;height:560px;border-radius:18px;border:1px solid var(--line);background:radial-gradient(500px 300px at 50% 45%,#0d1b2c 0,#08101a 70%);overflow:hidden}
 .stage svg{position:absolute;inset:0;width:100%;height:100%}
 .edge{stroke:#20344c;stroke-width:.35;fill:none;vector-effect:non-scaling-stroke}
 .edge.hot{stroke:#4f86d6;stroke-width:1.4;stroke-dasharray:5 7;animation:flow 1s linear infinite}
@@ -154,12 +154,39 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 @keyframes pulse{50%{transform:scale(1.06)}} @keyframes spin{to{transform:rotate(360deg)}}
 .node .role{margin-top:12px;font-size:11px;letter-spacing:.16em;color:var(--dim);font-weight:700}
 .node .who{font-size:20px;font-weight:800;color:var(--c);margin-top:16px}
-.node .st{font-size:12px;color:var(--dim)}
+.node .st{display:block;grid-template-columns:none;margin:2px 0 0;font-size:12px;color:var(--dim);text-align:center;white-space:nowrap}
 .node .roles-of{font-size:12px;color:var(--text);margin-top:2px}
 .node.idle .orb{opacity:.45;filter:saturate(.6)}
 .node.missing .orb{opacity:.25;filter:grayscale(1)}
 .node.missing .orb::after{border-color:#6b2a36}
 .node.quota .orb{box-shadow:0 0 26px #ff6b6b66}
+
+/* stage effects */
+.stage canvas#fx{position:absolute;inset:0;width:100%;height:100%;z-index:1;pointer-events:none}
+.stage .node{z-index:2}
+.stage .node.recv .orb{animation:recv .7s ease-out}
+.stage .node.shake .orb{animation:shake .5s ease-in-out}
+@keyframes recv{0%{transform:scale(1)}30%{transform:scale(1.14)}100%{transform:scale(1)}}
+@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px)}40%{transform:translateX(7px)}60%{transform:translateX(-5px)}80%{transform:translateX(4px)}}
+.node.shadowarb .orb::before{content:"";position:absolute;inset:-18px;border-radius:50%;border:1.5px dotted #b69cff;opacity:.7;animation:spin 14s linear infinite reverse}
+.gates{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);width:max-content;max-width:96%;white-space:nowrap;z-index:3;display:flex;align-items:center;gap:0;background:rgba(8,16,26,.72);border:1px solid var(--line);border-radius:999px;padding:5px 8px;backdrop-filter:blur(3px)}
+.gate{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);padding:3px 10px;border-radius:999px;transition:all .3s}
+.gate i{font-style:normal;width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;border:1px solid #2a3f5c;color:var(--faint);transition:all .3s}
+.gate+.gate::before{content:"";width:14px;height:1px;background:#2a3f5c;margin-right:6px;margin-left:-10px;display:inline-block}
+.gate.run{color:#cfe0ff}.gate.run i{border-color:#4f86d6;color:#9cc2ff;animation:pulse 1s ease-in-out infinite;box-shadow:0 0 10px #4f86d6aa}
+.gate.pass{color:#8be0b3}.gate.pass i{background:#12372a;border-color:#3ecf8e;color:#8be0b3}
+.gate.fail{color:#ffb3bd}.gate.fail i{background:#3a1820;border-color:#ff6b6b;color:#ffb3bd}
+.gate.human{color:#f7d98b}.gate.human i{background:#3a2d10;border-color:#e0b34a;color:#f7d98b}
+.gate.skip{color:#c4c8d6}.gate.skip i{border-style:dashed}
+.gate.pop{animation:gpop .6s ease-out}
+@keyframes gpop{0%{transform:scale(1)}35%{transform:scale(1.18)}100%{transform:scale(1)}}
+.attchip{position:absolute;left:14px;top:12px;z-index:3;font-size:12px;color:var(--dim);background:rgba(8,16,26,.72);border:1px solid var(--line);border-radius:999px;padding:4px 12px;display:flex;gap:6px;align-items:center}
+.attchip b{color:var(--text)}.attchip .ad{width:9px;height:9px;border-radius:50%;background:#2a3f5c}.attchip .ad.ok{background:#3ecf8e}.attchip .ad.bad{background:#ff6b6b}.attchip .ad.cur{background:#4f86d6;animation:pulse 1s infinite}
+.fxbtn{position:absolute;right:12px;top:10px;z-index:3;font-size:12px;padding:5px 12px;border-radius:999px;background:rgba(8,16,26,.72);border:1px solid var(--line);color:var(--dim);cursor:pointer}
+.fxbtn:hover{color:#fff;border-color:#4f86d6}
+.step.cur{position:relative;overflow:hidden}.step.cur::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgba(120,170,255,.28) 50%,transparent 70%);transform:translateX(-100%);animation:sweep 1.8s ease-in-out infinite}
+@keyframes sweep{to{transform:translateX(100%)}}
+@media (prefers-reduced-motion:reduce){.step.cur::after,.gate.run i,.node.shadowarb .orb::before{animation:none}}
 .pool{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:14px}
 .chip{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;color:var(--dim);background:#0b141f}
 .chip b{color:var(--text)} .chip.bad{border-color:#6b2a36;color:#ffb3bd} .chip.ghost{border-style:dashed;color:var(--faint)}
@@ -322,6 +349,10 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
   <section class="col">
     <div class="stage" id="stage">
       <svg id="edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+      <canvas id="fx" aria-hidden="true"></canvas>
+      <div class="attchip" id="attChip" hidden></div>
+      <button class="fxbtn" id="fxDemo" type="button" title="계획 → 구현 → 검증 → 검수 → 결정 흐름을 시험 영상처럼 보여줍니다">▶ 흐름 미리보기</button>
+      <div class="gates" id="gates" hidden></div>
     </div>
     <div class="pool" id="pool"></div>
     <div class="bar" id="bar"></div>
@@ -762,17 +793,201 @@ function renderDash(){
   });
   if (!list.length) runs.appendChild(el("div", "hint", isVid ? "아직 영상 분석 기록이 없습니다." : isAn ? "아직 분석 기록이 없습니다." : "아직 실행 기록이 없습니다."));
 
-  renderStage(cur, isAn); renderRight(cur, isAn); renderReport(isAn && !isVid ? cur : null); renderVideoReport(isVid ? cur : null);
+  const stageCur = FX.demoCur && !isAn ? FX.demoCur : cur; renderStage(stageCur, isAn); renderGates(stageCur, isAn); renderRight(cur, isAn); renderReport(isAn && !isVid ? cur : null); renderVideoReport(isVid ? cur : null);
 }
 
 const nodeEls = {};
+
+// ---------------------------------------------------------------- 연출 엔진: 인계 패킷 · 궤도 점 · 파문 · 불꽃 · 검증 게이트
+const FX = (() => {
+  const cv = $("fx"), ctx = cv.getContext("2d");
+  const reduce = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const LABEL = {planner: "작업 요청", builder: "작업 지시서", reviewer: "변경 diff", arbiter: "검수 결과"};
+  let W = 0, H = 0, sc = null, prev = null, lastActor = null, centers = {}, running = false, tick = 0, lastDraw = 0;
+  const packets = [], ripples = [], sparks = [], dust = [];
+  for (let i = 0; i < 46; i++) dust.push({x: Math.random(), y: Math.random(), r: .4 + Math.random() * 1.2, v: .004 + Math.random() * .01, a: .15 + Math.random() * .35, ph: Math.random() * 6.28});
+  const rgbCache = {};
+  const css = (c) => { if (rgbCache[c]) return rgbCache[c]; const t = document.createElement("span"); t.style.color = c; document.body.appendChild(t); const v = getComputedStyle(t).color; t.remove(); return rgbCache[c] = v; };
+  const rgba = (c, a) => c.replace("rgb(", "rgba(").replace(")", "," + a + ")");
+  function resize(){ const st = $("stage"); if (!st) return; const r = st.getBoundingClientRect(); if (!r.width) return; const dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = r.width; H = r.height; cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); measure(); }
+  function measure(){ const st = $("stage").getBoundingClientRect(); centers = {};
+    Object.keys(nodeEls).forEach(k => { const o = nodeEls[k].firstChild.getBoundingClientRect(); centers[k] = [o.left - st.left + o.width / 2, o.top - st.top + o.height / 2]; }); }
+  window.addEventListener("resize", () => { resize(); if (reduce) draw(performance.now()); });
+  const col = (n) => (sc && sc.colors[n]) || "rgb(120,160,230)";
+  const base = (role) => role ? role.replace(/[23]$/, "") : "";
+
+  function pathPoint(a, b, t, bend){ // quadratic curve a -> b bulging a little, so lines are not straight rulers
+    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, dx = b[0] - a[0], dy = b[1] - a[1], cx = mx - dy * bend, cy = my + dx * bend, u = 1 - t;
+    return [u * u * a[0] + 2 * u * t * cx + t * t * b[0], u * u * a[1] + 2 * u * t * cy + t * t * b[1]]; }
+  function handoff(from, to, label, c1, c2){
+    const b = centers[to]; if (!b) return;
+    const a = typeof from === "string" ? centers[from] : from; if (!a) return;
+    packets.push({a, b, t: 0, dur: from === to ? 1.4 : 1.15, label, c1, c2, trail: [], same: from === to});
+    if (reduce) draw(performance.now());
+  }
+  function ripple(at, color, delay){ if (at) ripples.push({x: at[0], y: at[1], r: 20, max: 120, a: .7, color, delay: delay || 0}); }
+  function burst(at, color, n){ if (!at) return; for (let i = 0; i < n; i++){ const ang = Math.random() * 6.28, sp = 40 + Math.random() * 150;
+    sparks.push({x: at[0], y: at[1], vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp - 30, life: 1, color, r: 1.2 + Math.random() * 2.2}); } }
+  function flash(name, cls){ const n = nodeEls[name]; if (!n) return; n.classList.remove(cls); void n.offsetWidth; n.classList.add(cls); setTimeout(() => n.classList.remove(cls), 800); }
+
+  function scene(s){
+    sc = s; measure();
+    const a = s.actives[0], pa = prev && prev.actives[0];
+    if (prev && prev.runId === s.runId && s.live && s.mode === "run"){
+      if (a && (!lastActor || lastActor.provider !== a.provider || lastActor.role !== a.role)){
+        const label = LABEL[base(a.role)] || "";
+        if (lastActor && lastActor.provider !== a.provider) handoff(lastActor.provider, a.provider, label, col(lastActor.provider), col(a.provider));
+        else if (!lastActor) handoff([W / 2, -10], a.provider, "작업 요청", "rgb(160,190,255)", col(a.provider));
+        else { handoff(a.provider, a.provider, label, col(a.provider), col(a.provider)); }
+        flash(a.provider, "recv");
+      }
+      if (s.attempts > prev.attempts && s.attempts > 1 && lastActor){
+        const to = lastActor.provider; ripple(centers[to], "rgb(255,107,107)"); flash(to, "shake");
+        handoff([W / 2, H - 26], to, "재시도 " + s.attempts, "rgb(255,107,107)", "rgb(255,150,120)");  // sent back from the gate track
+      }
+    }
+    if (a) lastActor = {provider: a.provider, role: a.role};
+    if (prev && prev.runId === s.runId && prev.live && !s.live && s.outcome){
+      const at = centers[s.arb] ? s.arb : (lastActor ? lastActor.provider : null);
+      const c = s.outcome === "pass" ? "rgb(62,207,142)" : s.outcome === "human" ? "rgb(247,217,139)" : "rgb(255,107,107)";
+      if (at){ ripple(centers[at], c); ripple(centers[at], c, .25); ripple(centers[at], c, .5); burst(centers[at], c, s.outcome === "pass" ? 60 : 26); flash(at, s.outcome === "pass" ? "recv" : "shake"); }
+      if (s.mode === "an" && centers.__hub){ ripple(centers.__hub, c); burst(centers.__hub, c, 50); }
+    }
+    if (s.runId !== (prev && prev.runId)) lastActor = null;
+    prev = s;
+    if (!running) start();
+  }
+
+  function start(){ if (reduce){ draw(performance.now()); return; } running = true; requestAnimationFrame(loop); }
+  function loop(now){
+    const st = $("stage");
+    if (document.hidden || !st || !st.offsetParent){ running = false; return; }  // nothing is drawn while the page or tab is hidden
+    if (now - lastDraw >= 30){ draw(now); lastDraw = now; }
+    requestAnimationFrame(loop);
+  }
+
+  function draw(now){
+    if (!W || !sc){ resize(); if (!W || !sc) return; }
+    const dt = Math.min(.1, (now - (draw.last || now)) / 1000); draw.last = now; const T = now / 1000;
+    ctx.clearRect(0, 0, W, H);
+    const live = sc.live, names = sc.names.filter(n => centers[n]);
+    // 1 dust: calm when idle, livelier while working
+    dust.forEach(d => { d.y -= d.v * dt * (live ? 2.2 : 1); d.x += Math.sin(T * .3 + d.ph) * .0004; if (d.y < 0){ d.y = 1; d.x = Math.random(); }
+      ctx.fillStyle = "rgba(150,190,255," + (d.a * (live ? .9 : .5) * (.6 + .4 * Math.sin(T + d.ph))) + ")"; ctx.beginPath(); ctx.arc(d.x * W, d.y * H, d.r, 0, 6.28); ctx.fill(); });
+    // 2 hub for analyses: the AIs stream their findings to the centre where they are checked against the source
+    let hub = null;
+    if (sc.mode === "an"){ hub = [W / 2, H * .53]; centers.__hub = hub;
+      const verifying = sc.key === "verify", done = sc.key === "done";
+      ctx.strokeStyle = done ? "rgba(62,207,142,.8)" : verifying ? "rgba(247,217,139,.9)" : "rgba(120,160,230,.45)"; ctx.lineWidth = 1.5; ctx.setLineDash([3, 5]);
+      ctx.beginPath(); ctx.arc(hub[0], hub[1], 26 + (verifying ? 3 * Math.sin(T * 6) : 0), 0, 6.28); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(160,190,255,.8)"; ctx.font = "11px sans-serif"; ctx.textAlign = "center"; ctx.fillText(done ? "보고서" : verifying ? "근거 검증" : "취합", hub[0], hub[1] + 4); }
+    // 3 edges
+    const actProv = sc.actives.map(a => a.provider);
+    for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++){
+      const A = centers[names[i]], B = centers[names[j]], hot = actProv.includes(names[i]) || actProv.includes(names[j]);
+      const flow = sc.next && ((actProv.includes(names[i]) && names[j] === sc.next) || (actProv.includes(names[j]) && names[i] === sc.next));
+      const arbE = sc.arb && (names[i] === sc.arb || names[j] === sc.arb);
+      ctx.beginPath(); for (let k = 0; k <= 24; k++){ const p = pathPoint(A, B, k / 24, .06); k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }
+      if (flow){ const g = ctx.createLinearGradient(A[0], A[1], B[0], B[1]); g.addColorStop(0, rgba(col(names[i]), .9)); g.addColorStop(1, rgba(col(names[j]), .9)); ctx.strokeStyle = g; ctx.lineWidth = 2.2; ctx.setLineDash([8, 8]); ctx.lineDashOffset = -T * 40; }
+      else if (hot){ ctx.strokeStyle = "rgba(90,140,220,.55)"; ctx.lineWidth = 1.4; ctx.setLineDash([5, 9]); ctx.lineDashOffset = -T * 22; }
+      else if (arbE){ ctx.strokeStyle = "rgba(123,92,214,.45)"; ctx.lineWidth = 1.1; ctx.setLineDash([2, 6]); ctx.lineDashOffset = 0; }
+      else { ctx.strokeStyle = "rgba(60,95,140,.3)"; ctx.lineWidth = .8; ctx.setLineDash([]); }
+      ctx.stroke(); ctx.setLineDash([]);
+      if (flow && Math.random() < 6 * dt){ const from = actProv.includes(names[i]) ? i : j, to = from === i ? j : i;  // a few motes drifting along the working edge
+        packets.push({a: centers[names[from]], b: centers[names[to]], t: 0, dur: 1.6 + Math.random(), label: "", c1: col(names[from]), c2: col(names[to]), trail: [], mote: true}); }
+    }
+    if (hub) sc.actives.forEach(a => { const A = centers[a.provider]; if (A) { ctx.strokeStyle = rgba(col(a.provider), .35); ctx.lineWidth = 1.2; ctx.setLineDash([4, 6]); ctx.lineDashOffset = -T * 30; ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(hub[0], hub[1]); ctx.stroke(); ctx.setLineDash([]);
+      if (Math.random() < 4 * dt) packets.push({a: A, b: hub, t: 0, dur: 1.5, label: "", c1: col(a.provider), c2: "rgb(160,190,255)", trail: [], mote: true}); } });
+    // 4 active actors: aura, sweeping ring, orbiting thought dots
+    sc.actives.forEach((a, idx) => { const C = centers[a.provider]; if (!C) return; const c = col(a.provider);
+      const g = ctx.createRadialGradient(C[0], C[1], 30, C[0], C[1], 120 + 10 * Math.sin(T * 2)); g.addColorStop(0, rgba(c, .28)); g.addColorStop(1, rgba(c, 0));
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(C[0], C[1], 135, 0, 6.28); ctx.fill();
+      const R = 66, head = T * 2.2; ctx.lineWidth = 3; ctx.lineCap = "round";
+      for (let k = 0; k < 18; k++){ const f = k / 18; ctx.strokeStyle = rgba(c, (1 - f) * .85); ctx.beginPath(); ctx.arc(C[0], C[1], R, head - f * 1.5 - .09, head - f * 1.5 + .01); ctx.stroke(); }
+      for (let k = 0; k < 3; k++){ const ang = T * (1.3 + k * .55) + k * 2.1, rr = R + 12 + 5 * Math.sin(T * 2 + k); const x = C[0] + Math.cos(ang) * rr, y = C[1] + Math.sin(ang) * rr * .78;
+        ctx.fillStyle = rgba(c, .95); ctx.shadowColor = c; ctx.shadowBlur = 10; ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 6.28); ctx.fill(); ctx.shadowBlur = 0; } });
+    // 5 packets (handoffs and motes)
+    for (let i = packets.length - 1; i >= 0; i--){ const p = packets[i]; p.t += dt / p.dur; if (p.t >= 1){ if (!p.mote){ ripple(p.b, p.c2); if (!p.same) flash(sc && Object.keys(centers).find(k => centers[k] === p.b), "recv"); } packets.splice(i, 1); continue; }
+      const e = p.mote ? p.t : p.t * p.t * (3 - 2 * p.t); let pt;
+      if (p.same){ pt = [p.b[0], p.b[1] - 78 - 46 * e]; } else pt = pathPoint(p.a, p.b, e, .06);
+      p.trail.push(pt); if (p.trail.length > (p.mote ? 6 : 16)) p.trail.shift();
+      const mix = p.t, head = p.same ? p.c2 : p.c2;
+      p.trail.forEach((q, k) => { const f = (k + 1) / p.trail.length; ctx.fillStyle = rgba(p.same ? p.c2 : (mix < .5 ? p.c1 : p.c2), f * (p.mote ? .5 : .75)); ctx.beginPath(); ctx.arc(q[0], q[1], (p.mote ? 1.2 : 2.2) * f + .5, 0, 6.28); ctx.fill(); });
+      if (!p.mote){ ctx.shadowColor = head; ctx.shadowBlur = 16; ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(pt[0], pt[1], 4.2, 0, 6.28); ctx.fill(); ctx.shadowBlur = 0;
+        if (p.label){ ctx.font = "600 11px sans-serif"; const w = ctx.measureText(p.label).width + 16, x = pt[0] - w / 2, y = pt[1] - 30; ctx.globalAlpha = Math.min(1, (1 - p.t) * 3);
+          ctx.fillStyle = "rgba(10,20,34,.92)"; ctx.strokeStyle = rgba(head, .9); ctx.lineWidth = 1; ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, 20, 10); else ctx.rect(x, y, w, 20); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = "#e8f0ff"; ctx.textAlign = "center"; ctx.fillText(p.label, pt[0], y + 14); ctx.globalAlpha = 1; } } }
+    // 6 ripples and sparks
+    for (let i = ripples.length - 1; i >= 0; i--){ const r = ripples[i]; if (r.delay > 0){ r.delay -= dt; continue; } r.r += dt * 150; r.a -= dt * .6; if (r.a <= 0){ ripples.splice(i, 1); continue; }
+      ctx.strokeStyle = rgba(r.color, r.a); ctx.lineWidth = 2.2; ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 6.28); ctx.stroke(); }
+    for (let i = sparks.length - 1; i >= 0; i--){ const q = sparks[i]; q.life -= dt * .9; if (q.life <= 0){ sparks.splice(i, 1); continue; } q.vy += 60 * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= .985;
+      ctx.fillStyle = rgba(q.color, q.life); ctx.shadowColor = q.color; ctx.shadowBlur = 8; ctx.beginPath(); ctx.arc(q.x, q.y, q.r * q.life + .4, 0, 6.28); ctx.fill(); ctx.shadowBlur = 0; }
+    if (packets.length > 90) packets.splice(0, packets.length - 90);
+  }
+
+  // a scripted pipeline for the preview button (and for looking at the stage without spending any AI calls)
+  let demoTimer = null;
+  const demo = () => {
+    const names = state.providers.map(p => p.name); if (names.length < 3) { toast("AI가 3개 이상 보일 때 미리보기를 쓸 수 있습니다.", true); return; }
+    const roles = {planner: names[0], builder: names[1], reviewer: names[2]}; if (names[3]) roles.arbiter = names[3];
+    const cur = {run_id: "demo", live: true, status: "RUNNING", roles, attempts: 1, stage_key: "plan", stage: "계획", calls: [], active: null, attempt_details: [], quota_providers: [], goal: "미리보기"};
+    const at = () => cur.attempt_details[cur.attempt_details.length - 1];
+    const push = () => { FX.demoCur = cur; renderStage(cur, false); renderGates(cur, false); };
+    const steps = [
+      [0, () => { cur.active = {provider: roles.planner, role: "planner", since: new Date().toISOString()}; }],
+      [3500, () => { cur.active = {provider: roles.builder, role: "builder", since: new Date().toISOString()}; cur.stage_key = "build"; cur.stage = "구현"; cur.attempt_details.push({attempt: 1, violations: [], verify: null, review: null, arbiter: null}); }],
+      [7500, () => { cur.active = null; cur.stage_key = "scope"; }],
+      [8700, () => { cur.stage_key = "test"; }],
+      [10200, () => { at().verify = {passed: false}; cur.attempts = 2; cur.stage_key = "build"; cur.active = {provider: roles.builder, role: "builder", since: new Date().toISOString()}; cur.attempt_details.push({attempt: 2, violations: [], verify: null, review: null, arbiter: null}); }],
+      [14000, () => { cur.active = null; cur.stage_key = "scope"; }],
+      [15000, () => { cur.stage_key = "test"; }],
+      [16300, () => { at().verify = {passed: true}; cur.stage_key = "review"; cur.active = {provider: roles.reviewer, role: "reviewer", since: new Date().toISOString()}; }],
+      [19500, () => { at().review = {verdict: "PASS", issues: []}; cur.stage_key = roles.arbiter ? "decide" : "review"; cur.active = roles.arbiter ? {provider: roles.arbiter, role: "arbiter", since: new Date().toISOString()} : null; }],
+      [22500, () => { if (roles.arbiter) at().arbiter = {final: "ADOPT"}; cur.live = false; cur.finished = true; cur.status = "PASSED"; cur.stage_key = "done"; cur.active = null; }],
+    ];
+    clearInterval(demoTimer); prev = null; lastActor = null;
+    const t0 = Date.now(); let i = 0;
+    $("fxDemo").textContent = "■ 미리보기 중지"; $("fxDemo").dataset.on = "1";
+    demoTimer = setInterval(() => {
+      const el_ = Date.now() - t0; while (i < steps.length && steps[i][0] <= el_){ steps[i][1](); i++; }
+      push();
+      if (el_ > 28000) stop();
+    }, 250);
+  };
+  const stop = () => { clearInterval(demoTimer); demoTimer = null; FX.demoCur = null; $("fxDemo").textContent = "▶ 흐름 미리보기"; $("fxDemo").dataset.on = ""; prev = null; lastActor = null; if (state) render(); };
+  return {scene, resize, demo, stop, rgb: css, demoCur: null, isDemo: () => !!demoTimer};
+})();
+function renderGates(cur, isAn){
+  const g = $("gates"), chip = $("attChip");
+  $("fxDemo").hidden = isAn;  // the preview plays the build pipeline, so it is only offered there
+  if (isAn || !cur){ g.hidden = true; chip.hidden = true; return; }
+  const roles = cur.roles || {}, key = cur.stage_key, a = latestAttempt(cur) || {violations: [], verify: null, review: null, arbiter: null};
+  const st = {
+    scope: a.violations && a.violations.length ? "fail" : (a.verify || ["test", "review", "decide", "done"].includes(key) && a.attempt) ? "pass" : key === "scope" ? "run" : "idle",
+    test: a.verify ? (a.verify.skipped ? "skip" : a.verify.passed ? "pass" : "fail") : key === "test" ? "run" : "idle",
+    review: a.review ? (a.review.verdict === "PASS" ? "pass" : "fail") : key === "review" && cur.live ? "run" : "idle",
+    decide: a.arbiter ? (a.arbiter.final === "ADOPT" ? "pass" : a.arbiter.final === "REJECT" ? "fail" : "human") : key === "decide" && cur.live ? "run" : "idle",
+  };
+  const items = [["scope", "범위 검사", "①"], ["test", "테스트", "②"], ["review", "검수", "③"]].concat(roles.arbiter ? [["decide", "결정", "④"]] : []);
+  const ICON = {pass: "✓", fail: "✗", human: "!", skip: "–", run: "…"};
+  g.hidden = false;
+  if (g.children.length !== items.length){ clear(g); items.forEach(([k, label, n]) => { const d = el("div", "gate idle"); d.dataset.k = k; d.appendChild(el("i", "", n)); d.appendChild(el("span", "", label)); g.appendChild(d); }); }
+  Array.from(g.children).forEach(d => { const k = d.dataset.k, v = st[k], was = d.dataset.v;
+    if (was !== v){ d.className = "gate " + v + (was ? " pop" : ""); d.firstChild.textContent = ICON[v] || items.find(x => x[0] === k)[2]; d.dataset.v = v; } });
+  chip.hidden = false; clear(chip);
+  chip.appendChild(document.createTextNode("시도 ")); chip.appendChild(el("b", "", String(cur.attempts || 1)));
+  (cur.attempt_details || []).forEach((x, i, arr) => { const last = i === arr.length - 1, bad = (x.violations && x.violations.length) || (x.verify && !x.verify.passed) || (x.review && x.review.verdict !== "PASS") || (x.arbiter && x.arbiter.final === "REJECT");
+    const ok = x.review && x.review.verdict === "PASS" && x.verify && x.verify.passed && !(x.arbiter && x.arbiter.final === "REJECT");
+    chip.appendChild(el("span", "ad " + (ok ? "ok" : bad ? "bad" : last && cur.live ? "cur" : ""))); });
+}
 function layout(n){  // positions in % of the stage: 1 centre, 2 side by side, 3+ on a circle starting at the top
   if (n === 1) return [[50, 50]];
   if (n === 2) return [[28, 52], [72, 52]];
   return Array.from({length: n}, (_, i) => { const a = (-90 + i * 360 / n) * Math.PI / 180; return [50 + 32 * Math.cos(a), 52 + 30 * Math.sin(a)]; });
 }
 function currentRoles(cur){
-  if (cur && cur.roles && Object.keys(cur.roles).length && (cur.live || selectedRun)) return cur.roles;  // a run being watched shows its own roles; otherwise the form is the preview
+  if (cur && cur.roles && Object.keys(cur.roles).length && (cur.live || selectedRun || cur.run_id === "demo")) return cur.roles;  // a run being watched shows its own roles; otherwise the form is the preview
   return collectRoles();
 }
 function activeCalls(cur, isAn){
@@ -812,17 +1027,20 @@ function renderStage(cur, isAn){
       status = !p.installed ? (p.local ? "서버·모델 없음" : "설치 안 됨") : quota ? "한도 소진" : act ? ROLE_KO[act.role] + " 작업 중" : calls ? calls + "회 완료" : "대기";
       idle = !mine.length && !calls && !act;
     }
-    n.className = "node" + (act ? " active" : "") + (!p.installed ? " missing" : (idle ? " idle" : "")) + (quota ? " quota" : "") + (p.name === arbName ? " arbiter" : "");
+    const keepFx = ["recv", "shake"].filter(c => n.classList.contains(c));
+    n.className = "node" + (keepFx.length ? " " + keepFx.join(" ") : "") + (act ? " active" : "") + (!p.installed ? " missing" : (idle ? " idle" : "")) + (quota ? " quota" : "") + (p.name === arbName ? " arbiter" + ($("shadow") && $("shadow").checked ? " shadowarb" : "") : "");
     n.children[1].textContent = (p.name === arbName ? "👑 " : "") + pname(p.name); n.children[2].textContent = rolesText; n.children[3].textContent = status;
   });
-  while (edges.firstChild) edges.removeChild(edges.firstChild);
-  for (let i = 0; i < provs.length; i++) for (let j = i + 1; j < provs.length; j++){
-    const hot = actives.some(a => a.provider === provs[i].name || a.provider === provs[j].name);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M" + pos[i][0] + " " + pos[i][1] + " L" + pos[j][0] + " " + pos[j][1]);
-    const arbEdge = arbName && (provs[i].name === arbName || provs[j].name === arbName);
-    path.setAttribute("class", "edge" + (arbEdge ? " arb" : "") + (hot ? " hot" : ""));
-    edges.appendChild(path);
+  while (edges.firstChild) edges.removeChild(edges.firstChild);  // lines are drawn by the canvas now
+  {
+    const live = !!(cur && cur.live), la = latestAttempt(cur), a0 = actives[0];
+    let next = null;
+    if (!isAn && live && a0){ const nr = {planner: "builder", builder: "reviewer", reviewer: roles.arbiter ? "arbiter" : null}[roleBase(a0.role)]; next = nr ? roles[nr] : null; if (next === a0.provider) next = null; }
+    const outcome = cur && !live && (cur.status === "PASSED" || cur.status === "DONE" || cur.status === "FAILED" || cur.status === "ERROR" || cur.status === "BLOCKED_QUOTA")
+      ? (cur.status === "PASSED" || cur.status === "DONE" ? (la && la.arbiter && la.arbiter.final === "NEED_HUMAN" ? "human" : "pass") : "fail") : null;
+    const colors = {}; provs.forEach(p => colors[p.name] = FX.rgb(pcolor(p.name)));
+    FX.scene({names: provs.map(p => p.name), colors, actives, next, arb: arbName, mode: isAn ? "an" : "run", live, key: cur ? cur.stage_key : "start",
+              attempts: cur ? (cur.attempts || 0) : 0, outcome, runId: cur ? String(cur.run_id || cur.analysis_id || cur.video_id || cur.id || "") : ""});
   }
   const pool = $("pool"); clear(pool);
   provs.forEach(p => {
@@ -1836,6 +2054,8 @@ $("savetest").onclick = async () => {
 ALL_ROLES.forEach(r => $("r-" + r).addEventListener("change", (ev) => { ev.target.dataset.touched = "1"; rolesDirty = true; if (state) render(); }));
 $("project").addEventListener("change", () => { const v = $("project").value.trim(); if (state && state.projects.includes(v)){ selectedProject = v; selectedRun = null; selectedAnalysis = null; selectedVideo = null; poll(); } });
 $("brand").onclick = () => setTab("dash");
+$("fxDemo").onclick = () => FX.isDemo() ? FX.stop() : FX.demo();
+new ResizeObserver(() => FX.resize()).observe($("stage"));
 $("w-to-dash").onclick = () => setTab("dash");
 $("w-to-pj").onclick = () => { setTab("pj"); loadProjects(); };
 $("w-to-mg").onclick = () => { const c = state && state.current; if (c) openProject(state.project, {tab: "mg", key: "run:" + c.run_id}); else openProject(state.project, {tab: "mg"}); };

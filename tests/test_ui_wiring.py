@@ -92,3 +92,10 @@ def test_the_live_list_is_in_pipeline_order_plan_build_review_decide():
     assert 'ALL_ROLES.filter(r => roles[r]).forEach' in block and "state.providers.forEach" not in block
     order = HTML[HTML.index("const ALL_ROLES"):][:200]
     assert order.index('"planner"') < order.index('"builder"') < order.index('"reviewer"') < order.index('"arbiter"')
+
+
+def test_stage_has_the_effects_layer_gates_and_a_preview_without_ai_calls():
+    for needle in ('<canvas id="fx"', 'id="gates"', 'id="attChip"', 'id="fxDemo"', "const FX = (() =>", "function renderGates(", "FX.scene(", "prefers-reduced-motion"):
+        assert needle in HTML, needle
+    assert ".node .st{display:block" in HTML  # the log-line grid rule must not squeeze the node's status text into a 20px column
+    assert "document.hidden" in HTML  # nothing is animated while the page is hidden
