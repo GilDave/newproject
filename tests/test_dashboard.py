@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from solomon.dashboard import MAX_GOAL, DashboardApp, make_handler
+from solomon.dashboard import MAX_BODY, MAX_GOAL, DashboardApp, make_handler
 from solomon.orchestrator import Orchestrator
 from solomon.settings import Settings
 
@@ -117,7 +117,7 @@ def test_foreign_origin_is_rejected_on_post(env):
 
 
 def test_oversized_and_malformed_bodies_are_rejected(env):
-    assert env.call("POST", "/api/run", {"goal": "x" * 70000, "project": env.project})[0] == 413
+    assert env.call("POST", "/api/run", {"goal": "x" * (MAX_BODY + 1), "project": env.project})[0] == 413
     conn = http.client.HTTPConnection("127.0.0.1", env.port, timeout=10)
     conn.request("POST", "/api/run", body=b"not json", headers={"X-Solomon-Token": TOKEN, "Content-Length": "8"})
     assert conn.getresponse().status == 400

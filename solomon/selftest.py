@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import gitops, manage, portfolio, projects
+from . import gitops, manage, portfolio, projects, video
 from .orchestrator import Orchestrator
 from .providers.base import Provider, ProviderResult
 from .settings import Settings
@@ -167,6 +167,23 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             card = portfolio.card(repo, ".solomon", is_git=True, managed=False, test_command="", busy=False)
             assert set(card["ais"]) == {"claude", "codex", "agy"} and card["counts"]["passed"] == 1 and card["tokens"] > 0
 
+        def video_analysis():
+            repo = _repo(base, "p5")
+            text = ("[0:01] 안녕하세요 오늘은 자동매매 손절 규칙을 이야기해 보겠습니다\n[0:05] 손절은 진입가 대비 2퍼센트로 고정하는 게 가장 좋습니다\n"
+                    "[1:30] 수수료와 슬리피지를 반드시 계산하세요")
+            real = {"summary": "손절 규칙 영상", "outline": [], "project_ideas": [], "caveats": [], "claims_to_check": [], "action_items": [],
+                    "key_points": [{"point": "손절 2%", "time": "0:05", "quote": "손절은 진입가 대비 2퍼센트로 고정하는 게 가장 좋습니다"}]}
+            fake = dict(real, key_points=[{"point": "지어낸 말", "time": "0:30", "quote": "이 문장은 영상에 전혀 나오지 않습니다 지어낸 것입니다"}])
+            offline = lambda url: (_ for _ in ()).throw(video.VideoError("offline"))
+            ps = {"claude": _Fake("claude", [json.dumps(real, ensure_ascii=False)]), "codex": _Fake("codex", [json.dumps(real, ensure_ascii=False)]),
+                  "agy": _Fake("agy", [json.dumps(fake, ensure_ascii=False)])}
+            r = video.run_video(_settings(), repo, "https://youtu.be/dQw4w9WgXcQ", "", ["claude", "codex", "agy"], transcript_text=text, providers=ps, http=offline)
+            assert r["status"] == "DONE", r["summary"]
+            good = next(c for c in r["clusters"] if c["verified"])
+            assert good["agreement"] == 2 and abs(good["time"] - 5) < 1  # two AIs, the time comes from the transcript
+            assert any(m["evidence"] == "quote_missing" for c in r["clusters"] for m in c["members"])  # the invented quote is caught
+            assert video.title_matches("자동매매 손절 규칙", "자동매매 손절 규칙") and not video.title_matches("다른 제목", "자동매매 손절 규칙")
+
         def project_folders():
             root = base / "root"
             made = projects.create_project(root, "demo-app", "python", "demo")
@@ -193,6 +210,7 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             ("폐기 → 복원", discard_restore),
             ("5W1H 기록과 적용 판단", five_w_one_h),
             ("단계마다 AI 최대 3개 (계획 검토 · 구현 교대·자문 · 3중 검수) + 프로젝트 카드 집계", three_ais_per_stage),
+            ("영상 분석: 자막 인용 검증 · AI 간 교차 확인 · 제목으로 직접 시청 판별", video_analysis),
             ("신규 프로젝트 폴더 · 휴지통 · 복원 · 기존 프로젝트 삭제 거부", project_folders),
         ):
             check(title, fn)

@@ -568,10 +568,47 @@ def _describe_analysis(project: Path, state_dir: str, analysis_id: str) -> dict:
             }}
 
 
+def _describe_video(project: Path, state_dir: str, video_id: str) -> dict:
+    from . import video as video_mod
+    view = video_mod.load_video(project, state_dir, video_id)
+    if not view:
+        raise ManageError(404, "이 영상 분석의 기록이 없습니다.")
+    d = project / state_dir / "videos" / video_id
+    began, ended, secs = _span(_events(d / "events.jsonl"))
+    v, clusters = view.get("video") or {}, view.get("clusters", [])
+    ev = _events(d / "events.jsonl")
+    direct = next((e.get("direct") for e in ev if e.get("event") == "analysis_start"), []) or []
+    n_ver = sum(1 for c in clusters if c.get("verified"))
+    lines = []
+    for c in clusters[:25]:
+        m = c["members"][0]
+        lines.append(f"[{video_mod.KIND_KO[c['kind']]}] {m['text']} · {', '.join(sorted(set(c['ais'])))} ({c['agreement']}명)"
+                     + (f" · {video_mod.stamp(c['time'])}" if c.get("time") is not None else "") + (" · 근거 확인됨" if c.get("verified") else " · 근거 미확인"))
+    return {"kind": "video", "id": video_id, "status": view.get("status", ""), "status_ko": STATUS_KO.get(view.get("status", ""), view.get("status", "")),
+            "live": not view.get("finished"), "process": {"prelude": [], "attempts": [], "live": not view.get("finished")}, "assessment": None,
+            "headline": f"{STATUS_KO.get(view.get('status', ''), view.get('status', ''))} — {v.get('title') or v.get('url') or '영상 분석'}",
+            "sections": {
+                "who": _section("누가", [["분석한 AI", ", ".join((view.get("ais") or {}).keys())], ["영상을 직접 본 AI", ", ".join(direct)]]),
+                "what": _section("무엇을", [["영상", v.get("title")], ["채널", v.get("author")], ["요약", view.get("summary")],
+                                            ["정리된 항목", f"{len(clusters)}건 (근거 확인 {n_ver}건)"]], lines),
+                "when": _section("언제", [["시작", began], ["끝", ended], ["걸린 시간", f"{secs // 60}분 {secs % 60}초" if secs is not None else ""]]),
+                "where": _section("어디서", [["영상 주소", v.get("url")], ["프로젝트", str(project)], ["보고서", view.get("report_path", "")], ["기록 폴더", str(d)]]),
+                "why": _section("왜", [["분석 요청", view.get("focus") or "전반 분석"]]),
+                "how": _section("어떻게", [["자막", f"{v.get('lang') or '?'} · {v.get('source') or '-'}" + (f" · 길이 {video_mod.stamp(v['duration'])}" if v.get("duration") else "")],
+                                           ["검증", "AI가 인용한 문장이 자막에 실제로 있는지 기계가 확인하고, 시간은 자막에서 가져옴"]],
+                                list(view.get("timeline", []))[-12:]),
+            }}
+
+
 def describe(project: Path, state_dir: str, key: str) -> dict:
     """Everything about one id, in the 5W1H order: who, what, when, where, why, how."""
     project = Path(project)
     marks = _load_marks(project, state_dir)
+    if key.startswith("video:"):
+        vid = key.split(":", 1)[1]
+        if not re.match(r"^\d{8}-\d{6}-[0-9a-f]{6}$", vid):
+            raise ManageError(400, "항목 식별자가 올바르지 않습니다.")
+        return _describe_video(project, state_dir, vid)
     if key.startswith("analysis:"):
         aid = key.split(":", 1)[1]
         if not re.match(r"^[0-9a-zA-Z-]+$", aid):
@@ -595,7 +632,8 @@ def list_history(project: Path, state_dir: str, limit: int = 40) -> list[dict]:
     """Every id Solomon has produced for this project, newest first, so any of them can be opened as a 5W1H."""
     root = Path(project) / state_dir
     rows = []
-    for sub, kind, pat in (("runs", "run", RUN_ID), ("batches", "batch", BATCH_ID), ("analyses", "analysis", re.compile(r"^[0-9a-zA-Z-]+$"))):
+    for sub, kind, pat in (("runs", "run", RUN_ID), ("batches", "batch", BATCH_ID), ("analyses", "analysis", re.compile(r"^[0-9a-zA-Z-]+$")),
+                           ("videos", "video", RUN_ID)):
         if not (root / sub).is_dir():
             continue
         for d in (root / sub).iterdir():
@@ -608,6 +646,9 @@ def list_history(project: Path, state_dir: str, limit: int = 40) -> list[dict]:
             elif kind == "batch":
                 b = _read_json(d / "batch.json")
                 status, title = b.get("status", "진행 중/중단"), b.get("summary", "")
+            elif kind == "video":
+                a = _read_json(d / "analysis.json")
+                status, title = a.get("status", "진행 중/중단"), ((a.get("video") or {}).get("title") or a.get("focus") or "영상 분석")
             else:
                 a = _read_json(d / "analysis.json")
                 status, title = a.get("status", "진행 중/중단"), (a.get("focus") or "전반 분석")

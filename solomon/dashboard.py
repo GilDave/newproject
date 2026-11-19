@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import webbrowser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage, portfolio, projects as projects_mod
+from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage, portfolio, projects as projects_mod, video as video_mod
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
 from .status import load_runs
@@ -36,7 +37,7 @@ from .status import load_runs
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 PERSIST_MINUTES = 180  # the dashboard's 'keep trying' stops after this long
 MAX_GOAL = 20000  # long enough to paste a stack trace
-MAX_BODY = 64 * 1024
+MAX_BODY = 2 * 1024 * 1024  # a pasted video transcript can be long (the page is local-only and token-protected)
 HTML_PATH = Path(__file__).with_name("dashboard.html")
 VENDORS = {"claude": "Anthropic", "codex": "OpenAI", "antigravity": "Google"}
 
@@ -293,7 +294,7 @@ class DashboardApp:
                 info["log_tail"] = ""
         return info
 
-    def build_state(self, project: Optional[str], run_id: Optional[str], analysis_id: Optional[str] = None) -> dict:
+    def build_state(self, project: Optional[str], run_id: Optional[str], analysis_id: Optional[str] = None, video_id: Optional[str] = None) -> dict:
         projects = sorted(self._projects)
         if project not in self._projects:
             project = projects[0] if projects else None
@@ -302,10 +303,12 @@ class DashboardApp:
             "version": __version__, "projects": projects, "project": project, "roles": self.settings.roles,
             "providers": self.providers_info(), "job": job, "runs": [], "current": None,
             "apply": {"possible": False, "applied": False}, "analyses": [], "analysis": None, "batches": [],
+            "videos": [], "video": None, "video_capability": video_mod.load_capability(),
         }
         if not project:
             return state
         self._add_analysis_state(state, Path(project), project, analysis_id, job)
+        self._add_video_state(state, Path(project), project, video_id, job)
         state["project_git"] = self.is_git(project)
         state["batches"] = autofix_mod.list_batches(Path(project), self.settings.state_dir)
         cmd, source = self.effective_test_command(project)
@@ -368,6 +371,19 @@ class DashboardApp:
                           "status": "설치 안 됨" if not p["installed"] else ("한도 소진" if quota else "정상"),
                           "calls_today": calls_today, "last_call": last})
         return cards
+
+    def _add_video_state(self, state: dict, path: Path, project: str, video_run_id: Optional[str], job: dict) -> None:
+        listing = video_mod.list_videos(path, self.settings.state_dir)
+        state["videos"] = listing
+        pick = video_run_id if video_run_id and RUN_ID.match(video_run_id) else (listing[0]["analysis_id"] if listing else None)
+        view = video_mod.load_video(path, self.settings.state_dir, pick) if pick else None
+        if view is None:
+            return
+        latest = bool(listing) and listing[0]["analysis_id"] == pick
+        running_here = job["state"] == "running" and job.get("kind") == "video" and job.get("project") == project and latest
+        view["live"] = bool(running_here and not view["finished"])
+        view["interrupted"] = bool(not view["finished"] and not view["live"])
+        state["video"] = view
 
     def _add_analysis_state(self, state: dict, path: Path, project: str, analysis_id: Optional[str], job: dict) -> None:
         listing = analysis_mod.list_analyses(path, self.settings.state_dir)
@@ -574,6 +590,75 @@ class DashboardApp:
     def apply_batch(self, project: str, batch_id: str) -> dict:
         return self.act(project, f"batch:{batch_id}", "apply")
 
+    def _check_ais(self, ais: Optional[list]) -> list[str]:
+        installed = [p["name"] for p in self.providers_info() if p["installed"]]
+        if ais is not None and not isinstance(ais, list):
+            raise ApiError(400, "AI 선택 형식이 올바르지 않습니다.")
+        chosen = [str(a) for a in (ais or installed)]
+        bad = [a for a in chosen if a not in PROVIDER_CLASSES]
+        if bad:
+            raise ApiError(400, f"알 수 없는 AI입니다: {', '.join(bad)}")
+        missing = [a for a in chosen if a not in installed]
+        if missing:
+            raise ApiError(400, f"설치되지 않은 AI입니다: {', '.join(missing)}")
+        if not chosen:
+            raise ApiError(400, "사용할 수 있는 AI가 설치되어 있지 않습니다.")
+        return chosen
+
+    def _project_for(self, project: str) -> str:
+        if (project or "") not in self._projects:
+            try:
+                return self.add_project(project or "")
+            except gitops.GitError as exc:
+                raise ApiError(400, str(exc)) from exc
+        return project
+
+    def start_video(self, project: str, body: dict) -> dict:
+        url = str(body.get("url", "")).strip()
+        try:
+            video_mod.parse_video_url(url)
+        except video_mod.VideoError as exc:
+            raise ApiError(400, str(exc)) from exc
+        focus = str(body.get("focus", "")).strip()
+        if len(focus) > MAX_GOAL:
+            raise ApiError(400, f"분석 요청이 너무 깁니다 ({MAX_GOAL}자 이하).")
+        chosen = self._check_ais(body.get("ais"))
+        direct = body.get("direct") or []
+        if not isinstance(direct, list) or any(d not in chosen for d in direct):
+            raise ApiError(400, "직접 시청 AI는 분석에 참여하는 AI 중에서 고르세요.")
+        text = str(body.get("transcript", ""))
+        if len(text) > 400_000:
+            raise ApiError(400, "붙여넣은 자막이 너무 깁니다 (40만 자 이하).")
+        project = self._project_for(project)
+        args = [sys.executable, "-m", "solomon", "video", url, "--project", project, "--ais", ",".join(chosen)]
+        if focus:
+            args += ["--focus", focus]
+        if direct:
+            args += ["--direct", ",".join(direct)]
+        if body.get("context"):
+            args += ["--context"]
+        if text.strip():
+            f = Path(project) / self.settings.state_dir / f"video_input-{uuid.uuid4().hex[:10]}.txt"  # long text does not go through argv
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text, encoding="utf-8")
+            args += ["--transcript-file", str(f)]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        return self._spawn("video", args, project, "영상 분석: " + (focus or url))
+
+    def start_video_probe(self, project: str, body: dict) -> dict:
+        url = str(body.get("url", "")).strip()
+        try:
+            video_mod.parse_video_url(url)
+        except video_mod.VideoError as exc:
+            raise ApiError(400, str(exc)) from exc
+        chosen = self._check_ais(body.get("ais"))
+        project = self._project_for(project)
+        args = [sys.executable, "-m", "solomon", "video", url, "--probe", "--ais", ",".join(chosen)]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        return self._spawn("videoprobe", args, project, "AI별 영상 직접 시청 시험")
+
     def _spawn(self, kind: str, args: list[str], project: str, label: str) -> dict:
         self._portfolio_cache = None
         with self._lock:
@@ -665,7 +750,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다. 터미널에 표시된 주소로 여세요."})
                 state = app.build_state((query.get("project") or [None])[0], (query.get("run") or [None])[0],
-                                        (query.get("analysis") or [None])[0])
+                                        (query.get("analysis") or [None])[0], (query.get("video") or [None])[0])
                 return self._json(200, state)
             if url.path == "/api/portfolio":
                 if not self._token_ok(query):
@@ -716,6 +801,10 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"), bool(body.get("persist")))})
                 if path == "/api/analyze":
                     return self._json(200, {"job": app.start_analysis(str(body.get("project", "")), str(body.get("focus", "")), body.get("ais"))})
+                if path == "/api/video":
+                    return self._json(200, {"job": app.start_video(str(body.get("project", "")), body)})
+                if path == "/api/video-probe":
+                    return self._json(200, {"job": app.start_video_probe(str(body.get("project", "")), body)})
                 if path == "/api/autofix":
                     return self._json(200, {"job": app.start_autofix(str(body.get("project", "")), body)})
                 if path == "/api/apply-batch":

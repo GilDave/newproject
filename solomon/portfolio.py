@@ -101,7 +101,13 @@ def card(project: Path, state_dir: str, *, is_git: bool, managed: bool, test_com
     ais: dict = {}
     runs: list[dict] = []
     if (root / "runs").is_dir():
-        for d in sorted((root / "runs").iterdir()):
+        def order(d: Path):  # the id starts with the second it began; runs in the same second are told apart by when they were last written
+            try:
+                return (d.name[:15], (d / "events.jsonl").stat().st_mtime_ns)
+            except OSError:
+                return (d.name[:15], 0)
+
+        for d in sorted((root / "runs").iterdir(), key=order):
             ev = _events(d / "events.jsonl")
             if ev:
                 f = run_facts(ev, ais)
@@ -130,6 +136,25 @@ def card(project: Path, state_dir: str, *, is_git: bool, managed: bool, test_com
                     row["sec"] += float(info.get("duration_sec") or 0)
                     tk = info.get("tokens")
                     row["tokens"] += int(tk.get("total") or 0) if isinstance(tk, dict) else 0
+                    if not info.get("ok", True):
+                        row["failures"] += 1
+    videos = 0
+    if (root / "videos").is_dir():
+        for d in sorted((root / "videos").iterdir()):
+            f = d / "analysis.json"
+            if f.is_file():
+                try:
+                    a = json.loads(f.read_text(encoding="utf-8"))
+                except ValueError:
+                    continue
+                videos += 1
+                for name, info in (a.get("ais") or {}).items():
+                    row = _ai(ais, name)
+                    row["roles"]["video"] = row["roles"].get("video", 0) + 1
+                    row["calls"] += 1
+                    row["sec"] += float(info.get("duration_sec") or 0)
+                    tk = info.get("tokens")
+                    row["tokens"] += int(tk.get("total") or (int(tk.get("in") or 0) + int(tk.get("out") or 0))) if isinstance(tk, dict) else 0
                     if not info.get("ok", True):
                         row["failures"] += 1
     batches = []
@@ -163,7 +188,7 @@ def card(project: Path, state_dir: str, *, is_git: bool, managed: bool, test_com
 
     return {
         "counts": {"runs": len(runs), "passed": len(passed), "failed": sum(1 for r in done if r["status"] in ("FAILED", "ERROR")),
-                   "other": sum(1 for r in done if r["status"] in ("BLOCKED_QUOTA", "STOPPED")), "analyses": len(analyses),
+                   "other": sum(1 for r in done if r["status"] in ("BLOCKED_QUOTA", "STOPPED")), "analyses": len(analyses), "videos": videos,
                    "batches": len(batches), "pending": pending, "committed": committed,
                    "running": sum(1 for r in runs if r["status"] == "RUNNING")},
         "pass_rate": round(len(passed) / len(done) * 100) if done else None,

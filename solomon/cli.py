@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 from . import __version__, analysis as analysis_mod, gitops
-from .env import present_api_keys
+from .env import present_api_keys, resolve_cli
 from .orchestrator import Orchestrator
 from .providers import PROVIDER_CLASSES, build_providers
 from .runner import run_process
@@ -68,6 +68,8 @@ def _doctor(args: argparse.Namespace) -> int:
         except OSError as exc:
             print(f"[error] {name}: {exc}")
             errors += 1
+    ytdlp = resolve_cli("yt-dlp")
+    print(f"[ok] yt-dlp: {ytdlp} (영상 분석의 자막 수집)" if ytdlp else "[optional] yt-dlp: 설치 안 됨 (영상 분석의 자막 수집에 권장. 없어도 유튜브 자막을 직접 가져오거나 붙여넣을 수 있음. 맥: brew install yt-dlp)")
     root = Path(settings.projects_root).expanduser()
     probe = root if root.exists() else root.parent
     print(("[ok]" if probe.exists() and os.access(probe, os.W_OK) else "[warn]") + f" 새 프로젝트 폴더 위치: {root}")
@@ -212,6 +214,51 @@ def _autofix(args: argparse.Namespace) -> int:
     return {"DONE": 0, "NOTHING": 0, "PARTIAL": 1, "FAILED": 1, "STOPPED": 130}.get(res.status, 2)
 
 
+def _video(args: argparse.Namespace) -> int:
+    from . import video as video_mod
+
+    settings = load_settings(args.config)
+    ais = [a for a in (args.ais or "").split(",") if a] or None
+
+    def _stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        if args.probe:
+            res = video_mod.probe_all(settings, args.url, ais)
+            video_mod.save_capability(res)
+            print(f"영상: {res['video_id']} · 실제 제목: {res['truth_title'] or '(가져오지 못함)'}")
+            for name, info in res["ais"].items():
+                print(f"  {name:<12} {video_mod.PROBE_KO.get(info['status'], info['status'])}"
+                      + (f" · AI가 말한 제목: {info.get('title')}" if info.get("title") else "") + (f" · {info.get('detail')}" if info.get("detail") else ""))
+            print("confirmed(직접 시청 확인됨)인 AI만 '직접 시청'으로 쓰세요. guessed는 영상을 보지 않고 지어낸 것입니다.")
+            return 0
+        text = None
+        if args.transcript_file:
+            tf = Path(args.transcript_file).expanduser()
+            text = tf.read_text(encoding="utf-8", errors="replace")
+            if tf.name.startswith("video_input-"):
+                tf.unlink(missing_ok=True)  # the dashboard's temporary copy of a pasted transcript
+        project = Path(args.project or settings.project_path or ".").expanduser()
+        res = video_mod.run_video(settings, project, args.url, args.focus or "", ais, transcript_text=text, use_project_context=args.context,
+                                  direct=[a for a in (args.direct or "").split(",") if a])
+    except (video_mod.VideoError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"analysis: {res['analysis_id']}\nstatus:   {res['status']}\nsummary:  {res['summary']}")
+    v = res["video"]
+    if v.get("title"):
+        print(f"video:    {v['title']} ({v.get('author') or '-'}) · 자막 {v.get('lang') or '?'} · {v.get('source')}")
+    for name, info in res["ais"].items():
+        print(f"  {name:<12} {'ok' if info.get('ok') else 'FAILED: ' + str(info.get('error', ''))}")
+    for c in res["clusters"][:12]:
+        m = c["members"][0]
+        print(f"  [{video_mod.KIND_KO[c['kind']]}] {c['agreement']}/{len(res['ais'])} AIs {video_mod.stamp(c['time'])} {m['text'][:70]} ({'verified' if c['verified'] else 'UNVERIFIED'})")
+    print(f"report:   {res.get('report_path')}")
+    return {"DONE": 0, "FAILED": 1, "STOPPED": 130}.get(res["status"], 2)
+
+
 def _runtests(args: argparse.Namespace) -> int:
     """Run the project's test command in the working folder (used by the dashboard's test button)."""
     from .verifier import verify
@@ -302,6 +349,18 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-double-check", action="store_true", help="do not re-run the tests before declaring a pass")
     run.add_argument("--no-tests", action="store_true", help="run without automatic tests (the result is UNVERIFIED)")
     run.set_defaults(func=_run)
+
+    vd = sub.add_parser("video", help="analyse a YouTube video with up to three AIs (transcript-based, quotes are verified); --probe tests which AI can open a video")
+    vd.add_argument("url", help="YouTube video address")
+    vd.add_argument("--project", help="where the result is stored (default: `project` in solomon.toml, else the current folder)")
+    vd.add_argument("--focus", help="what to look for, e.g. 'risk rules and numbers to verify'")
+    vd.add_argument("--ais", help="comma-separated AIs to use (default: every installed one)")
+    vd.add_argument("--direct", help="comma-separated AIs that may also open the video themselves (check with --probe first)")
+    vd.add_argument("--transcript-file", help="use this transcript (text, VTT or SRT) instead of fetching one")
+    vd.add_argument("--context", action="store_true", help="also ask for ideas that fit the project (sends its file list and README start)")
+    vd.add_argument("--probe", action="store_true", help="test which AIs can really open the video (compares the title they give with YouTube's)")
+    vd.add_argument("--config", help="path to solomon.toml")
+    vd.set_defaults(func=_video)
 
     ini = sub.add_parser("init", help="write an editable solomon.toml (all options, commented)")
     ini.add_argument("--path", help="where to write it (default: ./solomon.toml)")
