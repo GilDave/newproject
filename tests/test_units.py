@@ -199,3 +199,24 @@ def test_claude_write_args_are_off_by_default_and_configurable(tmp_path):
     assert argv[-2:] == ["--tools", "Read,Edit,Write"] and "acceptEdits" in argv
     assert "--tools" in argv and argv.count("--tools") == 1
     assert build_providers(load_settings(cfg))["claude"].build_argv("claude", False)[4:6] == ["--tools", ""]  # read-only unchanged
+
+
+def test_claude_is_never_killed_for_silence_and_a_builder_gets_time(monkeypatch):
+    """`claude --print --output-format json` is silent until it is done: a 180 s silence limit killed healthy builders."""
+    from solomon.providers import base
+    from solomon.providers.claude import MIN_WRITE_TIMEOUT, ClaudeProvider
+    from solomon.runner import ProcessResult
+
+    seen = []
+
+    def fake_run(argv, cwd=None, env=None, timeout=300.0, no_output_timeout=None, stdin_data=None):
+        seen.append({"timeout": timeout, "silence": no_output_timeout})
+        return ProcessResult(exit_code=0, stdout='{"result": "ok", "is_error": false}', stderr="", timed_out=False, duration_sec=1.0)
+
+    monkeypatch.setattr(base, "run_process", fake_run)
+    p = ClaudeProvider(executable="/bin/claude")
+    p.run("x", "/tmp", True, 900.0, no_output_timeout=180.0)  # builder: what the orchestrator passes
+    p.run("x", "/tmp", False, 300.0, no_output_timeout=180.0)  # reviewer
+    p.run("x", "/tmp", True, 3000.0, no_output_timeout=180.0)  # a longer configured limit is respected
+    assert [c["silence"] for c in seen] == [None, None, None]
+    assert [c["timeout"] for c in seen] == [MIN_WRITE_TIMEOUT, 300.0, 3000.0]

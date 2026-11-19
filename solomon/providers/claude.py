@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from ..tokens import claude_usage
-from .base import CliProvider, ProviderError, QuotaExhausted, looks_like_quota, parse_json_envelope
+from .base import CliProvider, ProviderError, ProviderResult, QuotaExhausted, looks_like_quota, parse_json_envelope
 
 
 # Planner and reviewer get everything they need inside the prompt, so read-only calls run without
 # tools (no file-hunting turns, smaller context) and without any MCP servers. NEVER add --bare:
 # it skips the subscription (OAuth/keychain) login and would bill per token.
 DEFAULT_READONLY_ARGS = ["--tools", "", "--strict-mcp-config"]
+
+# `--output-format json` prints NOTHING until the whole answer is ready, and a builder that reads, edits and tests files easily
+# stays silent for many minutes. A silence limit would kill healthy work (that is exactly what NO_OUTPUT_TIMEOUT did), so Claude is
+# never killed for silence; only the hard limit applies, and a write call gets at least this long.
+MIN_WRITE_TIMEOUT = 1200.0
 
 
 class ClaudeProvider(CliProvider):
@@ -27,6 +32,9 @@ class ClaudeProvider(CliProvider):
         argv = [exe, "--print", "--output-format", "json"]
         argv += ["--permission-mode", "acceptEdits", *self.write_args] if write else self.readonly_args
         return argv + self.extra_args
+
+    def run(self, prompt, cwd, write, timeout, no_output_timeout=None) -> ProviderResult:
+        return super().run(prompt, cwd, write, max(timeout, MIN_WRITE_TIMEOUT) if write else timeout, no_output_timeout=None)
 
     def parse_output(self, stdout: str) -> str:
         envelope = parse_json_envelope(stdout)
