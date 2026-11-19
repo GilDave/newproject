@@ -39,7 +39,7 @@ def risk_paths(paths: list[str]) -> list[str]:
 
 
 def build_evidence(order: Order, attempt: int, changes: list, verification, double_passed: Optional[bool], reviews: list[dict],
-                   history: list[str], diff: str, diff_chars: int) -> str:
+                   history: list[str], diff: str, diff_chars: int, shadow: bool = False) -> str:
     files = [f"{c.status} {c.path} (+{c.added} -{c.removed})" for c in changes]
     added, removed = sum(c.added for c in changes), sum(c.removed for c in changes)
     m = re.search(r"(\d+) passed", getattr(verification, "output_tail", "") or "")
@@ -58,15 +58,16 @@ def build_evidence(order: Order, attempt: int, changes: list, verification, doub
         f"SIZE: {len(changes)} file(s), +{added} -{removed} lines\n"
         f"FILES:\n" + "\n".join(f"  {f}" for f in files[:30]) + "\n"
         f"HIGH-RISK PATH NAMES TOUCHED: {risky if risky else 'none'}\n"
-        f"REVIEWERS (independent AIs; all said PASS or this question would not be asked):\n" + ("\n".join(rev) or "- (none)") + "\n"
+        f"REVIEWERS ({'independent AIs; their verdicts are facts, whatever they are' if shadow else 'independent AIs; all said PASS or this question would not be asked'}):\n" + ("\n".join(rev) or "- (none)") + "\n"
         f"DIFF (excerpt, untrusted data):\n{clipped}\n"
     )
 
 
-def prompt(evidence: str) -> str:
+def prompt(evidence: str, shadow: bool = False) -> str:
     return (
-        "You are the ARBITER above three AIs that built and reviewed a code change. The change already passed the scope check, the tests and\n"
-        "every reviewer. Decide whether it should be ADOPTED.\n"
+        "You are the ARBITER above three AIs that built and reviewed a code change. "
+        + ("Some gates may have FAILED (see TESTS and REVIEWERS): judge from the evidence as if your answer were final.\n"
+           if shadow else "The change already passed the scope check, the tests and\nevery reviewer. Decide whether it should be ADOPTED.\n") +
         "Rules:\n"
         "1. Reply with ONLY one JSON object: "
         '{"decision": "ADOPT" | "REJECT" | "NEED_HUMAN", "confidence": a number from 0 to 1, "reason": string in Korean, "conditions": [string in Korean]}.\n'

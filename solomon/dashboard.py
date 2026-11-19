@@ -598,7 +598,7 @@ class DashboardApp:
                 raise ApiError(400, f"구현 보조 {w}가 구현할 차례에는 검수할 다른 AI가 없습니다. 검수 AI를 하나 더 지정하세요.")
         return args
 
-    def start_run(self, goal: str, project: str, roles: Optional[dict] = None, persist: bool = False, fresh: bool = False) -> dict:
+    def start_run(self, goal: str, project: str, roles: Optional[dict] = None, persist: bool = False, fresh: bool = False, shadow: bool = False) -> dict:
         goal = (goal or "").strip()
         if not goal:
             raise ApiError(400, "목표를 입력하세요.")
@@ -617,6 +617,8 @@ class DashboardApp:
         if self.config_path:
             args += ["--config", self.config_path]
         args += role_args
+        if shadow:
+            args += ["--shadow"]
         if persist:
             args += ["--persist", "--max-minutes", str(PERSIST_MINUTES)]
         if fresh:
@@ -932,6 +934,15 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
                 return self._json(200, app.portfolio())
+            if url.path == "/api/shadow":
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    from . import shadow as shadow_mod
+                    proj = app._known((query.get("project") or [""])[0])
+                    return self._json(200, shadow_mod.evaluate(Path(proj), app.settings.state_dir))
+                except ApiError as exc:
+                    return self._json(exc.status, {"error": exc.message})
             if url.path == "/api/projects":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -974,7 +985,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
             try:
                 path = urlparse(self.path).path
                 if path == "/api/run":
-                    return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"), bool(body.get("persist")))})
+                    return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"), bool(body.get("persist")), shadow=bool(body.get("shadow")))})
                 if path == "/api/analyze":
                     return self._json(200, {"job": app.start_analysis(str(body.get("project", "")), str(body.get("focus", "")), body.get("ais"))})
                 if path == "/api/video":

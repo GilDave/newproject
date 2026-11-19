@@ -271,6 +271,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
           </div>
         </div>
         <label class="chk"><input type="checkbox" id="persist" checked> 끈질기게 시도 — 통과할 때까지 반복 (최대 3시간·구독 한도 내, 같은 실패 반복 시 접근 변경)</label>
+        <label class="chk"><input type="checkbox" id="shadow" checked> 👑 그림자 모드 — 결정권자가 모든 시도를 판정하되 <b>따르지 않고 기록만</b> 합니다 (사람의 선택·테스트 결과와 비교해 성적을 쌓음)</label>
         <div class="hint" id="rolehint">구현과 검수는 서로 다른 AI여야 교차 검증이 됩니다.</div>
         <div class="hint">단계마다 AI를 최대 3개까지 둘 수 있습니다. 계획 AI 2·3은 계획을 검토하고(완료 기준만 추가), 구현 AI 2·3은 실패 시 교대하거나(쓰기 가능한 AI) 조언하며(읽기 전용 AI), 검수는 지정한 AI가 모두 통과시켜야 합니다. 범위 검사와 테스트는 AI가 아닌 기계가 판정합니다.</div>
       </div>
@@ -1685,7 +1686,7 @@ $("run").onclick = async () => {
     busy = true; $("run").disabled = true;
     try {
       const roles = collectRoles();
-      const r = await api("/api/projects/create", {name, stack: $("np-stack").value, goal, roles, persist: $("persist").checked});
+      const r = await api("/api/projects/create", {name, stack: $("np-stack").value, goal, roles, persist: $("persist").checked, shadow: $("shadow").checked});
       selectedProject = r.project; $("project").value = r.project; selectedRun = null; $("np-name").value = ""; $("goal").value = "";
       setMode("run"); toast(r.message);
     } catch (e) { toast(e.message, true); }
@@ -1701,7 +1702,7 @@ $("run").onclick = async () => {
       await api("/api/analyze", {project, focus: goal, ais}); selectedProject = project; selectedAnalysis = null; toast("분석을 시작했습니다.");
     } else {
       const roles = collectRoles();
-      await api("/api/run", {goal, project, roles, persist: $("persist").checked}); rolesDirty = false; selectedProject = project; selectedRun = null; toast("실행을 시작했습니다.");
+      await api("/api/run", {goal, project, roles, persist: $("persist").checked, shadow: $("shadow").checked}); rolesDirty = false; selectedProject = project; selectedRun = null; toast("실행을 시작했습니다.");
     }
   } catch (e) { toast(e.message, true); }
   busy = false; poll();

@@ -336,6 +336,35 @@ class Orchestrator:
         log.event("arbiter", attempt=attempt, provider=name, **dec.to_dict(), risky=risky)
         return dec
 
+    def _shadow_judge(self, order: Order, wt: Path, changes: list, verification: VerifyResult, double_passed: Optional[bool],
+                      history: list[str], attempt: int, builder_name: str, log: RunLog) -> None:
+        """Shadow mode: the arbiter judges EVERY attempt (green or not) but nothing it says is obeyed.
+        The answer is recorded next to the measured facts, so it can be scored against what really happened."""
+        name = self.s.roles.get("arbiter")
+        if not name or (name == builder_name and not self.s.allow_same_provider):
+            return
+        risky = arbiter_mod.risk_paths([c.path for c in changes])
+        evidence = arbiter_mod.build_evidence(order, attempt, changes, verification, double_passed, getattr(self, "_last_reviews", []),
+                                              history, gitops.full_diff(wt), self.s.arbiter_diff_chars, shadow=True)
+        dec, err = None, ""
+        for retry in range(1 + REVIEW_RETRIES):
+            try:
+                res = self._call("arbiter", arbiter_mod.prompt(evidence, shadow=True), wt, False, log)
+            except (BlockedByQuota, ProviderError) as exc:
+                err = str(exc)
+                break
+            try:
+                dec = arbiter_mod.parse(res.text)
+                break
+            except ValueError as exc:
+                err = f"형식 오류: {exc}"
+        votes = [{"provider": r["provider"], "verdict": r["verdict"]} for r in getattr(self, "_last_reviews", [])]
+        log.event("arbiter_shadow", attempt=attempt, provider=name, decision=dec.decision if dec else "NONE",
+                  confidence=dec.confidence if dec else 0.0, reason=(dec.reason if dec else err)[:300],
+                  tests="skipped" if verification.skipped else "pass" if verification.passed else "fail",
+                  double=double_passed, votes=votes, risky=risky, files=len(changes),
+                  lines=sum(c.added + c.removed for c in changes), error=err[:200] if not dec else "")
+
     def _budget_stop(self, attempt: int, started: float) -> Optional[str]:
         s = self.s
         if s.max_attempts and attempt > s.max_attempts:
@@ -480,7 +509,9 @@ class Orchestrator:
                 double_passed = again.passed
 
             decision = None
-            if verification.passed and review.verdict == "PASS" and not double_failed:
+            if s.arbiter_shadow:
+                self._shadow_judge(order, wt, changes, verification, double_passed, history, attempt, bname, log)
+            elif verification.passed and review.verdict == "PASS" and not double_failed:
                 # every gate is green: only now is the arbiter asked, and it can only be stricter
                 decision = self._arbitrate(order, wt, changes, verification, double_passed, history, attempt, bname, arb_rejects, log)
                 if decision and decision.final == "REJECT":

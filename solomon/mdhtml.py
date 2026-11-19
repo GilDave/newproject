@@ -165,13 +165,13 @@ a{color:var(--acc);text-decoration:none}hr{border:0;border-top:.5pt solid var(--
 """
 
 
-def print_page(md: str, version: str, date: str) -> str:
+def print_page(md: str, version: str, date: str, doc_title: str = "사용 가이드", subtitle: str = "사용 가이드 · 설치부터 시험까지") -> str:
     """The guide as a print-ready document: cover, table of contents, body. Light theme, A4."""
     body, toc = render(md)
     body = re.sub(r"^<h1[^>]*>.*?</h1>\n?", "", body, count=1, flags=re.S)  # the cover carries the title
     items = "".join(f'<a class="l{lvl}" href="#{html.escape(a, quote=True)}">{html.escape(t)}</a>' for lvl, t, a in toc if lvl in (2, 3))
-    cover = (f'<section class="cover"><h1>Solomon</h1><div class="sub">사용 가이드 · 설치부터 시험까지</div>'
+    cover = (f'<section class="cover"><h1>Solomon</h1><div class="sub">{html.escape(subtitle)}</div>'
              f'<div class="meta">버전 {html.escape(version)} · {html.escape(date)}<br>여러 AI가 서로 검증하며 만드는 개발 도구<br>'
              f'구독 로그인 CLI만 사용 · 원본은 사람이 적용할 때만 변경</div></section>')
-    return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Solomon 사용 가이드 v{html.escape(version)}</title>'
+    return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Solomon {html.escape(doc_title)} v{html.escape(version)}</title>'
             f"<style>{PRINT_CSS}</style></head><body>{cover}<section class=\"toc\"><h2>목차</h2>{items}</section><main>{body}</main></body></html>")

@@ -23,7 +23,7 @@ const { chromium } = require('playwright');
   await p.goto('file://' + src, { waitUntil: 'load' });
   await p.pdf({ path: out, format: 'A4', printBackground: true, displayHeaderFooter: true,
     headerTemplate: '<span></span>',
-    footerTemplate: '<div style="width:100%;font-size:8px;color:#7a8799;display:flex;justify-content:space-between;padding:0 16mm"><span>Solomon 사용 가이드</span><span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>',
+    footerTemplate: '<div style="width:100%;font-size:8px;color:#7a8799;display:flex;justify-content:space-between;padding:0 16mm"><span>Solomon</span><span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>',
     margin: { top: '18mm', bottom: '20mm', left: '16mm', right: '16mm' } });
   await b.close();
 })();
@@ -31,11 +31,15 @@ const { chromium } = require('playwright');
 
 
 def main() -> int:
+    """build_guide_pdf.py [out.pdf] [source.md] [제목] [부제]  (기본: 사용 가이드)"""
     out = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "release" / f"Solomon-사용가이드-v{__version__}.pdf").resolve()
-    md = (ROOT / "solomon" / "USER_GUIDE.md").read_text(encoding="utf-8")
+    src = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "solomon" / "USER_GUIDE.md"
+    title = sys.argv[3] if len(sys.argv) > 3 else "사용 가이드"
+    sub = sys.argv[4] if len(sys.argv) > 4 else "사용 가이드 · 설치부터 시험까지"
+    md = src.read_text(encoding="utf-8")
     with tempfile.TemporaryDirectory() as tmp:
         page = Path(tmp) / "guide.html"
-        page.write_text(mdhtml.print_page(md, __version__, time.strftime("%Y-%m-%d")), encoding="utf-8")
+        page.write_text(mdhtml.print_page(md, __version__, time.strftime("%Y-%m-%d"), title, sub), encoding="utf-8")
         script = Path(tmp) / "pdf.js"
         script.write_text(JS, encoding="utf-8")
         out.parent.mkdir(parents=True, exist_ok=True)

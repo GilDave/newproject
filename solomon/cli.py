@@ -147,6 +147,19 @@ def _init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _shadow(args: argparse.Namespace) -> int:
+    import json
+
+    from . import shadow
+
+    if args.bot_db:
+        out = shadow.evaluate_bot_filter(Path(args.bot_db), Path(args.candles) if args.candles else None, bars=args.bars, fee=args.fee)
+    else:
+        out = shadow.evaluate(Path(args.project or "."))
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _selftest(args: argparse.Namespace) -> int:
     from .selftest import run_selftest
 
@@ -170,6 +183,8 @@ def _run(args: argparse.Namespace) -> int:
         settings.double_check_tests = False
     if args.no_baseline:
         settings.baseline_check = False
+    if getattr(args, "shadow", False):
+        settings.arbiter_shadow = True
     settings.validate()
     for role in ALL_ROLES:
         chosen = getattr(args, role, None)
@@ -395,6 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
     for role in ALL_ROLES:
         run.add_argument(f"--{role}", help=f"which AI takes the {role} role for this run (overrides the config)")
     run.add_argument("--test-command", help="test command for this run, e.g. 'npm test' (overrides the config)")
+    run.add_argument("--shadow", action="store_true", help="shadow mode: the arbiter judges every attempt but is never obeyed (answers are only recorded and scored)")
     run.add_argument("--persist", action="store_true", help="no attempt limit: keep trying until it passes or a budget runs out")
     run.add_argument("--max-attempts", type=int, help="attempt limit (0 = none)")
     run.add_argument("--max-minutes", type=float, help="wall-clock budget of the run in minutes")
@@ -426,6 +442,14 @@ def build_parser() -> argparse.ArgumentParser:
     ol.add_argument("--rounds", type=int, default=3, help="how many times to ask the same question")
     ol.add_argument("--config", help="path to solomon.toml")
     ol.set_defaults(func=_ollama)
+
+    sh = sub.add_parser("shadow", help="score the shadow-mode arbiter against what really happened (read-only)")
+    sh.add_argument("--project", help="project folder whose shadow judgements to score (default: current folder)")
+    sh.add_argument("--bot-db", help="instead: a live bot's SQLite file; evaluates its own LLM filter (opened read-only)")
+    sh.add_argument("--candles", help="candle CSV (ts_ms/timestamp + close) for the counterfactual outcome of --bot-db decisions")
+    sh.add_argument("--bars", type=int, default=10, help="holding period in candles for the counterfactual (default 10)")
+    sh.add_argument("--fee", type=float, default=0.0008, help="round-trip cost subtracted from each counterfactual return (default 0.0008)")
+    sh.set_defaults(func=_shadow)
 
     stt = sub.add_parser("selftest", help="check the installation end to end with fake AIs (no subscription use, no tokens)")
     stt.set_defaults(func=_selftest)

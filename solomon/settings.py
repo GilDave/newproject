@@ -52,6 +52,7 @@ class Settings:
     include_uncommitted: bool = True  # work on the folder as it is on disk (uncommitted edits included), not only on HEAD
     arbiter_min_confidence: float = 0.6  # an ADOPT below this confidence becomes NEED_HUMAN
     arbiter_max_rejects: int = 2  # after this many REJECTs in one run the next one becomes NEED_HUMAN (a local model must not block forever)
+    arbiter_shadow: bool = False  # the arbiter judges every attempt but is never obeyed: its answers are only recorded and scored
     arbiter_diff_chars: int = 3000  # how much of the diff the arbiter reads next to the measured evidence
     baseline_check: bool = True  # run the tests on the untouched code first: a broken test setup must not burn tokens
     on_quota: str = "stop"  # "stop" ends the run; "wait" sleeps and retries the same call
@@ -143,6 +144,7 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
     s.arbiter_min_confidence = float(loop.get("arbiter_min_confidence", s.arbiter_min_confidence))
     s.arbiter_max_rejects = int(loop.get("arbiter_max_rejects", s.arbiter_max_rejects))
     s.arbiter_diff_chars = int(loop.get("arbiter_diff_chars", s.arbiter_diff_chars))
+    s.arbiter_shadow = bool(loop.get("arbiter_shadow", s.arbiter_shadow))
     s.include_uncommitted = bool(loop.get("include_uncommitted", s.include_uncommitted))
     s.on_quota = str(loop.get("on_quota", s.on_quota))
     s.quota_wait_sec = float(loop.get("quota_wait_sec", s.quota_wait_sec))
