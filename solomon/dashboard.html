@@ -1043,15 +1043,16 @@ function renderWork(){
 
   const live = $("w-live"); clear(live);
   const act = cur && cur.live && cur.active ? cur.active : null;
-  state.providers.forEach(p => {
-    const mine = ALL_ROLES.filter(r => roles[r] === p.name).map(r => ROLE_KO[r]).join(" · ") || "역할 없음";
-    const isAct = act && act.provider === p.name;
+  // one row per STAGE in pipeline order: 계획 -> 구현 -> 검수 -> 결정권자 (the AI is shown inside the row)
+  ALL_ROLES.filter(r => roles[r]).forEach(r => {
+    const name = roles[r], p = state.providers.find(x => x.name === name) || {installed: true};
+    const isAct = act && act.role === r && act.provider === name;
     const row = el("div", "live-row" + (isAct ? " on" : ""));
-    row.appendChild(el("span", "d")); row.appendChild(el("span", "n", pname(p.name)));
-    row.appendChild(el("span", "", mine + " · "));
-    const last = cur ? cur.calls.filter(c => c.provider === p.name).slice(-1)[0] : null;
+    row.appendChild(el("span", "d")); row.appendChild(el("span", "n", ROLE_KO[r]));
+    row.appendChild(el("span", "", pname(name) + " · "));
+    const last = cur ? cur.calls.filter(c => c.role === r).slice(-1)[0] : null;
     const started = isAct && act.since ? (Date.now() - new Date(act.since).getTime()) / 1000 : 0;
-    row.appendChild(el("span", "", !p.installed ? "설치 안 됨" : isAct ? ROLE_KO[act.role] + " 작업 중 · " + dur(started) : last ? "대기 · 마지막 " + (ROLE_KO[last.role] || last.role) + " " + last.sec + "초" : "대기"));
+    row.appendChild(el("span", "", !p.installed ? "설치 안 됨" : isAct ? "작업 중 · " + dur(started) : last ? "대기 · 마지막 " + last.sec + "초" : "대기"));
     live.appendChild(row);
   });
 

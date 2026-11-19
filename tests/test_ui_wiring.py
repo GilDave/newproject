@@ -84,3 +84,11 @@ def test_the_analysis_report_can_start_a_whole_batch_in_one_click():
 def test_the_work_room_shows_the_decision_step_and_the_same_pending_count_as_the_top_bar():
     for needle in ('"05 결정"', '(hasArb ? "06" : "05") + " 판정"', "att.arbiter", 'item("결정 필요"', "inbox ? inbox.pending"):
         assert needle in HTML or needle.replace("att.arbiter", "att && att.arbiter") in HTML, needle
+
+
+def test_the_live_list_is_in_pipeline_order_plan_build_review_decide():
+    i = HTML.index('const live = $("w-live")')
+    block = HTML[i:i + 1400]
+    assert 'ALL_ROLES.filter(r => roles[r]).forEach' in block and "state.providers.forEach" not in block
+    order = HTML[HTML.index("const ALL_ROLES"):][:200]
+    assert order.index('"planner"') < order.index('"builder"') < order.index('"reviewer"') < order.index('"arbiter"')
