@@ -104,12 +104,34 @@ def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
     return value
 
 
+def ollama_override_path() -> Path:
+    return Path.home() / ".solomon" / "ollama.json"
+
+
+def ollama_override() -> dict:
+    import json
+
+    try:
+        return json.loads(ollama_override_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_ollama_override(model: str, base: str) -> None:
+    import json
+
+    p = ollama_override_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"model": model, "base": base}), encoding="utf-8")
+
+
 def load_settings(path: Optional[str | Path] = None) -> Settings:
     s = Settings()
     cfg_path = Path(path) if path else Path("solomon.toml")
     if not cfg_path.exists():
         if path:
             raise ConfigError(f"config file not found: {cfg_path}")
+        s.ollama_model = str(ollama_override().get("model") or s.ollama_model)
         s.validate()
         return s
     try:
@@ -155,6 +177,8 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
     oll = _section(data, "ollama")
     s.ollama_url = str(oll.get("url", s.ollama_url))
     s.ollama_model = str(oll.get("model", s.ollama_model))
+    if "model" not in oll:  # the dashboard's "make a Solomon-only model" button leaves its choice here; an explicit toml value wins
+        s.ollama_model = str(ollama_override().get("model") or s.ollama_model)
     s.ollama_num_ctx = int(oll.get("num_ctx", s.ollama_num_ctx))
     s.ollama_keep_alive = str(oll.get("keep_alive", s.ollama_keep_alive))
     if data.get("project"):

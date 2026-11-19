@@ -295,12 +295,36 @@ class DashboardApp:
         except OSError:
             return False
 
+    def _ollama_tools(self) -> dict:
+        from .providers import ollama as ollama_mod
+
+        return {"model": self.settings.ollama_model, "alias": ollama_mod.ALIAS_NAME, "alias_active": self.settings.ollama_model == ollama_mod.ALIAS_NAME,
+                "loaded": ollama_mod.loaded_models(self.settings.ollama_url)}
+
     def tools_status(self) -> dict:
         from .env import resolve_cli
         import platform
         return {"version": __version__, "python": platform.python_version(), "git": folders.git_identity(), "ytdlp": resolve_cli("yt-dlp") or "",
                 "can_update": self.source_root() is not None, "can_restart": self.source_root() is not None and self.started_by_script(),
-                "can_open": folders.open_command() is not None, "projects_root": str(self.projects_root())}
+                "can_open": folders.open_command() is not None, "projects_root": str(self.projects_root()),
+                "ollama": self._ollama_tools()}
+
+    def make_ollama_alias(self) -> dict:
+        from .providers import ollama as ollama_mod
+        from .settings import ollama_override, save_ollama_override
+
+        base = str(ollama_override().get("base") or self.settings.ollama_model)
+        if base == ollama_mod.ALIAS_NAME:
+            raise ApiError(400, "기준 모델을 알 수 없습니다. solomon.toml [ollama] model 에 원래 모델 이름을 적어주세요.")
+        try:
+            ollama_mod.create_alias(self.settings.ollama_url, base, ollama_mod.ALIAS_NAME, self.settings.ollama_num_ctx)
+        except ollama_mod.ProviderError as exc:
+            raise ApiError(502, str(exc)) from exc
+        save_ollama_override(ollama_mod.ALIAS_NAME, base)
+        self.settings.ollama_model = ollama_mod.ALIAS_NAME
+        self._providers_cache = (0.0, [])
+        return {"ok": True, "message": f"'{ollama_mod.ALIAS_NAME}' 모델을 만들었습니다({base}와 같은 가중치, 디스크 추가 거의 없음). "
+                                       "이제 Solomon은 이 이름만 쓰므로 봇의 Ollama 사용과 서로 밀어내지 않습니다. 새로 시작하는 작업부터 적용됩니다."}
 
     def set_git_identity(self, name: str, email: str) -> dict:
         try:
@@ -1110,6 +1134,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.run_tool(str(body.get("tool", "")))})
                 if path == "/api/tools/git-identity":
                     return self._json(200, app.set_git_identity(str(body.get("name", "")), str(body.get("email", ""))))
+                if path == "/api/tools/ollama-alias":
+                    return self._json(200, app.make_ollama_alias())
                 if path == "/api/tools/restart":
                     return self._json(200, app.restart())
                 if path == "/api/projects/remove":

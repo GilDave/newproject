@@ -243,3 +243,40 @@ def test_analysis_skips_the_local_model_when_the_input_cannot_fit_instead_of_fai
     r = run_analysis(Settings(), repo, providers={"claude": ok, "ollama": small}, ais=["claude", "ollama"])
     assert r.ais["ollama"]["state"] == "skipped" and not r.ais["ollama"]["ok"] and "건너뜁니다" in r.ais["ollama"]["error"]
     assert r.ais["claude"]["ok"] and r.status == "DONE" and "1/1" in r.summary and not fake.requests
+
+
+def test_alias_creation_posts_the_base_and_options_and_the_dashboard_switches_to_it(tmp_path, fake, monkeypatch):
+    import http.server, threading
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_POST(self):
+            seen.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+            self.send_response(200); self.end_headers(); self.wfile.write(b'{"status":"success"}')
+        def do_GET(self):
+            self.send_response(200); self.end_headers()
+            self.wfile.write(json.dumps({"models": [{"name": "qwen3:8b", "size": 5.2e9, "expires_at": "2026-11-20T10:00:00Z"}]}).encode())
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from solomon.providers import ollama as O2
+    O2.create_alias(url, "qwen3:8b", num_ctx=16384)
+    assert seen[0][0] == "/api/create" and seen[0][1]["from"] == "qwen3:8b" and seen[0][1]["model"] == "solomon-arbiter"
+    assert seen[0][1]["parameters"]["num_ctx"] == 16384
+    assert O2.loaded_models(url) == [{"name": "qwen3:8b", "size_gb": 5.2, "expires": "2026-11-20T10:00:00"}]
+    from test_dashboard import Env, sleeper
+    sleeper.calls.clear()
+    e = Env(tmp_path, settings=Settings(ollama_url=url))
+    try:
+        st, body, _ = e.call("POST", "/api/tools/ollama-alias", {})
+        assert st == 200 and "solomon-arbiter" in body["message"] and e.app.settings.ollama_model == "solomon-arbiter"
+        assert json.loads((tmp_path / ".solomon" / "ollama.json").read_text()) == {"model": "solomon-arbiter", "base": "qwen3:8b"}
+        t = e.call("GET", "/api/tools")[1]["ollama"]
+        assert t["alias_active"] and t["loaded"][0]["name"] == "qwen3:8b"
+        from solomon.settings import load_settings
+        assert load_settings(None).ollama_model == "solomon-arbiter"  # runs started later use it too
+    finally:
+        e.close(); srv.shutdown()

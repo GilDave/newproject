@@ -129,3 +129,37 @@ class OllamaProvider(CliProvider):
             raise ProviderError(f"ollama: 입력이 문맥 길이({self.num_ctx:,})를 꽉 채워 앞부분이 잘렸을 수 있어 결과를 쓰지 않습니다. num_ctx를 늘리세요.")
         return ProviderResult(text=text, exit_code=0, duration_sec=round(time.time() - started, 2), provider=self.name,
                               tokens={"in": tin, "out": tout, "total": tin + tout} if (tin or tout) else None)
+
+
+ALIAS_NAME = "solomon-arbiter"
+
+
+def create_alias(url: str, base: str, name: str = ALIAS_NAME, num_ctx: int = DEFAULT_NUM_CTX, timeout: float = 600.0) -> None:
+    """A Solomon-only model name that shares the base model's weights (no extra disk) but has its OWN options.
+
+    Another program using the same Ollama with the base model under different options (e.g. another num_ctx) makes the server
+    unload and reload the model on every switch. A separate name is a separate loaded instance, so the two never fight."""
+    body = json.dumps({"model": name, "from": base, "parameters": {"num_ctx": int(num_ctx), "temperature": 0}, "stream": False}).encode()
+    req = urllib.request.Request(check_url(url) + "/api/create", data=body, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            last = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:200]
+        raise ProviderError(f"ollama: 모델을 만들지 못했습니다 ({exc.code}): {detail}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise ProviderError(f"ollama 서버에 연결하지 못했습니다: {exc}") from exc
+    if '"error"' in last:
+        raise ProviderError("ollama: 모델을 만들지 못했습니다: " + last[:200])
+    _cache.pop(check_url(url), None)
+
+
+def loaded_models(url: str, timeout: float = 1.5) -> Optional[list[dict]]:
+    """Models currently held in memory (`ollama ps`), or None when the server cannot be reached."""
+    try:
+        with urllib.request.urlopen(check_url(url) + "/api/ps", timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return [{"name": str(m.get("name", "")), "size_gb": round(float(m.get("size", 0)) / 1e9, 1), "expires": str(m.get("expires_at", ""))[:19]}
+            for m in data.get("models", [])]

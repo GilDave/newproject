@@ -374,7 +374,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
   <section class="card"><h2>도구 · 설정 — 터미널 대신 여기서</h2>
     <div class="kvt" id="toolInfo"></div>
     <div class="row">
-      <button id="t-doctor">환경 점검</button><button id="t-selftest">자체 점검 (가짜 AI)</button><button id="t-ollama">Ollama 연결 시험</button><button id="t-ytdlp">yt-dlp 설치·업데이트</button>
+      <button id="t-doctor">환경 점검</button><button id="t-selftest">자체 점검 (가짜 AI)</button><button id="t-ollama">Ollama 연결 시험</button><button id="t-ollama-alias">Solomon 전용 Ollama 모델 만들기</button><button id="t-ytdlp">yt-dlp 설치·업데이트</button>
       <button id="t-update">Solomon 업데이트 (git pull)</button><button id="t-restart" class="danger">대시보드 재시작</button>
     </div>
     <div class="msec"><h3>git 사용자 정보 (대시보드에서 커밋할 때 필요, 한 번만)</h3>
@@ -1542,13 +1542,15 @@ async function loadTools(){
   row("yt-dlp", t.ytdlp || "설치 안 됨 (영상 분석의 자막 수집에 권장 — 아래 버튼으로 설치)");
   row("git 사용자", (t.git.name || t.git.email) ? t.git.name + " <" + t.git.email + ">" : "설정 안 됨 (아래에 입력)");
   row("새 프로젝트 위치", t.projects_root);
+  const o = t.ollama; row("Ollama 모델", o.model + (o.alias_active ? " (Solomon 전용 — 봇과 분리됨)" : " (봇과 같은 이름이면 서로 모델을 밀어낼 수 있음 → 아래 버튼)"));
+  row("메모리에 올라온 모델", o.loaded === null ? "Ollama 서버에 연결 안 됨" : o.loaded.length ? o.loaded.map(m => m.name + " " + m.size_gb + "GB").join(", ") : "없음(대기 중)");
   if (document.activeElement !== $("gi-name") && !$("gi-name").value) $("gi-name").value = t.git.name || "";
   if (document.activeElement !== $("gi-email") && !$("gi-email").value) $("gi-email").value = t.git.email || "";
   const busy = state && state.job.state === "running";
   $("t-update").disabled = busy || !t.can_update; $("t-restart").disabled = busy || !t.can_restart;
   $("t-update").title = t.can_update ? "" : "git으로 받은 폴더에서 시작한 경우에만 쓸 수 있습니다";
   $("t-restart").title = t.can_restart ? "" : "scripts/start.sh 로 시작한 대시보드만 재시작할 수 있습니다";
-  $("t-doctor").disabled = $("t-selftest").disabled = $("t-ytdlp").disabled = $("t-ollama").disabled = busy;
+  $("t-ollama-alias").disabled = $("t-doctor").disabled = $("t-selftest").disabled = $("t-ytdlp").disabled = $("t-ollama").disabled = busy;
 }
 function renderToolOut(){
   const out = $("toolOut"), job = state && state.job;
@@ -1849,6 +1851,7 @@ $("pjAdd").onclick = () => openBrowser("기존 폴더를 프로젝트로 추가"
 $("t-doctor").onclick = () => runTool("doctor", "환경 점검을");
 $("t-selftest").onclick = () => runTool("selftest", "자체 점검을");
 $("t-ollama").onclick = () => runTool("ollama", "Ollama 연결 시험을");
+$("t-ollama-alias").onclick = async () => { try { const r = await api("/api/tools/ollama-alias", {}); toast(r.message); loadTools(); } catch (e) { toast(e.message || String(e), true); } };
 $("t-ytdlp").onclick = () => confirm("pip로 yt-dlp를 설치하거나 최신으로 올립니다 (인터넷 필요). 계속할까요?") && runTool("install-ytdlp", "yt-dlp 설치를");
 $("t-update").onclick = () => confirm("최신 코드를 받습니다(git pull). 끝나면 '대시보드 재시작'을 눌러 적용하세요. 계속할까요?") && runTool("update", "업데이트를");
 $("t-restart").onclick = async () => {
