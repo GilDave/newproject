@@ -100,13 +100,13 @@ def candles(tmp_path, prices):
         w = csv.writer(fh)
         w.writerow(["ts_ms", "open", "high", "low", "close"])
         for i, c in enumerate(prices):
-            w.writerow([1_000_000 + i * 180_000, c, c, c, c])
+            w.writerow([1_787_000_000_000 + i * 180_000, c, c, c, c])
     return p
 
 
 def test_bot_filter_evaluation_counterfactual_and_filter_off_rate(tmp_path):
     prices = [100.0] * 5 + [100.0 + i for i in range(1, 40)]  # rising
-    t0 = 1_000_000
+    t0 = 1_787_000_000_000
     d = lambda side, block, conf, reason="r": json.dumps({"side": side, "block": block, "confidence": conf, "reason": reason})
     rows = [(t0, "llm", d("long", False, 0.7)),            # allowed, price rises -> good allow
             (t0 + 180_000, "llm", d("short", True, 0.9)),  # blocked short in a rising market -> good block
@@ -134,3 +134,19 @@ def test_cli_prints_json(tmp_path, capsys):
     db = bot_db(tmp_path, [])
     assert cli.main(["shadow", "--bot-db", str(db)]) == 0
     assert json.loads(capsys.readouterr().out)["events"] == 0
+
+
+def test_bot_signals_scored_only_when_price_covers_the_horizon(tmp_path):
+    t0 = 1_787_000_000_000
+    prices = [100.0] * 3 + [100.0 + i * 0.1 for i in range(1, 60)]  # drifting up
+    ev = lambda kind, **d: (t0, kind, json.dumps(d))
+    rows = [ev("ml2_pred", ts=t0, p=0.7, dir=1.0), ev("ml2_pred", ts=t0, p=0.3, dir=-1.0),
+            ev("ml2_pred", ts=t0 + 100 * 180_000, p=0.6, dir=1.0),  # price not available that far -> waiting
+            ev("news_score", ts=t0, risk=0.8), ev("news_score", ts=t0, risk=0.1)]
+    db = bot_db(tmp_path, rows)
+    before = db.read_bytes()
+    out = shadow.evaluate_bot_signals(db, candles(tmp_path, prices), horizon_bars=20)
+    assert out["waiting_for_price"] == 1
+    assert out["ml2"]["overall"]["n"] == 2 and out["ml2"]["overall"]["hits"] == 1 and out["ml2"]["overall"]["enough"] is False
+    assert out["news"]["high_risk"]["n"] == 1 and out["news"]["low_risk"]["n"] == 1 and out["news"]["enough"] is False
+    assert db.read_bytes() == before

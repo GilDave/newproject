@@ -217,3 +217,64 @@ def evaluate_bot_filter(db: Path, candles_csv: Optional[Path] = None, bars: int 
             "blocked_avoided_loss_sum": round(-sum(x["net"] for x in blocked if x["net"] < 0), 4),
             "blocked_missed_gain_sum": round(sum(x["net"] for x in blocked if x["net"] > 0), 4),
             "caveat": "종가 기준 근사 결과입니다(봇의 실제 청산 규칙·체결가가 아님). 표본이 %d건 미만인 칸은 결론이 아닙니다." % MIN_SAMPLES}
+
+
+def evaluate_bot_signals(db: Path, candles_csv: Optional[Path], horizon_bars: int = 480) -> dict:
+    """Score the trend bot's own shadow signals against what the price then did (read-only).
+
+    ml2_pred  : direction `dir` (+1/-1) with probability `p` that the trend is right after `horizon_bars` (480 x 3 min = 24 h).
+                Scored: hit rate, and hit rate by probability bin, against the base rate of 'trend direction was right'.
+    news_score: risk 0..1 from the LLM. Scored: does high risk (>=0.5) precede a larger move / drawdown than low risk?
+    Events whose horizon is not covered by the candle file yet are listed as waiting, never counted."""
+    con = _open_ro(Path(db))
+    try:
+        rows = con.execute("select ts_ms, kind, data from events where kind in ('ml2_pred','news_score') order by ts_ms").fetchall()
+    finally:
+        con.close()
+    candles = _load_candles(Path(candles_csv)) if candles_csv else []
+    last_ts = candles[-1][0] if candles else 0
+    ml, news, waiting = [], [], 0
+    for ts, kind, raw in rows:
+        try:
+            d = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        t = int(d.get("ts") or ts)
+        r = _forward_return(candles, t, "long", horizon_bars) if candles else None
+        if r is None:
+            waiting += 1
+            continue
+        if kind == "ml2_pred" and d.get("dir") not in (None, 0, 0.0) and d.get("p") is not None:
+            ml.append({"p": float(d["p"]), "hit": (r > 0) == (float(d["dir"]) > 0)})
+        elif kind == "news_score" and d.get("risk") is not None:
+            import bisect
+            i = bisect.bisect_left(candles, (t, -1.0))
+            window = [c for _, c in candles[i:i + horizon_bars + 1]]
+            dd = min(window) / window[0] - 1.0 if window and window[0] > 0 else 0.0
+            news.append({"risk": float(d["risk"]), "abs_ret": abs(r), "drawdown": dd})
+
+    def hit(items: list[dict]) -> dict:
+        n = len(items)
+        k = sum(1 for x in items if x["hit"])
+        lo, hi = wilson(k, n)
+        return {"n": n, "hits": k, "rate": round(k / n, 3) if n else None, "ci": [round(lo, 3), round(hi, 3)], "enough": n >= MIN_SAMPLES}
+
+    bins = {}
+    for lo_b, hi_b in ((0.0, 0.45), (0.45, 0.55), (0.55, 1.01)):
+        grp = [x for x in ml if lo_b <= x["p"] < hi_b]
+        if grp:
+            bins[f"p {lo_b:.2f}~{min(hi_b, 1.0):.2f}"] = hit(grp)
+
+    def mean(xs: list[float]) -> Optional[float]:
+        return round(sum(xs) / len(xs), 5) if xs else None
+
+    hi_r = [x for x in news if x["risk"] >= 0.5]
+    lo_r = [x for x in news if x["risk"] < 0.5]
+    return {"horizon_bars": horizon_bars, "candles_end_ts_ms": last_ts, "waiting_for_price": waiting,
+            "ml2": {"overall": hit(ml), "by_probability": bins,
+                    "note": "p가 높을수록 적중률이 높아지지 않으면 이 예측은 쓸모가 없습니다(보정 실패)."},
+            "news": {"high_risk": {"n": len(hi_r), "mean_abs_return": mean([x["abs_ret"] for x in hi_r]), "mean_drawdown": mean([x["drawdown"] for x in hi_r])},
+                     "low_risk": {"n": len(lo_r), "mean_abs_return": mean([x["abs_ret"] for x in lo_r]), "mean_drawdown": mean([x["drawdown"] for x in lo_r]),},
+                     "enough": len(hi_r) >= MIN_SAMPLES and len(lo_r) >= MIN_SAMPLES,
+                     "note": "높은 위험 점수 뒤에 낙폭이 더 깊어져야 뉴스 점수가 쓸모 있습니다. 양쪽 30건 미만이면 결론이 아닙니다."},
+            "caveat": "캔들 파일이 이벤트 시각 +24시간까지 있어야 채점됩니다. 부족한 건은 waiting_for_price로 셉니다."}

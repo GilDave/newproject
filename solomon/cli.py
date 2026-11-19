@@ -153,7 +153,9 @@ def _shadow(args: argparse.Namespace) -> int:
     from . import shadow
 
     if args.bot_db:
-        out = shadow.evaluate_bot_filter(Path(args.bot_db), Path(args.candles) if args.candles else None, bars=args.bars, fee=args.fee)
+        csv_path = Path(args.candles) if args.candles else None
+        out = shadow.evaluate_bot_filter(Path(args.bot_db), csv_path, bars=args.bars, fee=args.fee)
+        out["signals"] = shadow.evaluate_bot_signals(Path(args.bot_db), csv_path)
     else:
         out = shadow.evaluate(Path(args.project or "."))
     print(json.dumps(out, ensure_ascii=False, indent=2))
