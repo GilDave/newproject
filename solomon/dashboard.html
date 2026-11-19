@@ -197,7 +197,7 @@ pre.code{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 .work{padding:16px 24px 28px;display:flex;flex-direction:column;gap:14px}
 .w-top{display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:13px;color:var(--dim)}
 .w-top b{color:var(--text)}
-.w-steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.w-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
 .wstep{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#0b141f;min-height:92px}
 .wstep h4{margin:0 0 4px;font-size:13px;display:flex;justify-content:space-between;gap:6px}
 .wstep .info{font-size:12px;color:var(--dim);line-height:1.5}
@@ -901,9 +901,14 @@ function stepCards(cur, roles){
   const rv = att && att.review, rcall = cur ? cur.calls.filter(c => c.role === "reviewer").slice(-1)[0] : null;
   mk("04 검수", rv ? (rv.verdict === "PASS" ? "done" : "fail") : (live && key === "review" ? "cur" : ""), rv ? (rv.verdict === "PASS" ? "통과" : "FAIL") : (live && key === "review" ? "진행 중" : "대기"),
      rv ? [rcall ? pname(rcall.provider) + " · " + rcall.sec + "초" : "", rv.issues.length ? "지적 " + rv.issues.length + "건" : "지적 없음"] : [roles.reviewer ? pname(roles.reviewer) : ""]);
-  // 05 decide
+  // 05 the arbiter (only when one is set or took part): the decision above the three AIs
+  const ar = att && att.arbiter, hasArb = !!(roles.arbiter || ar), KOD = {ADOPT: "채택", REJECT: "반려", NEED_HUMAN: "사람 확인"};
+  const arbNow = live && key === "decide" && rv && rv.verdict === "PASS" && !ar;
+  if (hasArb) mk("05 결정", ar ? (ar.final === "ADOPT" ? "done" : ar.final === "REJECT" ? "fail" : "warn") : (arbNow ? "cur" : ""), ar ? (KOD[ar.final] || ar.final) : (arbNow ? "결정 중" : "대기"),
+     ar ? ["👑 " + pname(ar.provider) + " · 확신 " + ar.confidence, ar.final !== ar.decision ? "원래 답: " + (KOD[ar.decision] || ar.decision) : "", clip(ar.reason, 70)] : [roles.arbiter ? "👑 " + pname(roles.arbiter) : ""]);
+  // last: the verdict of the run
   const fin = cur && cur.finished;
-  mk("05 판정", fin ? (cur.status === "PASSED" ? "done" : "fail") : (live && key === "decide" ? "cur" : ""), fin ? (STATUS_KO[cur.status] || cur.status) : (live && key === "decide" ? "진행 중" : "대기"),
+  mk((hasArb ? "06" : "05") + " 판정", fin ? (cur.status === "PASSED" ? "done" : "fail") : (live && key === "decide" ? "cur" : ""), fin ? (STATUS_KO[cur.status] || cur.status) : (live && key === "decide" ? "진행 중" : "대기"),
      fin ? ["시도 " + cur.attempts + "번"] : cur && cur.attempts ? ["시도 " + cur.attempts + "번째 진행"] : [""]);
   return steps;
 }
@@ -914,13 +919,13 @@ function renderWork(){
   const item = (k, v) => { const s = el("span"); s.appendChild(document.createTextNode(k + " ")); s.appendChild(el("b", "", v)); top.appendChild(s); };
   item("프로젝트", state.project || "—");
   item("최근 기록", cur && cur.timeline.length ? cur.timeline[cur.timeline.length - 1].split("  ")[0] : "없음");
-  item("적용 대기", state.apply_pending + "건");
+  item("결정 필요", (inbox ? inbox.pending : state.apply_pending) + "건");  // the same number as the top bar: results that wait for apply / commit
   item("작업", running ? (job.kind === "analyze" ? "분석 진행 중" : "실행 진행 중") : "대기");
 
   const steps = $("w-steps"); clear(steps);
   stepCards(cur, roles).forEach(s => {
     const d = el("div", "wstep " + s.state), h = el("h4"); h.appendChild(el("span", "", s.title));
-    h.appendChild(el("span", "badge " + (s.state === "done" ? "ok" : s.state === "fail" ? "bad" : s.state === "cur" ? "run" : ""), s.badge));
+    h.appendChild(el("span", "badge " + (s.state === "done" ? "ok" : s.state === "fail" ? "bad" : s.state === "warn" ? "warn" : s.state === "cur" ? "run" : ""), s.badge));
     d.appendChild(h); s.lines.filter(Boolean).forEach(l => d.appendChild(el("div", "info", l))); steps.appendChild(d);
   });
 

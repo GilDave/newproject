@@ -79,3 +79,8 @@ def test_the_analysis_report_can_start_a_whole_batch_in_one_click():
                    "옛 버전입니다"):
         assert needle in HTML, needle
     assert 'id="bf-g"' in HTML and 'value="0">전부' in HTML
+
+
+def test_the_work_room_shows_the_decision_step_and_the_same_pending_count_as_the_top_bar():
+    for needle in ('"05 결정"', '(hasArb ? "06" : "05") + " 판정"', "att.arbiter", 'item("결정 필요"', "inbox ? inbox.pending"):
+        assert needle in HTML or needle.replace("att.arbiter", "att && att.arbiter") in HTML, needle
