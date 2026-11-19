@@ -498,7 +498,8 @@ function fillRoleSelects(cur){
       const o = el("option", "", pname(p.name) + (p.local ? " (로컬)" : "") + (p.installed ? "" : " (미설치)") + (readOnly ? (optional ? " (자문만)" : " (구현 불가)") : ""));
       o.value = p.name; o.disabled = !p.installed || (readOnly && !optional); sel.appendChild(o);
     });
-    const arbDefault = role === "arbiter" && !(cur && cur.roles && Object.keys(cur.roles).length) && (state.providers.find(p => p.name === "ollama") || {}).installed ? "ollama" : "";
+    // the next run's decision-maker defaults to the local model when it is connected (an earlier run having had none does not change that)
+    const arbDefault = role === "arbiter" && (state.providers.find(p => p.name === "ollama") || {}).installed ? "ollama" : "";
     const target = rolesDirty && keep !== undefined && sel.dataset.touched ? keep : (want[role] || arbDefault);
     if ([...sel.options].some(o => o.value === target && !o.disabled)) sel.value = target;
     else if (!optional){ const first = [...sel.options].find(o => !o.disabled); if (first) sel.value = first.value; }
@@ -664,7 +665,7 @@ function layout(n){  // positions in % of the stage: 1 centre, 2 side by side, 3
   return Array.from({length: n}, (_, i) => { const a = (-90 + i * 360 / n) * Math.PI / 180; return [50 + 32 * Math.cos(a), 52 + 30 * Math.sin(a)]; });
 }
 function currentRoles(cur){
-  if (cur && cur.roles && Object.keys(cur.roles).length && (cur.live || selectedRun || !rolesDirty)) return cur.roles;
+  if (cur && cur.roles && Object.keys(cur.roles).length && (cur.live || selectedRun)) return cur.roles;  // a run being watched shows its own roles; otherwise the form is the preview
   return collectRoles();
 }
 function activeCalls(cur, isAn){
