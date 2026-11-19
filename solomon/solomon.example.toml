@@ -24,6 +24,12 @@ reviewer = "claude"              # must differ from builder unless loop.allow_sa
 # Arguments added to Claude's WRITE calls (when Claude is the builder). Off by default. To try limiting it to file tools:
 # claude_write = ["--tools", "Read,Edit,Write,Glob,Grep", "--strict-mcp-config"]
 
+[ollama]                         # a local model on this computer (free, nothing leaves the machine); read-only helper roles only
+url      = "http://127.0.0.1:11434"   # only this computer is allowed
+model    = "qwen3:8b"                 # a name from `ollama list`
+num_ctx  = 16384                      # prompt window; a prompt that fills it is an error, never a silently cut answer
+keep_alive = "30m"
+
 [timeouts]                       # seconds
 planner   = 300
 builder   = 900

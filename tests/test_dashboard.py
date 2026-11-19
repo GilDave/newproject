@@ -147,7 +147,7 @@ def test_state_for_a_finished_run(env):
     assert {c["role"] for c in cur["calls"]} == {"planner", "builder", "reviewer"}
     assert set(cur["providers"]) == {"claude", "codex"}
     assert st["apply"]["possible"] is True and st["runs"][0]["status"] == "PASSED"
-    assert [p["name"] for p in st["providers"]] == ["claude", "codex", "antigravity"]
+    assert [p["name"] for p in st["providers"]] == ["claude", "codex", "antigravity", "ollama"]
 
 
 def test_unfinished_run_without_a_job_is_reported_as_interrupted(env):

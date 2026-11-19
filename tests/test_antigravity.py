@@ -159,7 +159,7 @@ def test_antigravity_as_planner_and_reviewer_in_a_three_ai_run(tmp_path):
 
 
 def test_registry_doctor_and_default_experiment(capsys):
-    assert list(PROVIDER_CLASSES) == ["claude", "codex", "antigravity"]
+    assert list(PROVIDER_CLASSES) == ["claude", "codex", "antigravity", "ollama"]
     assert isinstance(build_providers(Settings())["antigravity"], AntigravityProvider)
     cli.main(["doctor"])
     assert "antigravity" in capsys.readouterr().out

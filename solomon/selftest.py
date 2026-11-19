@@ -185,6 +185,48 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             assert any(m["evidence"] == "quote_missing" for c in r["clusters"] for m in c["members"])  # the invented quote is caught
             assert video.title_matches("자동매매 손절 규칙", "자동매매 손절 규칙") and not video.title_matches("다른 제목", "자동매매 손절 규칙")
 
+        def local_ai():
+            import threading
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+            from .providers import ollama as oll
+
+            seen: list[dict] = []
+
+            class H(BaseHTTPRequestHandler):
+                def log_message(self, *a):
+                    pass
+
+                def _send(self, obj):
+                    body = json.dumps(obj).encode()
+                    self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+                def do_GET(self):
+                    self._send({"models": [{"name": "qwen3:8b"}]})
+
+                def do_POST(self):
+                    req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                    seen.append(req)
+                    self._send({"message": {"content": "<think>생각</think>" + _review()}, "prompt_eval_count": 50, "eval_count": 20})
+
+            srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            try:
+                oll._cache.clear()
+                p = oll.OllamaProvider(url=f"http://127.0.0.1:{srv.server_address[1]}")
+                assert p.locate() and p.supports_write is False and p.default_participant is False
+                r = p.run("Reply with ONLY one JSON object: {}. Review.", ".", False, 20)
+                assert json.loads(r.text)["verdict"] == "PASS" and r.tokens["total"] == 70  # reasoning removed, exact tokens kept
+                assert seen[0]["think"] is False and seen[0]["format"] == "json" and seen[0]["options"]["temperature"] == 0
+                try:
+                    oll.OllamaProvider(url="http://192.168.1.10:11434")
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("다른 컴퓨터 주소가 허용됐습니다")
+            finally:
+                srv.shutdown(); srv.server_close(); oll._cache.clear()
+
         def folder_tools():
             old_home = os.environ.get("HOME")
             os.environ["HOME"] = str(base)  # browsing is limited to the home folder: use the throw-away one
@@ -249,6 +291,7 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             ("영상 분석: 자막 인용 검증 · AI 간 교차 확인 · 제목으로 직접 시청 판별", video_analysis),
             ("신규 프로젝트 폴더 · 휴지통 · 복원 · 기존 프로젝트 삭제 거부", project_folders),
             ("폴더 편집: 이름 변경 · git 초기화(비밀 파일 제외) · 찾아보기(홈 밖 차단)", folder_tools),
+            ("로컬 AI(Ollama) 연결부: 생각 블록 제거 · 정확한 토큰 · 이 컴퓨터만 허용", local_ai),
         ):
             check(title, fn)
         subprocess.run(["git", "worktree", "prune"], cwd=base, capture_output=True)

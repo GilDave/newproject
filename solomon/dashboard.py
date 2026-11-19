@@ -308,6 +308,8 @@ class DashboardApp:
         cfg = ["--config", self.config_path] if self.config_path else []
         if tool == "doctor":
             return self._spawn("tool", py + ["solomon", "doctor"] + cfg, None, "환경 점검")
+        if tool == "ollama":
+            return self._spawn("tool", py + ["solomon", "ollama"] + cfg, None, "Ollama 연결 시험")
         if tool == "selftest":
             return self._spawn("tool", py + ["solomon", "selftest"], None, "자체 점검 (가짜 AI)")
         if tool == "install-ytdlp":
@@ -425,7 +427,10 @@ class DashboardApp:
             providers = build_providers(self.settings)
             info = [
                 {"name": n, "installed": bool(providers[n].locate()),  # type: ignore[attr-defined]
-                 "supports_write": bool(PROVIDER_CLASSES[n].supports_write)}
+                 "supports_write": bool(PROVIDER_CLASSES[n].supports_write),
+                 "default": bool(getattr(PROVIDER_CLASSES[n], "default_participant", True)),  # asked when no AI is chosen
+                 "local": bool(getattr(PROVIDER_CLASSES[n], "local", False)),
+                 "model": self.settings.ollama_model if n == "ollama" else ""}
                 for n in PROVIDER_CLASSES
             ]
             self._providers_cache = (now, info)
@@ -619,9 +624,10 @@ class DashboardApp:
         if len(focus) > MAX_GOAL:
             raise ApiError(400, f"분석 요청이 너무 깁니다 ({MAX_GOAL}자 이하).")
         installed = [p["name"] for p in self.providers_info() if p["installed"]]
+        defaults = [p["name"] for p in self.providers_info() if p["installed"] and p.get("default", True)]
         if ais is not None and not isinstance(ais, list):
             raise ApiError(400, "AI 선택 형식이 올바르지 않습니다.")
-        chosen = [str(a) for a in (ais or installed)]
+        chosen = [str(a) for a in (ais or defaults)]
         bad = [a for a in chosen if a not in PROVIDER_CLASSES]
         if bad:
             raise ApiError(400, f"알 수 없는 AI입니다: {', '.join(bad)}")
@@ -743,9 +749,10 @@ class DashboardApp:
 
     def _check_ais(self, ais: Optional[list]) -> list[str]:
         installed = [p["name"] for p in self.providers_info() if p["installed"]]
+        defaults = [p["name"] for p in self.providers_info() if p["installed"] and p.get("default", True)]
         if ais is not None and not isinstance(ais, list):
             raise ApiError(400, "AI 선택 형식이 올바르지 않습니다.")
-        chosen = [str(a) for a in (ais or installed)]
+        chosen = [str(a) for a in (ais or defaults)]
         bad = [a for a in chosen if a not in PROVIDER_CLASSES]
         if bad:
             raise ApiError(400, f"알 수 없는 AI입니다: {', '.join(bad)}")

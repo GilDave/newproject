@@ -558,12 +558,12 @@ def run_video(
     ytdlp: Optional[str] = None,
     run=run_process,
 ) -> dict:
-    from .providers import build_providers
+    from .providers import build_providers, default_ais
 
     project = Path(project).resolve()
     video_id = parse_video_url(url)
     providers = providers if providers is not None else build_providers(settings)
-    chosen = ais or [n for n in providers if getattr(providers[n], "locate", lambda: True)()]
+    chosen = ais or default_ais(providers)
     unknown = [a for a in chosen if a not in providers]
     if unknown:
         raise ValueError(f"unknown AI: {', '.join(unknown)} (known: {', '.join(providers)})")
@@ -745,11 +745,11 @@ PROBE_KO = {"confirmed": "직접 시청 확인됨", "guessed": "추측 (제목�
 
 def probe_all(settings: Settings, url: str, ais: Optional[list[str]] = None, providers: Optional[dict[str, Provider]] = None,
               http: Http = http_get) -> dict:
-    from .providers import build_providers
+    from .providers import build_providers, default_ais
 
     video_id = parse_video_url(url)
     providers = providers if providers is not None else build_providers(settings)
-    chosen = ais or [n for n in providers if getattr(providers[n], "locate", lambda: True)()]
+    chosen = ais or default_ais(providers)
     truth = fetch_oembed(video_id, http).get("title", "")
     out: dict = {"video_id": video_id, "truth_title": truth, "at": time.strftime("%Y-%m-%d %H:%M:%S"), "ais": {}}
     with ThreadPoolExecutor(max_workers=max(1, len(chosen))) as ex:

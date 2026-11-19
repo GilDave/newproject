@@ -351,7 +351,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
   <section class="card"><h2>도구 · 설정 — 터미널 대신 여기서</h2>
     <div class="kvt" id="toolInfo"></div>
     <div class="row">
-      <button id="t-doctor">환경 점검</button><button id="t-selftest">자체 점검 (가짜 AI)</button><button id="t-ytdlp">yt-dlp 설치·업데이트</button>
+      <button id="t-doctor">환경 점검</button><button id="t-selftest">자체 점검 (가짜 AI)</button><button id="t-ollama">Ollama 연결 시험</button><button id="t-ytdlp">yt-dlp 설치·업데이트</button>
       <button id="t-update">Solomon 업데이트 (git pull)</button><button id="t-restart" class="danger">대시보드 재시작</button>
     </div>
     <div class="msec"><h3>git 사용자 정보 (대시보드에서 커밋할 때 필요, 한 번만)</h3>
@@ -411,8 +411,8 @@ function collectRoles(){
 }
 const ROLE_LABEL = {planner:"PLANNER · 계획", builder:"BUILDER · 구현", reviewer:"REVIEWER · 검수"};
 const ROLE_CARD = {planner:"PLANNER (계획)", builder:"BUILDER (코드 작성)", reviewer:"REVIEWER (검수)"};
-const NAMES = {claude:"Claude", codex:"Codex", antigravity:"Antigravity", gemini:"Gemini"};
-const COLORS = {claude:"var(--claude)", codex:"var(--codex)", antigravity:"var(--gemini)", gemini:"var(--gemini)"};
+const NAMES = {claude:"Claude", codex:"Codex", antigravity:"Antigravity", gemini:"Gemini", ollama:"Ollama"};
+const COLORS = {claude:"var(--claude)", codex:"var(--codex)", antigravity:"var(--gemini)", gemini:"var(--gemini)", ollama:"#c9a0ff"};
 const STAGES = [["plan","계획"],["build","구현"],["scope","범위"],["test","테스트"],["review","검수"],["decide","판정"]];
 const STAGES_AN = [["collect","파일 수집"],["ai","AI 분석"],["verify","근거 검증"],["done","보고서"]];
 const STAGES_VID = [["collect","자막 수집"],["ai","AI 분석"],["verify","인용 검증"],["done","보고서"]];
@@ -480,7 +480,7 @@ function fillRoleSelects(cur){
     if (optional){ const none = el("option", "", "없음"); none.value = ""; sel.appendChild(none); }
     state.providers.forEach(p => {
       const readOnly = base === "builder" && !p.supports_write;
-      const o = el("option", "", pname(p.name) + (p.installed ? "" : " (미설치)") + (readOnly ? (optional ? " (자문만)" : " (구현 불가)") : ""));
+      const o = el("option", "", pname(p.name) + (p.local ? " (로컬)" : "") + (p.installed ? "" : " (미설치)") + (readOnly ? (optional ? " (자문만)" : " (구현 불가)") : ""));
       o.value = p.name; o.disabled = !p.installed || (readOnly && !optional); sel.appendChild(o);
     });
     const target = rolesDirty && keep !== undefined && sel.dataset.touched ? keep : (want[role] || "");
@@ -504,8 +504,8 @@ function fillAnalysisChecks(){
   clear(box);
   state.providers.forEach(p => {
     const l = el("label"), i = el("input"); i.type = "checkbox"; i.value = p.name; i.disabled = !p.installed;
-    i.checked = p.installed && (checked[p.name] === undefined ? true : checked[p.name]);
-    l.appendChild(i); l.appendChild(document.createTextNode(pname(p.name) + (p.installed ? "" : " (미설치)"))); box.appendChild(l);
+    i.checked = p.installed && (checked[p.name] === undefined ? p.default !== false : checked[p.name]);
+    l.appendChild(i); l.appendChild(document.createTextNode(pname(p.name) + (p.local ? " (로컬)" : "") + (p.installed ? "" : p.local ? " (서버·모델 없음)" : " (미설치)"))); box.appendChild(l);
   });
 }
 
@@ -670,13 +670,13 @@ function renderStage(cur, isAn){
     if (isAn){
       const a = cur && cur.ais ? cur.ais[p.name] : null;
       rolesText = a ? "분석 참여" : "참여 안 함";
-      status = !p.installed ? "설치 안 됨" : !a ? "대기" : act ? "분석 중" : a.state === "done" ? "완료 · 발견 " + (a.findings || 0) + "건" : a.state === "quota" ? "한도 소진" : a.state === "failed" ? "실패" : "대기";
+      status = !p.installed ? (p.local ? "서버·모델 없음" : "설치 안 됨") : !a ? "대기" : act ? "분석 중" : a.state === "done" ? "완료 · 발견 " + (a.findings || 0) + "건" : a.state === "quota" ? "한도 소진" : a.state === "failed" ? "실패" : "대기";
       idle = !a;
     } else {
       const mine = ALL_ROLES.filter(r => roles[r] === p.name);
       const calls = cur ? cur.calls.filter(c => c.provider === p.name && c.ok).length : 0;
       rolesText = mine.length ? mine.map(r => ROLE_KO[r]).join(" · ") : "역할 없음";
-      status = !p.installed ? "설치 안 됨" : quota ? "한도 소진" : act ? ROLE_KO[act.role] + " 작업 중" : calls ? calls + "회 완료" : "대기";
+      status = !p.installed ? (p.local ? "서버·모델 없음" : "설치 안 됨") : quota ? "한도 소진" : act ? ROLE_KO[act.role] + " 작업 중" : calls ? calls + "회 완료" : "대기";
       idle = !mine.length && !calls && !act;
     }
     n.className = "node" + (act ? " active" : "") + (!p.installed ? " missing" : (idle ? " idle" : "")) + (quota ? " quota" : "");
@@ -695,7 +695,7 @@ function renderStage(cur, isAn){
     const bad = cur && cur.quota_providers && cur.quota_providers.includes(p.name);
     const c = el("span", "chip" + (bad || !p.installed ? " bad" : ""));
     c.appendChild(el("b", "", pname(p.name)));
-    c.appendChild(document.createTextNode(bad ? " · 한도 소진" : p.installed ? " · 연결 가능" : " · 설치 안 됨"));
+    c.appendChild(document.createTextNode(bad ? " · 한도 소진" : p.installed ? (p.local ? " · 로컬 연결됨" : " · 연결 가능") : (p.local ? " · 서버·모델 없음" : " · 설치 안 됨")));
     pool.appendChild(c);
   });
   pool.appendChild(el("span", "chip ghost", "+ 다른 AI 추가 가능"));
@@ -1409,7 +1409,7 @@ async function loadTools(){
   $("t-update").disabled = busy || !t.can_update; $("t-restart").disabled = busy || !t.can_restart;
   $("t-update").title = t.can_update ? "" : "git으로 받은 폴더에서 시작한 경우에만 쓸 수 있습니다";
   $("t-restart").title = t.can_restart ? "" : "scripts/start.sh 로 시작한 대시보드만 재시작할 수 있습니다";
-  $("t-doctor").disabled = $("t-selftest").disabled = $("t-ytdlp").disabled = busy;
+  $("t-doctor").disabled = $("t-selftest").disabled = $("t-ytdlp").disabled = $("t-ollama").disabled = busy;
 }
 function renderToolOut(){
   const out = $("toolOut"), job = state && state.job;
@@ -1489,7 +1489,7 @@ function renderAIs(){
   state.providers.forEach(p => {
     const a = totals[p.name], c = el("div", "aic" + (pjFocus === p.name ? " focus" : "")); c.id = "ai-" + p.name;
     const h = el("h3", "", pname(p.name)); h.style.color = pcolor(p.name); c.appendChild(h);
-    c.appendChild(el("div", "hint", (p.installed ? "연결 가능" : "설치 안 됨") + (p.supports_write ? " · 구현 가능" : " · 읽기 전용 (계획·검수·자문·분석)")));
+    c.appendChild(el("div", "hint", (p.local ? (p.installed ? "내 컴퓨터의 로컬 서버 연결됨 · 모델 " + p.model : "Ollama 서버가 꺼져 있거나 모델이 없음 (" + p.model + ")") : (p.installed ? "연결 가능" : "설치 안 됨")) + (p.supports_write ? " · 구현 가능" : " · 읽기 전용 (계획·검수·자문·분석)") + (p.local ? " · 비용 없음" : "")));
     if (!a){ c.appendChild(el("div", "hint", "아직 기록이 없습니다.")); box.appendChild(c); return; }
     const row = (k, v) => { const r = el("div", "row2"); r.appendChild(el("span", "", k)); r.appendChild(el("b", "", v)); c.appendChild(r); };
     row("호출 / 실패", a.calls + "회 / " + a.failures + "회");
@@ -1681,6 +1681,7 @@ $("pjAdd").onclick = () => openBrowser("기존 폴더를 프로젝트로 추가"
 });
 $("t-doctor").onclick = () => runTool("doctor", "환경 점검을");
 $("t-selftest").onclick = () => runTool("selftest", "자체 점검을");
+$("t-ollama").onclick = () => runTool("ollama", "Ollama 연결 시험을");
 $("t-ytdlp").onclick = () => confirm("pip로 yt-dlp를 설치하거나 최신으로 올립니다 (인터넷 필요). 계속할까요?") && runTool("install-ytdlp", "yt-dlp 설치를");
 $("t-update").onclick = () => confirm("최신 코드를 받습니다(git pull). 끝나면 '대시보드 재시작'을 눌러 적용하세요. 계속할까요?") && runTool("update", "업데이트를");
 $("t-restart").onclick = async () => {

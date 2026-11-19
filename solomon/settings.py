@@ -55,6 +55,10 @@ class Settings:
     allow_same_provider: bool = False
     state_dir: str = ".solomon"
     project_path: Optional[str] = None  # default target repository (local folder)
+    ollama_url: str = "http://127.0.0.1:11434"  # a local Ollama server; only this computer is allowed
+    ollama_model: str = "qwen3:8b"
+    ollama_num_ctx: int = 16384  # prompt window; a prompt that fills it is an error, never a silently cut answer
+    ollama_keep_alive: str = "30m"
     projects_root: str = "~/Solomon-Projects"  # where the dashboard creates new project folders
 
     def validate(self) -> None:
@@ -76,6 +80,11 @@ class Settings:
         for r in ("reviewer2", "reviewer3"):
             if self.roles.get(r) and self.roles[r] == self.roles.get("builder") and not self.allow_same_provider:
                 raise ConfigError(f"roles.{r} must not be the builder")
+        if not (2048 <= self.ollama_num_ctx <= 262144):
+            raise ConfigError("ollama.num_ctx must be between 2048 and 262144")
+        from urllib.parse import urlparse
+        if urlparse(self.ollama_url).scheme != "http" or (urlparse(self.ollama_url).hostname or "").lower() not in ("127.0.0.1", "localhost", "::1"):
+            raise ConfigError("ollama.url must point at this computer (127.0.0.1 / localhost): prompts contain project code")
         if self.max_files_changed < 1 or self.max_diff_lines < 1:
             raise ConfigError("safety limits must be positive")
 
@@ -131,6 +140,11 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
     s.allow_same_provider = bool(loop.get("allow_same_provider", s.allow_same_provider))
     s.state_dir = str(data.get("state_dir", s.state_dir))
     s.projects_root = str(data.get("projects_root", s.projects_root))
+    oll = _section(data, "ollama")
+    s.ollama_url = str(oll.get("url", s.ollama_url))
+    s.ollama_model = str(oll.get("model", s.ollama_model))
+    s.ollama_num_ctx = int(oll.get("num_ctx", s.ollama_num_ctx))
+    s.ollama_keep_alive = str(oll.get("keep_alive", s.ollama_keep_alive))
     if data.get("project"):
         s.project_path = str(data["project"])
 

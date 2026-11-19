@@ -52,6 +52,15 @@ def _doctor(args: argparse.Namespace) -> int:
         print(f"note: {', '.join(keys)} 가 이 셸에 설정돼 있습니다. Solomon은 모든 CLI 호출 전에 이 값을 제거하므로 API 요금은 발생하지 않습니다.")
     needed = set(settings.roles.values())
     for name in PROVIDER_CLASSES:
+        if name == "ollama":
+            st = providers[name].status()  # type: ignore[attr-defined]
+            if st["installed"]:
+                print(f"[ok] ollama: 로컬 서버 {st['url']} · 모델 {st['model']} (문맥 {st['num_ctx']:,}) · 비용 없음, 읽기 전용 역할만")
+            elif st["running"]:
+                print(f"[optional] ollama: 서버는 실행 중이지만 모델 '{st['model']}'이 없습니다 (설치된 모델: {', '.join(st['models']) or '없음'}). 설정 [ollama] model 을 고르거나 ollama pull 하세요.")
+            else:
+                print(f"[optional] ollama: 서버({st['url']})에 연결되지 않습니다 (선택 사항. Ollama 앱을 실행하면 로컬 AI로 쓸 수 있음).")
+            continue
         exe = providers[name].locate()  # type: ignore[attr-defined]
         required = name in needed
         if not exe:
@@ -78,6 +87,51 @@ def _doctor(args: argparse.Namespace) -> int:
     print("로그인 상태는 여기서 확인하지 않습니다. 각 CLI를 직접 한 번 실행해 로그인돼 있는지 확인하세요 (가이드 1-3).")
     print("결과: " + ("문제 없음" if not errors else f"고쳐야 할 항목 {errors}개"))
     return 0 if not errors else 2
+
+
+def _ollama(args: argparse.Namespace) -> int:
+    """Check the local Ollama connection with a small decision-style question: reachable? valid JSON? how fast?"""
+    import json
+    import time
+
+    from .jsonutil import extract_json
+    from .providers.ollama import OllamaProvider
+
+    settings = load_settings(args.config)
+    p = OllamaProvider(url=settings.ollama_url, model=args.model or settings.ollama_model, num_ctx=settings.ollama_num_ctx,
+                       keep_alive=settings.ollama_keep_alive)
+    st = p.status()
+    print(f"서버: {st['url']} · {'실행 중' if st['running'] else '연결 안 됨'} · 설치된 모델: {', '.join(st['models']) or '없음'}")
+    if not st["running"]:
+        print("Ollama 앱을 실행한 뒤 다시 시도하세요.")
+        return 2
+    if not st["installed"]:
+        print(f"모델 '{p.model}'이 설치돼 있지 않습니다. 설치: ollama pull {p.model}  (또는 --model 로 설치된 모델을 지정)")
+        return 2
+    prompt = ("You are a cautious arbiter. Reply with ONLY one JSON object: "
+              '{"decision": "ADOPT" | "REJECT" | "NEED_HUMAN", "confidence": number between 0 and 1, "reason": string in Korean}.\n'
+              "Evidence: automatic tests passed (40/40); reviewer A said PASS; reviewer B said PASS; reviewer C said FAIL only because a variable name "
+              "is unclear (style, not a bug); the change touches 2 files, +18 -4 lines, none of them in order execution or risk code.\n"
+              "Decide whether to adopt the change.")
+    results, rounds = [], args.rounds
+    for i in range(rounds):
+        t0 = time.time()
+        try:
+            r = p.run(prompt, ".", False, timeout=240)
+            data = extract_json(r.text)
+            ok = data.get("decision") in ("ADOPT", "REJECT", "NEED_HUMAN")
+            results.append((ok, time.time() - t0, (r.tokens or {}).get("total", 0), data))
+            print(f"  시도 {i + 1}: {'유효' if ok else '형식 이상'} · {time.time() - t0:.1f}초 · 토큰 {(r.tokens or {}).get('total', '?')} · "
+                  f"{data.get('decision')} (확신 {data.get('confidence')}) {str(data.get('reason', ''))[:60]}")
+        except Exception as exc:  # report, do not crash: this is a diagnostic
+            results.append((False, time.time() - t0, 0, {}))
+            print(f"  시도 {i + 1}: 실패 · {exc}")
+    valid = sum(1 for r in results if r[0])
+    avg = sum(r[1] for r in results) / max(len(results), 1)
+    same = len({json.dumps(r[3].get("decision")) for r in results if r[0]}) <= 1
+    print(f"결과: 유효한 JSON {valid}/{rounds} · 평균 {avg:.1f}초 · 같은 질문에 같은 결정 {'예' if same else '아니오 (불안정)'}")
+    print("첫 시도는 모델을 메모리에 올리느라 느릴 수 있습니다. 결정이 불안정하거나 형식 이상이 있으면 더 큰 모델이나 다수결이 필요합니다.")
+    return 0 if valid == rounds else 1
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -366,6 +420,12 @@ def build_parser() -> argparse.ArgumentParser:
     ini.add_argument("--path", help="where to write it (default: ./solomon.toml)")
     ini.add_argument("--force", action="store_true")
     ini.set_defaults(func=_init)
+
+    ol = sub.add_parser("ollama", help="check the local Ollama connection (reachable? model installed? valid JSON? how fast?)")
+    ol.add_argument("--model", help="model to test (default: [ollama] model, qwen3:8b)")
+    ol.add_argument("--rounds", type=int, default=3, help="how many times to ask the same question")
+    ol.add_argument("--config", help="path to solomon.toml")
+    ol.set_defaults(func=_ollama)
 
     stt = sub.add_parser("selftest", help="check the installation end to end with fake AIs (no subscription use, no tokens)")
     stt.set_defaults(func=_selftest)

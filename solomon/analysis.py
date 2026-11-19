@@ -491,7 +491,9 @@ def run_analysis(
     if not project.is_dir():
         raise ValueError(f"project folder does not exist: {project}")
     providers = providers if providers is not None else build_providers(settings)
-    chosen = ais or [n for n in providers if getattr(providers[n], "locate", lambda: True)()]
+    from .providers import default_ais
+
+    chosen = ais or default_ais(providers)
     unknown = [a for a in chosen if a not in providers]
     if unknown:
         raise ValueError(f"unknown AI: {', '.join(unknown)} (known: {', '.join(providers)})")
