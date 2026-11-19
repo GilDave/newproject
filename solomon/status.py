@@ -22,8 +22,8 @@ def _base(role: str) -> str:
     return role.rstrip("23") if role[:-1] in ("planner", "builder", "reviewer") else role
 
 
-_STAGE_BY_ROLE_START = {"planner": "계획", "builder": "구현", "reviewer": "검수"}
-_STAGE_BY_ROLE_END = {"planner": "계획 완료", "builder": "범위 검사와 테스트", "reviewer": "판정"}
+_STAGE_BY_ROLE_START = {"planner": "계획", "builder": "구현", "reviewer": "검수", "arbiter": "결정"}
+_STAGE_BY_ROLE_END = {"planner": "계획 완료", "builder": "범위 검사와 테스트", "reviewer": "판정", "arbiter": "결정 완료"}
 
 
 @dataclass
@@ -106,7 +106,7 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.timeline.append(f"{clock}  시작")
         elif kind == "attempt_start":
             run.attempts = int(ev.get("attempt", run.attempts + 1))
-            attempt = {"attempt": run.attempts, "builder": None, "changes": [], "violations": [], "verify": None, "review": None}
+            attempt = {"attempt": run.attempts, "builder": None, "changes": [], "violations": [], "verify": None, "review": None, "arbiter": None}
             run.attempt_details.append(attempt)
             run.timeline.append(f"{clock}  시도 {run.attempts}")
         elif kind == "call_start":
@@ -115,7 +115,7 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             pending[role] = ev
             run.active = {"role": role, "provider": str(ev.get("provider")), "since": str(ev.get("ts"))}
             run.stage = _STAGE_BY_ROLE_START.get(_base(role), run.stage)
-            run.stage_key = {"planner": "plan", "builder": "build", "reviewer": "review"}.get(_base(role), run.stage_key)
+            run.stage_key = {"planner": "plan", "builder": "build", "reviewer": "review", "arbiter": "decide"}.get(_base(role), run.stage_key)
         elif kind == "call_end":
             role, provider = str(ev.get("role")), str(ev.get("provider"))
             st = _stats(run, provider)
@@ -191,6 +191,14 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.stage_key = "decide"
             run.stage = _STAGE_BY_EVENT[kind]
             run.timeline.append(f"{clock}  검수 {ev.get('verdict')}")
+        elif kind == "arbiter":
+            if attempt is not None:
+                attempt["arbiter"] = {"provider": str(ev.get("provider")), "decision": str(ev.get("decision")), "final": str(ev.get("final")),
+                                      "confidence": ev.get("confidence"), "reason": str(ev.get("reason", ""))}
+            run.stage_key = "decide"
+            run.stage = "결정"
+            run.timeline.append(f"{clock}  결정권자 {ev.get('provider')}: {ev.get('final')}"
+                                + (f" (원래 {ev.get('decision')})" if ev.get("final") != ev.get("decision") else "") + f" · 확신 {ev.get('confidence')}")
         elif kind == "order":
             run.stage_key = "plan"
             run.stage = _STAGE_BY_EVENT[kind]

@@ -76,6 +76,13 @@ pre.diff .a{color:#7ee2b0}pre.diff .d{color:#ff9aa5}pre.diff .h{color:#8fb4ff}
 @media (max-width:1100px){.sd{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .fixbar{border:1px solid #2f74e6;background:#0b1a30;border-radius:12px;padding:12px 14px;margin:10px 0}.fixbar .hl{font-size:15px}
 #vreport a{color:var(--gemini)}
+.arbbox{border:1px dashed #6a54c8;background:#140f2a;border-radius:11px;padding:8px 10px 10px;margin-bottom:8px}
+.arbbox .ah{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;margin-bottom:6px}.arbbox .ah b{font-size:13px;color:#d9ccff;white-space:nowrap}.arbbox .ah small{color:var(--dim);font-size:11px}
+.arbarrow{text-align:center;color:#8b78e0;font-size:12px;margin:-2px 0 4px}
+.node.arbiter .orb{box-shadow:0 0 0 3px rgba(139,120,224,.35),0 0 28px rgba(139,120,224,.45)}.node.arbiter .who{color:#d9ccff}
+.edge.arb{stroke:#7b5cd6;stroke-width:1.2;stroke-dasharray:2 5}.edge.arb.hot{stroke:#b69cff;stroke-width:1.8}
+.arbgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.arbgrid .kpi b{font-size:20px}
+.sd{grid-template-columns:repeat(7,minmax(0,1fr))}
 .modal{position:fixed;inset:0;background:rgba(2,6,12,.72);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:6vh 12px;overflow:auto}
 .mbox{background:var(--panel);border:1px solid #2a4166;border-radius:14px;width:min(760px,100%);padding:16px 18px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
 .mhead{display:flex;align-items:center;gap:10px;margin-bottom:10px}.mhead b{font-size:16px;flex:1}
@@ -250,6 +257,12 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
       <div id="roleBlock">
         <label>역할 배정 — 어느 AI가 무엇을 맡을까요</label>
         <div class="roles">
+          <div class="arbbox">
+            <div class="ah"><b>👑 결정권자</b><small>3개 AI 위에서 최종 채택을 결정합니다</small></div>
+            <select id="r-arbiter"></select>
+            <div class="hint">아래 계획·구현·검수와 범위·테스트가 모두 통과한 결과만 보고, <b>채택 / 반려(구현자에게 되돌림) / 사람 확인</b> 중 하나를 정합니다. 실패한 것을 통과시킬 수는 없고 더 엄격하게만 판정합니다. 로컬 Ollama가 비용 없이 맡기 좋습니다.</div>
+          </div>
+          <div class="arbarrow">▼ 아래 3개 AI의 결과가 위로 올라갑니다</div>
           <div class="rgrid">
             <span></span><small>AI 1 (담당)</small><small>AI 2</small><small>AI 3</small>
             <small>계획</small><select id="r-planner"></select><select id="r-planner2"></select><select id="r-planner3"></select>
@@ -339,6 +352,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
   <section class="kpis" id="pjKpi"></section>
   <section class="card"><h2>단계별 AI 참여 도식 — 단계마다 최대 3개 AI</h2><div id="flowDiagram"></div>
     <div class="hint">칩을 누르면 대시보드의 역할 배정으로 이동합니다. 범위 검사와 테스트는 AI의 말이 아니라 기계가 판정하고, 적용은 사람이 합니다.</div></section>
+  <section class="card" id="arbCard"><h2>👑 결정권자 성적표 — 판정을 사람의 결정과 비교</h2><div id="arbBody"></div></section>
   <section class="card"><h2>AI · 모델 성능 (모든 프로젝트 합계, 기록에서 집계)</h2><div class="aigrid" id="pjAIs"></div></section>
   <section>
     <div class="toolbar"><h2 style="margin:0">프로젝트 카드</h2><span class="spacer"></span>
@@ -400,20 +414,21 @@ const $ = (id) => document.getElementById(id);
 function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
 function clear(n){ while (n.firstChild) n.removeChild(n.firstChild); }
 
-const ALL_ROLES = ["planner","planner2","planner3","builder","builder2","builder3","reviewer","reviewer2","reviewer3"];
+const ALL_ROLES = ["planner","planner2","planner3","builder","builder2","builder3","reviewer","reviewer2","reviewer3","arbiter"];
+const isOptRole = (r) => /[23]$/.test(r) || r === "arbiter";
 const ROLE_KO = {planner:"계획", planner2:"계획 검토1", planner3:"계획 검토2", builder:"구현", builder2:"구현 보조1", builder3:"구현 보조2",
-  reviewer:"검수", reviewer2:"2차 검수", reviewer3:"3차 검수", analysis:"분석"};
+  reviewer:"검수", reviewer2:"2차 검수", reviewer3:"3차 검수", arbiter:"결정권자", analysis:"분석"};
 const roleBase = (r) => r.replace(/[23]$/, "");
 function collectRoles(){
   const roles = {};
-  ALL_ROLES.forEach(r => { const v = $("r-" + r).value; if (v || !/[23]$/.test(r)) roles[r] = v; });
+  ALL_ROLES.forEach(r => { const v = $("r-" + r).value; if (v || !isOptRole(r)) roles[r] = v; });
   return roles;
 }
 const ROLE_LABEL = {planner:"PLANNER · 계획", builder:"BUILDER · 구현", reviewer:"REVIEWER · 검수"};
 const ROLE_CARD = {planner:"PLANNER (계획)", builder:"BUILDER (코드 작성)", reviewer:"REVIEWER (검수)"};
 const NAMES = {claude:"Claude", codex:"Codex", antigravity:"Antigravity", gemini:"Gemini", ollama:"Ollama"};
 const COLORS = {claude:"var(--claude)", codex:"var(--codex)", antigravity:"var(--gemini)", gemini:"var(--gemini)", ollama:"#c9a0ff"};
-const STAGES = [["plan","계획"],["build","구현"],["scope","범위"],["test","테스트"],["review","검수"],["decide","판정"]];
+const STAGES = [["plan","계획"],["build","구현"],["scope","범위"],["test","테스트"],["review","검수"],["decide","결정"]];
 const STAGES_AN = [["collect","파일 수집"],["ai","AI 분석"],["verify","근거 검증"],["done","보고서"]];
 const STAGES_VID = [["collect","자막 수집"],["ai","AI 분석"],["verify","인용 검증"],["done","보고서"]];
 const STATUS_KO = {PASSED:"통과", FAILED:"실패", BLOCKED_QUOTA:"한도 소진", STOPPED:"중지됨", ERROR:"오류", DONE:"완료"};
@@ -475,7 +490,7 @@ function num(n){ return Number(n || 0).toLocaleString("ko-KR"); }
 function fillRoleSelects(cur){
   const want = (cur && cur.roles && Object.keys(cur.roles).length) ? cur.roles : state.roles;
   ALL_ROLES.forEach(role => {
-    const sel = $("r-" + role), keep = sel.value, optional = /[23]$/.test(role), base = roleBase(role);
+    const sel = $("r-" + role), keep = sel.value, optional = isOptRole(role), base = roleBase(role);
     clear(sel);
     if (optional){ const none = el("option", "", "없음"); none.value = ""; sel.appendChild(none); }
     state.providers.forEach(p => {
@@ -483,14 +498,16 @@ function fillRoleSelects(cur){
       const o = el("option", "", pname(p.name) + (p.local ? " (로컬)" : "") + (p.installed ? "" : " (미설치)") + (readOnly ? (optional ? " (자문만)" : " (구현 불가)") : ""));
       o.value = p.name; o.disabled = !p.installed || (readOnly && !optional); sel.appendChild(o);
     });
-    const target = rolesDirty && keep !== undefined && sel.dataset.touched ? keep : (want[role] || "");
+    const arbDefault = role === "arbiter" && !(cur && cur.roles && Object.keys(cur.roles).length) && (state.providers.find(p => p.name === "ollama") || {}).installed ? "ollama" : "";
+    const target = rolesDirty && keep !== undefined && sel.dataset.touched ? keep : (want[role] || arbDefault);
     if ([...sel.options].some(o => o.value === target && !o.disabled)) sel.value = target;
     else if (!optional){ const first = [...sel.options].find(o => !o.disabled); if (first) sel.value = first.value; }
     else sel.value = "";
   });
   const v = collectRoles(), hint = $("rolehint");
   const reviewers = ["reviewer", "reviewer2", "reviewer3"].map(r => v[r]).filter(Boolean);
-  if (reviewers.includes(v.builder)) hint.textContent = "⚠ 검수 AI 중에 구현 AI(" + pname(v.builder) + ")가 있습니다. 교차 검증이 되지 않으니 다르게 고르세요.";
+  if (v.arbiter && v.arbiter === v.builder) hint.textContent = "⚠ 결정권자(" + pname(v.arbiter) + ")가 구현 AI와 같습니다. 자기 코드를 스스로 채택하지 않도록 다른 AI를 고르세요.";
+  else if (reviewers.includes(v.builder)) hint.textContent = "⚠ 검수 AI 중에 구현 AI(" + pname(v.builder) + ")가 있습니다. 교차 검증이 되지 않으니 다르게 고르세요.";
   else {
     const swap = ["builder2", "builder3"].map(r => v[r]).filter(x => x && (state.providers.find(p => p.name === x) || {}).supports_write);
     const bad = swap.find(w => reviewers.every(x => x === w));
@@ -657,7 +674,15 @@ function activeCalls(cur, isAn){
 }
 function renderStage(cur, isAn){
   const roles = isAn ? {} : currentRoles(cur), actives = activeCalls(cur, isAn);
-  const provs = state.providers, pos = layout(provs.length), stage = $("stage"), edges = $("edges");
+  const provs = state.providers, stage = $("stage"), edges = $("edges");
+  const arbName = (!isAn && roles.arbiter && provs.some(p => p.name === roles.arbiter)) ? roles.arbiter : null;
+  let pos;
+  if (arbName){  // the decision-maker sits above the others; its lines run down to each of them
+    const others = provs.filter(p => p.name !== arbName), m = others.length;
+    const slots = m <= 1 ? [[50, 68]] : m === 2 ? [[26, 60], [74, 60]] : m === 3 ? [[17, 62], [50, 75], [83, 62]] : layout(m).map(([x, y]) => [x, y * 0.55 + 38]);
+    const at = {}; at[arbName] = [50, 27]; others.forEach((p, i) => at[p.name] = slots[i]);
+    pos = provs.map(p => at[p.name]);
+  } else pos = layout(provs.length);
   const names = new Set(provs.map(p => p.name));
   Object.keys(nodeEls).forEach(k => { if (!names.has(k)){ nodeEls[k].remove(); delete nodeEls[k]; } });
   provs.forEach((p, i) => {
@@ -679,15 +704,16 @@ function renderStage(cur, isAn){
       status = !p.installed ? (p.local ? "서버·모델 없음" : "설치 안 됨") : quota ? "한도 소진" : act ? ROLE_KO[act.role] + " 작업 중" : calls ? calls + "회 완료" : "대기";
       idle = !mine.length && !calls && !act;
     }
-    n.className = "node" + (act ? " active" : "") + (!p.installed ? " missing" : (idle ? " idle" : "")) + (quota ? " quota" : "");
-    n.children[1].textContent = pname(p.name); n.children[2].textContent = rolesText; n.children[3].textContent = status;
+    n.className = "node" + (act ? " active" : "") + (!p.installed ? " missing" : (idle ? " idle" : "")) + (quota ? " quota" : "") + (p.name === arbName ? " arbiter" : "");
+    n.children[1].textContent = (p.name === arbName ? "👑 " : "") + pname(p.name); n.children[2].textContent = rolesText; n.children[3].textContent = status;
   });
   while (edges.firstChild) edges.removeChild(edges.firstChild);
   for (let i = 0; i < provs.length; i++) for (let j = i + 1; j < provs.length; j++){
     const hot = actives.some(a => a.provider === provs[i].name || a.provider === provs[j].name);
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("d", "M" + pos[i][0] + " " + pos[i][1] + " L" + pos[j][0] + " " + pos[j][1]);
-    path.setAttribute("class", "edge" + (hot ? " hot" : ""));
+    const arbEdge = arbName && (provs[i].name === arbName || provs[j].name === arbName);
+    path.setAttribute("class", "edge" + (arbEdge ? " arb" : "") + (hot ? " hot" : ""));
     edges.appendChild(path);
   }
   const pool = $("pool"); clear(pool);
@@ -1219,7 +1245,7 @@ async function renderResultCard(){
   if (d === "loading") return;
   clear(box);
   box.appendChild(el("div", "hl", d.headline));
-  [["what", ["바뀐 파일", "결과"]], ["how", ["시도 횟수", "테스트", "토큰"]], ["when", ["걸린 시간"]]].forEach(([k, labels]) => {
+  [["what", ["바뀐 파일", "결과"]], ["how", ["시도 횟수", "테스트", "결정권자", "토큰"]], ["when", ["걸린 시간"]]].forEach(([k, labels]) => {
     d.sections[k].rows.filter(r => labels.includes(r[0])).forEach(([a, b]) => { const r = el("div", "kvr"); r.appendChild(el("b", "", a)); r.appendChild(el("span", "", clip(b, 160))); box.appendChild(r); });
   });
   const go = el("div", "row"), b = el("button", "good", "5W1H 자세히 · 적용 · 커밋 (관리 탭)");
@@ -1468,7 +1494,7 @@ function renderFlow(){
     const g = el("div", "sg" + (mach ? " mach" : "")); g.appendChild(el("h4", "", title));
     const chips = el("div", "chips");
     if (mach){ chips.appendChild(el("span", "chip", "🛠 기계 판정")); }
-    roles.forEach(r => { const name = v[r]; if (!name) return; const c = el("span", "chip ai", pname(name) + " · " + (r.endsWith("2") || r.endsWith("3") ? ROLE_KO[r] : "담당")); c.style.borderColor = pcolor(name); c.style.color = pcolor(name);
+    roles.forEach(r => { const name = v[r]; if (!name) return; const c = el("span", "chip ai", pname(name) + " · " + (r === "arbiter" ? "결정권자" : r.endsWith("2") || r.endsWith("3") ? ROLE_KO[r] : "담당")); c.style.borderColor = pcolor(name); c.style.color = pcolor(name);
       c.onclick = () => { setTab("dash"); const sel = $("r-" + r); sel.scrollIntoView({behavior: "smooth", block: "center"}); sel.focus(); }; chips.appendChild(c); });
     if (!mach && !roles.some(r => v[r])) chips.appendChild(el("span", "chip", "미지정"));
     g.appendChild(chips); g.appendChild(el("small", "", note)); grid.appendChild(g);
@@ -1478,9 +1504,35 @@ function renderFlow(){
   stage("③ 범위 검사", [], "실제 git diff로 지시서 범위·보호 경로·한도를 판정합니다.", true);
   stage("④ 테스트", [], "프로젝트 테스트를 실행하고 통과 뒤 한 번 더 실행합니다.", true);
   stage("⑤ 검수", ["reviewer", "reviewer2", "reviewer3"], "지정한 AI가 모두 PASS해야 통과. 구현한 AI는 자기 코드를 검수하지 않습니다.");
-  const h = el("div", "sg"); h.appendChild(el("h4", "", "⑥ 적용 (사람)")); const hc = el("div", "chips"); hc.appendChild(el("span", "chip", "👤 관리 탭에서 결정")); h.appendChild(hc);
+  stage("⑥ 결정", ["arbiter"], "3개 AI 위에서 최종 채택. 모든 게이트를 통과한 결과만 보고 채택·반려·사람 확인을 정합니다 (더 엄격하게만 판정).");
+  const h = el("div", "sg"); h.appendChild(el("h4", "", "⑦ 적용 (사람)")); const hc = el("div", "chips"); hc.appendChild(el("span", "chip", "👤 관리 탭에서 결정")); h.appendChild(hc);
   h.appendChild(el("small", "", "적용 · 테스트 · 커밋 · 되돌리기는 사람이 합니다.")); h.style.cursor = "pointer"; h.onclick = () => setTab("mg"); grid.appendChild(h);
   box.appendChild(grid);
+}
+
+function renderArbiter(){
+  const box = $("arbBody"); clear(box);
+  const sc = portfolioData.arbiter, ais = portfolioData.ais;
+  const names = Object.keys(ais).filter(n => (ais[n].roles || {}).arbiter);
+  if (!names.length){
+    box.appendChild(el("div", "hint", "아직 결정권자 기록이 없습니다. 대시보드 역할 배정의 '결정 — 결정권자'에 AI(예: Ollama)를 고르고 개선을 실행하면, 판정마다 증거와 함께 기록되고 사람이 적용·폐기한 결과와 비교해 이 성적표가 채워집니다."));
+    return;
+  }
+  const g = el("div", "arbgrid");
+  const tile = (big, small) => { const k = el("div", "kpi"); k.appendChild(el("b", "", big)); k.appendChild(el("small", "", small)); g.appendChild(k); };
+  const d = names.reduce((a, n) => { Object.keys(ais[n].decisions).forEach(k => a[k] = (a[k] || 0) + ais[n].decisions[k]); return a; }, {});
+  const tot = (d.ADOPT || 0) + (d.REJECT || 0) + (d.NEED_HUMAN || 0);
+  tile(names.map(pname).join(", "), "결정권자");
+  tile(String(tot), "판정 횟수");
+  tile((d.ADOPT || 0) + " / " + (d.REJECT || 0) + " / " + (d.NEED_HUMAN || 0), "채택 / 반려 / 사람 확인");
+  const a = sc.adopt, dec = a.accepted + a.discarded;
+  tile(dec ? Math.round(a.accepted / dec * 100) + "%" : "-", "채택한 것을 사람도 적용한 비율" + (dec ? " (" + a.accepted + "/" + dec + ")" : " (사람 결정 대기)"));
+  const nh = sc.need_human;
+  tile(nh.accepted + " / " + nh.discarded + " / " + nh.pending, "사람 확인 요청 → 적용 / 폐기 / 대기");
+  box.appendChild(g);
+  const need = Math.max(0, 30 - dec);
+  box.appendChild(el("div", "hint", dec >= 30 ? "사람 결정과 비교한 표본이 " + dec + "건입니다. 일치율이 충분히 높고 안정적일 때만 권한을 넓히세요 (예: 사람 확인 요청을 줄이는 방향)." : "사람 결정과 비교된 표본이 " + dec + "건입니다. 일치율을 믿으려면 최소 30건 정도가 필요하니 " + need + "건 더 쌓이기 전에는 권한을 넓히지 마세요."));
+  box.appendChild(el("div", "hint", "일치율이 높다고 해서 판단이 옳다는 뜻은 아닙니다 (사람이 무심코 다 적용했을 수도 있습니다). 결정권자는 계속 '더 엄격하게만' 판정하며, 실패한 테스트·범위 위반·검수 불합격은 통과시키지 못합니다."));
 }
 
 function renderAIs(){
@@ -1500,6 +1552,8 @@ function renderAIs(){
     const rv = a.reviews.pass + a.reviews.fail;
     if (rv) row("검수 불합격 지적", Math.round(a.reviews.fail / rv * 100) + "% (" + a.reviews.fail + "/" + rv + "건)");
     if (a.advice) row("구현 자문", a.advice + "회");
+    const dn = a.decisions ? a.decisions.ADOPT + a.decisions.REJECT + a.decisions.NEED_HUMAN : 0;
+    if (dn) row("결정권자 판정", a.decisions.ADOPT + " 채택 · " + a.decisions.REJECT + " 반려 · " + a.decisions.NEED_HUMAN + " 사람 확인");
     const chips = el("div", "chips");
     Object.entries(a.roles).sort((x, y) => y[1] - x[1]).forEach(([r, n]) => chips.appendChild(el("span", "chip", (ROLE_KO[r] || r) + " " + n)));
     c.appendChild(chips); box.appendChild(c);
@@ -1563,7 +1617,7 @@ function pcard(c){
 
 function renderProjects(){
   if (!portfolioData || !projectsInfo || !state) return;
-  renderKpis(); renderFlow(); renderAIs();
+  renderKpis(); renderFlow(); renderArbiter(); renderAIs();
   const cards = $("pjCards"); clear(cards);
   const list = portfolioData.projects.slice(), by = $("pjSort").value;
   const score = (c) => c.error ? 9 : (c.busy ? 5 : 0) + (c.counts.pending ? 4 : 0) + (c.counts.runs === 0 ? 1 : 0);

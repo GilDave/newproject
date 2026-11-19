@@ -185,6 +185,33 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             assert any(m["evidence"] == "quote_missing" for c in r["clusters"] for m in c["members"])  # the invented quote is caught
             assert video.title_matches("자동매매 손절 규칙", "자동매매 손절 규칙") and not video.title_matches("다른 제목", "자동매매 손절 규칙")
 
+        def arbiter():
+            repo = _repo(base, "p6")
+            st = _settings()
+            st.roles["arbiter"] = "agy"
+            st.arbiter_max_rejects = 2
+            dec = lambda d, c: json.dumps({"decision": d, "confidence": c, "reason": "selftest", "conditions": []})
+            agy = _Fake("agy", [dec("REJECT", 0.9), dec("ADOPT", 0.95)])
+            agy.supports_write = False
+            r = Orchestrator(st, {"claude": _Fake("claude", [_order(), _review(), _review()]),
+                                  "codex": _Fake("codex", [_write("src/new.py"), _write("src/new.py", "x = 2\n")]), "agy": agy}).run("add module", repo)
+            assert r.status == "PASSED" and r.attempts == 2 and r.arbiter["final"] == "ADOPT", r.summary  # a REJECT sent the work back once
+            # low confidence is downgraded to a human decision, never to a silent pass
+            agy2 = _Fake("agy", [dec("ADOPT", 0.2)])
+            agy2.supports_write = False
+            r2 = Orchestrator(st, {"claude": _Fake("claude", [_order(), _review()]), "codex": _Fake("codex", [_write("src/new.py")]), "agy": agy2}).run(
+                "add module", _repo(base, "p7"))
+            assert r2.needs_human and r2.arbiter["final"] == "NEED_HUMAN"
+            # a failed test cannot be rescued: the arbiter is not even asked
+            agy3 = _Fake("agy", [])
+            agy3.supports_write = False
+            st3 = _settings()
+            st3.roles["arbiter"] = "agy"
+            st3.max_attempts = 1
+            r3 = Orchestrator(st3, {"claude": _Fake("claude", [_order(), _review()]), "codex": _Fake("codex", [_write("src/other.py")]), "agy": agy3}).run(
+                "add module", _repo(base, "p8"))
+            assert r3.status == "FAILED" and r3.arbiter is None
+
         def local_ai():
             import threading
             from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -292,6 +319,7 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             ("신규 프로젝트 폴더 · 휴지통 · 복원 · 기존 프로젝트 삭제 거부", project_folders),
             ("폴더 편집: 이름 변경 · git 초기화(비밀 파일 제외) · 찾아보기(홈 밖 차단)", folder_tools),
             ("로컬 AI(Ollama) 연결부: 생각 블록 제거 · 정확한 토큰 · 이 컴퓨터만 허용", local_ai),
+            ("결정권자: 반려 시 재시도 · 확신 낮으면 사람 확인 · 실패한 결과는 구제 불가", arbiter),
         ):
             check(title, fn)
         subprocess.run(["git", "worktree", "prune"], cwd=base, capture_output=True)

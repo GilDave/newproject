@@ -10,6 +10,7 @@ planner  = "claude"
 builder  = "codex"
 reviewer = "claude"              # must differ from builder unless loop.allow_same_provider = true
 # reviewer2 = "antigravity"      # optional second reviewer: it must pass too (never the builder)
+# arbiter   = "ollama"           # optional decision-maker above the AIs: ADOPT / REJECT / NEED_HUMAN on results that passed every gate (never the builder)
 
 [executables]                    # only needed if a CLI is not on PATH
 # claude = "/Users/you/.local/bin/claude"
@@ -53,6 +54,9 @@ stagnation_limit    = 3          # this many identical failures in a row = resta
 max_restarts        = 2
 double_check_tests  = true       # run the tests a second time before declaring a pass
 baseline_check      = true       # run the tests on the untouched code first (a broken test setup must not burn tokens)
+arbiter_min_confidence = 0.6    # an ADOPT below this confidence becomes NEED_HUMAN
+arbiter_max_rejects    = 2      # after this many REJECTs in one run the next becomes NEED_HUMAN (it must not block forever)
+arbiter_diff_chars     = 3000   # how much of the diff the arbiter reads next to the measured evidence
 include_uncommitted = true       # work on the folder as it is on disk, uncommitted edits included (secret files excluded)
 on_quota            = "stop"     # "stop" ends the run when a subscription limit is hit; "wait" sleeps and retries
 quota_wait_sec      = 900

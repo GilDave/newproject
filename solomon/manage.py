@@ -386,7 +386,7 @@ def _check_siblings(project: Path, state_dir: str, key: str) -> None:
 STATUS_KO = {"PASSED": "통과", "FAILED": "실패", "ERROR": "오류", "BLOCKED_QUOTA": "구독 한도 소진", "STOPPED": "중지됨",
              "DONE": "완료", "PARTIAL": "일부 성공", "NOTHING": "대상 없음", "SKIPPED": "건너뜀"}
 ROLE_KO = {"planner": "계획", "planner2": "계획 검토1", "planner3": "계획 검토2", "builder": "구현", "builder2": "구현 보조1", "builder3": "구현 보조2",
-           "reviewer": "검수", "reviewer2": "2차 검수", "reviewer3": "3차 검수", "analysis": "분석"}
+           "reviewer": "검수", "reviewer2": "2차 검수", "reviewer3": "3차 검수", "arbiter": "결정권자", "analysis": "분석"}
 
 
 def _events(path: Path) -> list[dict]:
@@ -423,6 +423,16 @@ def _tests_line(events: list[dict]) -> str:
     m = re.search(r"(\d+) passed", str(last.get("output_tail", "")))
     state = "건너뜀(테스트 명령 없음)" if last.get("skipped") else ("통과" if last.get("passed") else "실패")
     return f"{state}" + (f" · {m.group(1)}개 통과" if m else "") + (f" · 명령: {last.get('command')}" if last.get("command") else "")
+
+
+def _arbiter_line(events: list[dict]) -> str:
+    arb = [e for e in events if e.get("event") == "arbiter"]
+    if not arb:
+        return ""
+    last = arb[-1]
+    ko = {"ADOPT": "채택", "REJECT": "반려", "NEED_HUMAN": "사람 확인 필요"}.get(str(last.get("final")), str(last.get("final")))
+    rej = sum(1 for e in arb if e.get("final") == "REJECT")
+    return f"{last.get('provider')}: {ko} (확신 {last.get('confidence')})" + (f" · 중간에 {rej}번 반려" if rej else "")
 
 
 def _section(title: str, rows: list, lines: Optional[list] = None) -> dict:
@@ -475,7 +485,7 @@ def _describe_run(project: Path, state_dir: str, run_id: str, marks: dict) -> di
                                              ["커밋", mark.get("sha", "")]]),
                 "why": _section("왜", [["요청 내용", short_goal(run.goal)]], [run.goal[:1500]] if run.goal != short_goal(run.goal) else []),
                 "how": _section("어떻게", [["시도 횟수", f"{run.attempts}번"], ["테스트", _tests_line(events)],
-                                           ["토큰", f"{tokens:,}" if tokens else ""]], attempts + warn + steps[-12:]),
+                                           ["결정권자", _arbiter_line(events)], ["토큰", f"{tokens:,}" if tokens else ""]], attempts + warn + steps[-12:]),
             }}
 
 
@@ -745,6 +755,12 @@ def build_process(events: list[dict]) -> dict:
                  "판정 없음(오류)" if e.get("error") else v, [str(i) for i in (e.get("issues") or [])][:10], ts)
         elif k == "review_retry" and cur is not None:
             step(cur["steps"], "검수 재요청", "warn", f"{e.get('role')}가 판정을 못 내 같은 코드로 다시 물었습니다", [_tail(e.get("reason"), 160)], ts)
+        elif k == "arbiter" and cur is not None:
+            fin, raw = str(e.get("final")), str(e.get("decision"))
+            step(cur["steps"], f"결정권자 · {e.get('provider')}", "ok" if fin == "ADOPT" else "fail" if fin == "REJECT" else "warn",
+                 {"ADOPT": "채택", "REJECT": "반려 → 구현자에게 되돌림", "NEED_HUMAN": "사람 확인 필요"}.get(fin, fin) + f" · 확신 {e.get('confidence')}",
+                 ([f"이유: {e.get('reason')}"] if e.get("reason") else []) + ([f"조정: {e.get('note')} (원래 답: {raw})"] if e.get("note") else [])
+                 + [f"조건: {c}" for c in e.get("conditions", [])] + ([f"고위험 경로: {', '.join(e['risky'])}"] if e.get("risky") else []), ts)
         elif k == "double_check" and cur is not None:
             step(cur["steps"], "테스트 재확인", "ok" if e.get("passed") else "fail",
                  "한 번 더 실행해도 통과" if e.get("passed") else "다시 실행하니 실패 (불안정한 테스트)", ts=ts)
@@ -796,6 +812,9 @@ def build_assessment(process: dict, status: str, files: list, added: int, remove
         same = [j for j in judged if j == final_builder]
         add("작성자와 검수자", "warn" if same else "ok",
             "작성한 AI가 직접 검수했습니다 (독립성 낮음)" if same else f"구현 {final_builder} ≠ 검수 " + ", ".join(judged or ["?"]) + " (서로 다른 AI)")
+    arb = [x for x in last if x["name"].startswith("결정권자 ·")]
+    if arb:
+        add(arb[-1]["name"].replace("결정권자 · ", "결정권자 (") + ")", arb[-1]["status"], arb[-1]["text"])
     size = f"파일 {len(files)}개 · +{added} −{removed}줄"
     add("변경 규모", "warn" if len(files) > 8 or added + removed > 400 else "ok", size + (" — 큰 변경이니 내용을 꼼꼼히 보세요" if len(files) > 8 or added + removed > 400 else ""))
     if overlap:

@@ -12,8 +12,10 @@ ROLES = ("planner", "builder", "reviewer")
 #   plan   : the lead drafts the ORDER, the others critique it (read-only; they can add criteria, never widen the scope)
 #   build  : the lead builds; other write-capable AIs take over when an attempt fails or stalls; read-only ones advise
 #   review : every reviewer must say PASS (a reviewer is skipped for an attempt its own AI built)
-EXTRA_ROLES = ("planner2", "planner3", "builder2", "builder3", "reviewer2", "reviewer3")
-ALL_ROLES = ("planner", "planner2", "planner3", "builder", "builder2", "builder3", "reviewer", "reviewer2", "reviewer3")
+#   decide : the ARBITER sits above the three AIs. It sees only measured evidence of a result that already passed scope, tests and
+#            review, and answers ADOPT / REJECT / NEED_HUMAN. It can only be stricter than the gates, never overrule a failure.
+EXTRA_ROLES = ("planner2", "planner3", "builder2", "builder3", "reviewer2", "reviewer3", "arbiter")
+ALL_ROLES = ("planner", "planner2", "planner3", "builder", "builder2", "builder3", "reviewer", "reviewer2", "reviewer3", "arbiter")
 
 
 class ConfigError(ValueError):
@@ -48,6 +50,9 @@ class Settings:
     max_restarts: int = 2  # clean restarts allowed before giving up as "no progress"
     double_check_tests: bool = True  # run the tests a second time before declaring a pass (catches flaky passes)
     include_uncommitted: bool = True  # work on the folder as it is on disk (uncommitted edits included), not only on HEAD
+    arbiter_min_confidence: float = 0.6  # an ADOPT below this confidence becomes NEED_HUMAN
+    arbiter_max_rejects: int = 2  # after this many REJECTs in one run the next one becomes NEED_HUMAN (a local model must not block forever)
+    arbiter_diff_chars: int = 3000  # how much of the diff the arbiter reads next to the measured evidence
     baseline_check: bool = True  # run the tests on the untouched code first: a broken test setup must not burn tokens
     on_quota: str = "stop"  # "stop" ends the run; "wait" sleeps and retries the same call
     quota_wait_sec: float = 900.0
@@ -77,9 +82,11 @@ class Settings:
         unknown = [r for r in self.roles if r not in ALL_ROLES]
         if unknown:
             raise ConfigError(f"unknown role(s) in [roles]: {', '.join(unknown)} (valid: {', '.join(ALL_ROLES)})")
-        for r in ("reviewer2", "reviewer3"):
+        for r in ("reviewer2", "reviewer3", "arbiter"):
             if self.roles.get(r) and self.roles[r] == self.roles.get("builder") and not self.allow_same_provider:
                 raise ConfigError(f"roles.{r} must not be the builder")
+        if not (0.0 <= self.arbiter_min_confidence <= 1.0) or self.arbiter_max_rejects < 0 or self.arbiter_diff_chars < 0:
+            raise ConfigError("loop.arbiter_min_confidence must be 0..1, arbiter_max_rejects and arbiter_diff_chars >= 0")
         if not (2048 <= self.ollama_num_ctx <= 262144):
             raise ConfigError("ollama.num_ctx must be between 2048 and 262144")
         from urllib.parse import urlparse
@@ -133,6 +140,9 @@ def load_settings(path: Optional[str | Path] = None) -> Settings:
     s.max_restarts = int(loop.get("max_restarts", s.max_restarts))
     s.double_check_tests = bool(loop.get("double_check_tests", s.double_check_tests))
     s.baseline_check = bool(loop.get("baseline_check", s.baseline_check))
+    s.arbiter_min_confidence = float(loop.get("arbiter_min_confidence", s.arbiter_min_confidence))
+    s.arbiter_max_rejects = int(loop.get("arbiter_max_rejects", s.arbiter_max_rejects))
+    s.arbiter_diff_chars = int(loop.get("arbiter_diff_chars", s.arbiter_diff_chars))
     s.include_uncommitted = bool(loop.get("include_uncommitted", s.include_uncommitted))
     s.on_quota = str(loop.get("on_quota", s.on_quota))
     s.quota_wait_sec = float(loop.get("quota_wait_sec", s.quota_wait_sec))

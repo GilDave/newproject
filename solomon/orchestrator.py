@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import context, gitops, prompts, scope_guard
+from . import arbiter as arbiter_mod, context, gitops, prompts, scope_guard
 from .jsonutil import extract_json
 from .providers import Provider, ProviderError, ProviderResult, QuotaExhausted, build_providers
 from .runlog import RunLog
@@ -49,6 +49,8 @@ class RunResult:
     commit: Optional[str] = None  # set when an on_pass hook committed the result
     reduced_independence: bool = False
     warnings: list[str] = field(default_factory=list)
+    arbiter: Optional[dict] = None  # the decision-maker's answer on the accepted result (decision, final, confidence, reason)
+    needs_human: bool = False  # the arbiter asked a person to look before this is applied
 
 
 class Orchestrator:
@@ -218,6 +220,7 @@ class Orchestrator:
         The second one is only asked about code the first already accepted (time is money)."""
         agg = ReviewResult("PASS", [], "")
         builder_name = builder_name or self.s.roles["builder"]
+        self._last_reviews = []
         roles = [r for r in ("reviewer", "reviewer2", "reviewer3") if self.s.roles.get(r)]
         if not self.s.allow_same_provider:
             skipped = [r for r in roles if self.s.roles[r] == builder_name]
@@ -230,6 +233,7 @@ class Orchestrator:
             who = self.s.roles[role]
             one = self._review_role(role, order, wt, verification, warnings, log, attempt)
             log.event("review_role", role=role, provider=who, verdict=one.verdict, error=one.error, issues=one.issues)
+            self._last_reviews.append({"role": role, "provider": who, "verdict": one.verdict, "issues": list(one.issues)})
             if one.error:
                 return ReviewResult("FAIL", [f"[{who}] {i}" for i in one.issues], error=True)
             if not agg.summary:
@@ -297,6 +301,41 @@ class Orchestrator:
         (run_dir / "result.json").write_text(json.dumps(asdict(result), indent=2, ensure_ascii=False), encoding="utf-8")
         return result
 
+    def _arbitrate(self, order: Order, wt: Path, changes: list, verification: VerifyResult, double_passed: Optional[bool],
+                   history: list[str], attempt: int, builder_name: str, rejects: int, log: RunLog) -> Optional[arbiter_mod.Decision]:
+        """The arbiter's answer on a result that passed every gate, or None when no arbiter is configured."""
+        name = self.s.roles.get("arbiter")
+        if not name:
+            return None
+        risky = arbiter_mod.risk_paths([c.path for c in changes])
+        if name == builder_name and not self.s.allow_same_provider:
+            log.event("arbiter_skipped_self", provider=name, attempt=attempt)
+            dec = arbiter_mod.unavailable(f"{name}가 이번 시도의 구현자라 스스로 결정하지 않습니다")
+        else:
+            evidence = arbiter_mod.build_evidence(order, attempt, changes, verification, double_passed, getattr(self, "_last_reviews", []),
+                                                  history, gitops.full_diff(wt), self.s.arbiter_diff_chars)
+            prompt = arbiter_mod.prompt(evidence)
+            dec = None
+            err = ""
+            for retry in range(1 + REVIEW_RETRIES):
+                try:
+                    res = self._call("arbiter", prompt, wt, False, log)
+                except (BlockedByQuota, ProviderError) as exc:
+                    err = str(exc)
+                    break  # the arbiter is down: do not hammer it, hand the decision to a person
+                try:
+                    dec = arbiter_mod.parse(res.text)
+                    break
+                except ValueError as exc:
+                    err = f"형식 오류: {exc}"
+                    log.event("arbiter_retry", attempt=attempt, retry=retry + 1, reason=str(exc)[:160])
+            if dec is None:
+                dec = arbiter_mod.unavailable(err or "응답 없음")
+            else:
+                dec = arbiter_mod.apply_policy(dec, self.s.arbiter_min_confidence, rejects, self.s.arbiter_max_rejects, risky)
+        log.event("arbiter", attempt=attempt, provider=name, **dec.to_dict(), risky=risky)
+        return dec
+
     def _budget_stop(self, attempt: int, started: float) -> Optional[str]:
         s = self.s
         if s.max_attempts and attempt > s.max_attempts:
@@ -325,6 +364,7 @@ class Orchestrator:
         restarts = 0
         writers, advisors = self._builders()
         rot = consec = 0  # which write-capable builder is on duty; consecutive failed attempts
+        arb_rejects = 0  # how often the arbiter sent work back in this run
         advice: Optional[str] = None
         advise_next = True
 
@@ -431,19 +471,33 @@ class Orchestrator:
             log.event("review", verdict=review.verdict, issues=review.issues)
 
             double_failed = False
+            double_passed: Optional[bool] = None
             if verification.passed and review.verdict == "PASS" and s.double_check_tests and not verification.skipped:
                 again = verify(s, wt)  # double check: a pass that does not repeat is not a pass
                 gitops.clean_untracked(wt)
                 log.event("double_check", passed=again.passed, exit_code=again.exit_code, output_tail=again.output_tail[-800:])
                 double_failed = not again.passed
+                double_passed = again.passed
 
+            decision = None
             if verification.passed and review.verdict == "PASS" and not double_failed:
+                # every gate is green: only now is the arbiter asked, and it can only be stricter
+                decision = self._arbitrate(order, wt, changes, verification, double_passed, history, attempt, bname, arb_rejects, log)
+                if decision and decision.final == "REJECT":
+                    arb_rejects += 1
+
+            if verification.passed and review.verdict == "PASS" and not double_failed and not (decision and decision.final == "REJECT"):
                 patch = run_dir / "result.patch"
                 patch.write_text(gitops.full_diff(wt, binary=True), encoding="utf-8")
                 if getattr(self, "_on_pass", None):
                     result.commit = self._on_pass(wt, result)
                 result.status, result.patch_path = "PASSED", str(patch)
                 result.summary = review.summary or "passed scope check, tests and independent review"
+                if decision:
+                    result.arbiter = decision.to_dict()
+                    if decision.final == "NEED_HUMAN":
+                        result.needs_human = True
+                        result.warnings.append(f"ARBITER_NEEDS_HUMAN: {decision.note or decision.reason}")
                 if verification.skipped:
                     result.warnings.append("no test command configured: passed without automatic tests")
                 return
@@ -455,8 +509,11 @@ class Orchestrator:
                 problems.append(f"Tests failed (exit {verification.exit_code}):\n{verification.output_tail[-1500:]}")
             if review.verdict != "PASS":
                 problems.append("Reviewer issues:\n- " + "\n- ".join(review.issues or ["(none given)"]))
+            if decision and decision.final == "REJECT":
+                problems.append("The decision-maker (arbiter) REJECTED this result although tests and reviewers passed. Its reasons: " + decision.reason
+                                + ("; conditions: " + "; ".join(decision.conditions) if decision.conditions else ""))
             (run_dir / "last_attempt.patch").write_text(gitops.full_diff(wt, binary=True), encoding="utf-8")
-            summary = "last attempt rejected: " + ("tests failed" if not verification.passed else "tests not repeatable" if double_failed else "review FAIL")
+            summary = "last attempt rejected: " + ("tests failed" if not verification.passed else "tests not repeatable" if double_failed else "review FAIL" if review.verdict != "PASS" else "arbiter REJECT")
             if (why := failed(problems, summary)):
                 result.status, result.summary = "FAILED", why
                 return

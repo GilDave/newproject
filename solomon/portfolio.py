@@ -36,7 +36,8 @@ def _ts(value: object) -> Optional[float]:
 
 def _ai(table: dict, name: str) -> dict:
     return table.setdefault(name, {"calls": 0, "failures": 0, "sec": 0.0, "tokens": 0, "roles": {},
-                                   "reviews": {"pass": 0, "fail": 0}, "builds": {"attempts": 0, "passed": 0}, "plans": 0, "advice": 0})
+                                   "reviews": {"pass": 0, "fail": 0}, "builds": {"attempts": 0, "passed": 0}, "plans": 0, "advice": 0,
+                                   "decisions": {"ADOPT": 0, "REJECT": 0, "NEED_HUMAN": 0}})
 
 
 def run_facts(events: list[dict], ais: dict) -> dict:
@@ -46,6 +47,7 @@ def run_facts(events: list[dict], ais: dict) -> dict:
     wrote: dict[str, bool] = {}
     cur = 0
     last_builder = ""
+    arb_final = ""
     for e in events:
         k = e.get("event")
         if k == "run_start":
@@ -74,11 +76,16 @@ def run_facts(events: list[dict], ais: dict) -> dict:
             _ai(ais, last_builder)["builds"]["attempts"] += 1
         elif k == "review_role" and not e.get("error"):
             _ai(ais, str(e.get("provider")))["reviews"]["pass" if e.get("verdict") == "PASS" else "fail"] += 1
+        elif k == "arbiter":
+            fin = str(e.get("final"))
+            if fin in ("ADOPT", "REJECT", "NEED_HUMAN"):
+                _ai(ais, str(e.get("provider")))["decisions"][fin] += 1
+                arb_final = fin
         elif k == "run_end":
             status, attempts, ended = str(e.get("status")), int(e.get("attempts") or cur), _ts(e.get("ts"))
     if status == "PASSED" and builders.get(attempts):
         _ai(ais, builders[attempts])["builds"]["passed"] += 1
-    return {"status": status, "attempts": attempts, "goal": goal, "started": started,
+    return {"arbiter_final": arb_final, "status": status, "attempts": attempts, "goal": goal, "started": started,
             "minutes": (ended - started) / 60 if started and ended else None}
 
 
@@ -165,6 +172,14 @@ def card(project: Path, state_dir: str, *, is_git: bool, managed: bool, test_com
                 batches.append({"id": d.name, "status": b.get("status"), "fixed": sum(1 for i in b.get("items", []) if i.get("status") == "PASSED")})
 
     marks = manage._load_marks(Path(project), state_dir) if root.is_dir() else {}
+    # the arbiter's scorecard: what it decided on results that reached a person, against what the person then did
+    score = {"adopt": {"accepted": 0, "discarded": 0, "pending": 0}, "need_human": {"accepted": 0, "discarded": 0, "pending": 0}}
+    for r in runs:
+        if r["status"] != "PASSED" or r.get("arbiter_final") not in ("ADOPT", "NEED_HUMAN"):
+            continue
+        st = manage._state_of(f"run:{r['id']}", marks, (root / "runs" / r["id"] / "applied.json").is_file())
+        bucket = "accepted" if st in ("applied", "committed") else "discarded" if st == "discarded" else "pending"
+        score["adopt" if r["arbiter_final"] == "ADOPT" else "need_human"][bucket] += 1
     pending = manage.list_inbox(Path(project), state_dir)["pending"] if root.is_dir() and is_git else 0
     committed = sum(1 for v in marks.values() if v.get("state") == "committed")
     last = max(_newest(root / "runs"), _newest(root / "analyses"), _newest(root / "batches")) if root.is_dir() else 0.0
@@ -197,7 +212,7 @@ def card(project: Path, state_dir: str, *, is_git: bool, managed: bool, test_com
         "tokens": sum(a["tokens"] for a in ais.values()),
         "recent": [r["status"] for r in runs[-14:]],
         "last_run": ({"id": runs[-1]["id"], "status": runs[-1]["status"], "goal": manage.short_goal(runs[-1]["goal"])[:90]} if runs else None),
-        "last_analysis": last_an, "batches": batches[-3:], "ais": ais,
+        "last_analysis": last_an, "batches": batches[-3:], "ais": ais, "arbiter": score,
         "last_activity": time.strftime("%Y-%m-%d %H:%M", time.localtime(last)) if last else "",
         "branch": branch, "dirty": dirty, "is_git": is_git, "managed": managed, "test_command": test_command, "busy": busy, "next": nxt,
     }
@@ -216,6 +231,8 @@ def merge_ais(cards: list[dict]) -> dict:
                 t["reviews"][k] += a["reviews"][k]
             for k in ("attempts", "passed"):
                 t["builds"][k] += a["builds"][k]
+            for k, v in a["decisions"].items():
+                t["decisions"][k] += v
     for a in total.values():
         a["avg_sec"] = round(a["sec"] / a["calls"], 1) if a["calls"] else None
     return total

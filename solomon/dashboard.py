@@ -177,7 +177,12 @@ class DashboardApp:
             c.update(path=path, name=Path(path).name, alias=self._projects[path].get("alias", ""), memo=self._projects[path].get("memo", ""))
             cards.append(c)
         ok = [c for c in cards if "error" not in c]
-        data = {"projects": cards, "ais": portfolio.merge_ais(ok), "roles": self.settings.roles,
+        sc = {"adopt": {"accepted": 0, "discarded": 0, "pending": 0}, "need_human": {"accepted": 0, "discarded": 0, "pending": 0}}
+        for c in ok:
+            for kind in sc:
+                for b in sc[kind]:
+                    sc[kind][b] += c["arbiter"][kind][b]
+        data = {"projects": cards, "ais": portfolio.merge_ais(ok), "roles": self.settings.roles, "arbiter": sc,
                 "totals": {"projects": len(cards), "busy": sum(1 for c in ok if c["busy"]), "pending": sum(c["counts"]["pending"] for c in ok),
                            "runs": sum(c["counts"]["runs"] for c in ok), "passed": sum(c["counts"]["passed"] for c in ok),
                            "tokens": sum(c["tokens"] for c in ok)}}
@@ -582,6 +587,8 @@ class DashboardApp:
             raise ApiError(400, f"{effective['builder']}은(는) 구현을 맡을 수 없습니다 (계획·검수만 가능). 구현은 다른 AI로 고르세요.")
         if effective["builder"] == effective["reviewer"] and not self.settings.allow_same_provider:
             raise ApiError(400, "구현과 검수는 서로 다른 AI여야 합니다 (같은 AI가 자기 코드를 검수하면 교차 검증이 되지 않습니다).")
+        if effective.get("arbiter") and effective["arbiter"] == effective["builder"] and not self.settings.allow_same_provider:
+            raise ApiError(400, "결정권자는 구현 AI와 달라야 합니다 (자기 코드를 스스로 채택하지 않도록).")
         reviewers = [effective[r] for r in ("reviewer", "reviewer2", "reviewer3") if effective.get(r)]
         if effective["builder"] in reviewers and not self.settings.allow_same_provider:
             raise ApiError(400, "검수 AI는 구현 AI와 달라야 합니다 (1차·2차·3차 모두).")
