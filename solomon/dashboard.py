@@ -143,6 +143,7 @@ class DashboardApp:
             if key not in self._projects:
                 self._projects[key] = {}
                 self._save_store()
+        self._portfolio_cache = None  # a project added now must show up on the board immediately
         return key
 
     # ------------------------------------------------------- project folders
@@ -189,6 +190,13 @@ class DashboardApp:
             return folders.browse(path, set(self._projects))
         except projects_mod.ProjectError as exc:
             raise ApiError(exc.status, exc.message) from exc
+
+    def make_folder(self, parent: str, name: str) -> dict:
+        try:
+            target = folders.make_folder(parent, name)
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        return {"ok": True, "path": str(target), "message": f"새 폴더를 만들었습니다: {target.name}"}
 
     def _fresh(self, project: Optional[str] = None) -> None:
         self._portfolio_cache = None
@@ -968,6 +976,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                                                    str(body.get("action", "")), str(body.get("message", ""))))
                 if path == "/api/projects/create":
                     return self._json(200, app.create_project(body))
+                if path == "/api/folders/mkdir":
+                    return self._json(200, app.make_folder(str(body.get("parent", "")), str(body.get("name", ""))))
                 if path == "/api/projects/meta":
                     return self._json(200, app.project_meta(str(body.get("path", "")), str(body.get("alias", "")), str(body.get("memo", ""))))
                 if path == "/api/projects/rename":

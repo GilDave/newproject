@@ -15,7 +15,7 @@ GUIDE = ROOT / "solomon" / "USER_GUIDE.md"
 
 def test_version_is_one_number_everywhere():
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    assert meta["project"]["version"] == __version__ == "1.3.0"
+    assert meta["project"]["version"] == __version__ == "1.3.1"
     assert "USER_GUIDE.md" in meta["tool"]["setuptools"]["package-data"]["solomon"]
     assert "solomon.example.toml" in meta["tool"]["setuptools"]["package-data"]["solomon"]
 
@@ -63,7 +63,7 @@ def test_every_dashboard_label_the_guide_quotes_is_really_on_the_page():
     page = (ROOT / "solomon" / "dashboard.html").read_text()
     for label in ["개선 · 코드 수정", "분석 · 읽기 전용", "신규 프로젝트", "끈질기게 시도", "프로젝트 설정: 테스트 명령", "▶ 실행", "■ 중지",
                   "밤샘 자동 수정", "▶ 폴더 만들고 시작", "작업 폴더 테스트 실행", "사용 가이드", "목록에서 제거", "폴더 삭제 (휴지통)",
-                  "한 번에 순서대로 자동 수정", "같은 파일은 한 번에 묶어서", "+ 기존 폴더 추가", "찾아보기", "도구 · 설정", "환경 점검", "대시보드 재시작", "git 초기화", "이름 바꾸기", "별명·메모 저장", "Solomon 업데이트", "yt-dlp 설치·업데이트", "영상 분석", "유튜브 영상 주소", "AI별 영상 직접 시청 시험", "자막을 직접 붙여넣기", "이 아이디어로 개선 시작", "영상 분석 결과", "단계별 AI 참여 도식", "AI · 모델 성능", "+ 신규 프로젝트", "주의 필요한 순", "프로젝트 카드", "AI 1 (담당)", "최근 활동 순", "관리 탭에서 5W1H",
+                  "한 번에 순서대로 자동 수정", "같은 파일은 한 번에 묶어서", "+ 기존 폴더 추가", "＋ 새 폴더 만들기", "찾아보기", "도구 · 설정", "환경 점검", "대시보드 재시작", "git 초기화", "이름 바꾸기", "별명·메모 저장", "Solomon 업데이트", "yt-dlp 설치·업데이트", "영상 분석", "유튜브 영상 주소", "AI별 영상 직접 시청 시험", "자막을 직접 붙여넣기", "이 아이디어로 개선 시작", "영상 분석 결과", "단계별 AI 참여 도식", "AI · 모델 성능", "+ 신규 프로젝트", "주의 필요한 순", "프로젝트 카드", "AI 1 (담당)", "최근 활동 순", "관리 탭에서 5W1H",
                   "복원", "커밋 취소", "되돌리기", "폐기", "변경 보기", "적용 판단", "단계별 진행 과정", "최대 수정 개수", "최소 심각도", "제한 시간"]:
         assert label in page, label
 
@@ -153,8 +153,8 @@ def test_numbered_steps_keep_their_numbers_in_the_rendered_guide():
 
 
 def test_print_version_of_the_guide_has_cover_and_contents():
-    html = mdhtml.print_page(GUIDE.read_text(), "1.3.0", "2026-01-01")
-    assert 'class="cover"' in html and "버전 1.3.0" in html and 'class="toc"' in html
+    html = mdhtml.print_page(GUIDE.read_text(), "1.3.1", "2026-01-01")
+    assert 'class="cover"' in html and "버전 1.3.1" in html and 'class="toc"' in html
     assert html.count('<h1') == 1  # the cover's title only; the guide's own h1 is dropped
     assert "@page" in html and "<script" not in html.lower()
 

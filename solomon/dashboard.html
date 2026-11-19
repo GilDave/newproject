@@ -1316,6 +1316,15 @@ async function openBrowser(title, onPick, start){
     clear(body);
     let d; try { d = await api("/api/browse" + (path ? "?path=" + encodeURIComponent(path) : "")); } catch (e) { body.appendChild(el("div", "ev bad", e.message)); return; }
     const cr = el("div", "crumbs"); d.crumbs.forEach((c, i) => { const b = el("button", "", c.name); b.onclick = () => load(c.path); cr.appendChild(b); if (i < d.crumbs.length - 1) cr.appendChild(el("span", "", "›")); }); body.appendChild(cr);
+    const mk = el("div", "row"); mk.style.margin = "0 0 8px"; mk.style.flexWrap = "nowrap";
+    const nameIn = el("input"); nameIn.type = "text"; nameIn.placeholder = "새 폴더 이름 (예: my-bot)"; nameIn.maxLength = 80;
+    const mkBtn = el("button", "", "＋ 새 폴더 만들기");
+    const make = async () => {
+      const name = nameIn.value.trim(); if (!name) return toast("새 폴더 이름을 입력하세요.", true);
+      try { const r = await api("/api/folders/mkdir", {parent: d.path, name}); toast(r.message); load(r.path); } catch (e) { toast(e.message, true); }
+    };
+    mkBtn.onclick = make; nameIn.addEventListener("keydown", (ev) => { if (ev.key === "Enter") make(); });
+    mk.appendChild(nameIn); mk.appendChild(mkBtn); body.appendChild(mk);
     const pick = el("div", "row"); pick.style.margin = "0 0 8px";
     const sel = el("button", "primary", "이 폴더 선택: " + d.path.split("/").pop()); sel.onclick = () => { closeModal(); onPick(d.path); }; pick.appendChild(sel);
     if (d.parent !== undefined && d.parent){ const up = el("button", "", "↑ 위로"); up.onclick = () => load(d.parent); pick.appendChild(up); }
@@ -1331,7 +1340,7 @@ async function openBrowser(title, onPick, start){
     });
     body.appendChild(list);
     if (d.truncated) body.appendChild(el("div", "hint", "폴더가 많아 일부만 표시했습니다."));
-    body.appendChild(el("div", "hint", "홈 폴더 안의 폴더만 보입니다 (숨김 폴더 제외). 폴더 이름을 누르면 안으로 들어갑니다."));
+    body.appendChild(el("div", "hint", "홈 폴더 안의 폴더만 보입니다 (숨김 폴더 제외). 폴더 이름을 누르면 안으로 들어갑니다. 새 폴더를 만들면 그 폴더 안으로 들어가니 '이 폴더 선택'을 누르세요."));
   };
   load(start || "");
 }

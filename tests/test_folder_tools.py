@@ -259,3 +259,36 @@ def test_update_script_refuses_a_folder_that_is_not_a_git_checkout(tmp_path):
     (tmp_path / "scripts" / "update.sh").write_text((root / "scripts" / "update.sh").read_text())
     res = subprocess.run(["bash", str(tmp_path / "scripts" / "update.sh")], capture_output=True, text=True, env=dict(os.environ, HOME=str(tmp_path)))
     assert res.returncode == 1 and "git으로 받은 것이 아니라" in res.stdout
+
+
+# ------------------------------------------------------------------ make a new folder from the browser
+def test_make_a_new_folder_inside_home_and_pick_it(env):
+    st, body, _ = post(env, "/api/folders/mkdir", {"parent": str(env.home), "name": "새 프로젝트 폴더"})
+    assert st == 200 and Path(body["path"]).is_dir() and Path(body["path"]).name == "새 프로젝트 폴더" and list(Path(body["path"]).iterdir()) == []
+    assert "새 프로젝트 폴더" in [d["name"] for d in get(env, "/api/browse")[1]["dirs"]]
+    assert post(env, "/api/project", {"path": body["path"]})[0] == 200  # and it can be added as a project right away
+
+
+@pytest.mark.parametrize("name,code", [("", 400), ("   ", 400), (".hidden", 400), ("a/b", 400), ("a\\b", 400), ("..", 400), ("x" * 81, 400), ("name.", 400),
+                                       ("line\nbreak", 400), ("proj", 409)])
+def test_new_folder_names_are_validated(env, name, code):
+    assert post(env, "/api/folders/mkdir", {"parent": str(env.home), "name": name})[0] == code
+
+
+@pytest.mark.parametrize("parent", ["/etc", "/tmp", "{home}/..", "{home}/nothing-here", ""])
+def test_new_folders_only_inside_home(env, parent):
+    st, _, _ = post(env, "/api/folders/mkdir", {"parent": parent.format(home=env.home), "name": "x-new"})
+    assert st == 403
+    assert not Path("/etc/x-new").exists() and not (env.home.parent / "x-new").exists()
+
+
+def test_new_folder_needs_the_token(env):
+    assert env.call("POST", "/api/folders/mkdir", {"parent": str(env.home), "name": "x"}, token=None)[0] == 401
+
+
+def test_a_project_added_now_is_on_the_board_immediately(env):
+    get(env, "/api/portfolio")  # fills the short-lived cache
+    d = env.home / "just-added"
+    d.mkdir()
+    post(env, "/api/project", {"path": str(d)})
+    assert str(d) in [c["path"] for c in get(env, "/api/portfolio")[1]["projects"]]

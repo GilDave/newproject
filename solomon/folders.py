@@ -75,6 +75,32 @@ def browse(path: Optional[str], registered: set[str]) -> dict:
             "git": (base / ".git").exists(), "registered": str(base) in registered, "writable": os.access(base, os.W_OK)}
 
 
+# ------------------------------------------------------------------ make a plain new folder (from the folder browser)
+FOLDER_NAME = re.compile(r"^[^/\\\x00-\x1f.][^/\\\x00-\x1f]{0,79}$")
+
+
+def make_folder(parent: str, name: str) -> Path:
+    """A new empty folder inside `parent` (which must be inside the home folder). Only creates; never overwrites."""
+    base = Path(parent or "").expanduser()
+    try:
+        base = base.resolve()
+    except OSError as exc:
+        raise ProjectError(400, f"폴더를 열 수 없습니다: {exc}") from exc
+    if not within_home(base) or not base.is_dir():
+        raise ProjectError(403, "홈 폴더 안의 폴더에서만 새 폴더를 만들 수 있습니다.")
+    name = (name or "").strip()
+    if not FOLDER_NAME.match(name) or name in (".", "..") or name.endswith("."):
+        raise ProjectError(400, "폴더 이름에는 / \\ 를 쓸 수 없고, 점(.)으로 시작할 수 없으며, 80자 이하여야 합니다.")
+    target = base / name
+    if target.exists():
+        raise ProjectError(409, f"같은 이름이 이미 있습니다: {name}")
+    try:
+        target.mkdir()
+    except OSError as exc:
+        raise ProjectError(403, f"폴더를 만들 수 없습니다 (쓰기 권한 확인): {exc.strerror or exc}") from exc
+    return target
+
+
 # ------------------------------------------------------------------ rename (only folders Solomon made)
 def rename_project(path: Path, root: Path, new_name: str) -> Path:
     path = Path(path).resolve()
