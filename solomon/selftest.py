@@ -8,13 +8,14 @@ apply / commit / undo / discard / restore results, and create / trash / restore 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Callable
 
-from . import gitops, manage, portfolio, projects, video
+from . import folders, gitops, manage, portfolio, projects, video
 from .orchestrator import Orchestrator
 from .providers.base import Provider, ProviderResult
 from .settings import Settings
@@ -184,6 +185,41 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             assert any(m["evidence"] == "quote_missing" for c in r["clusters"] for m in c["members"])  # the invented quote is caught
             assert video.title_matches("자동매매 손절 규칙", "자동매매 손절 규칙") and not video.title_matches("다른 제목", "자동매매 손절 규칙")
 
+        def folder_tools():
+            old_home = os.environ.get("HOME")
+            os.environ["HOME"] = str(base)  # browsing is limited to the home folder: use the throw-away one
+            try:
+                root = base / "root2"
+                made = projects.create_project(root, "rename-me", "python", "x")
+                renamed = folders.rename_project(Path(made["path"]), root, "renamed-ok")
+                assert renamed.is_dir() and not Path(made["path"]).exists()
+                plain = base / "plain-folder"
+                plain.mkdir()
+                (plain / "a.py").write_text("x = 1\n")
+                (plain / ".env").write_text("SECRET=1\n")
+                folders.git_init(plain)
+                tracked = gitops.git(["ls-files"], plain).stdout.split()
+                assert "a.py" in tracked and ".env" not in tracked, tracked  # secrets are never committed
+                listing = folders.browse(str(base), set())
+                assert "plain-folder" in [d["name"] for d in listing["dirs"]]
+                try:
+                    folders.browse("/etc", set())
+                except projects.ProjectError:
+                    pass
+                else:
+                    raise AssertionError("홈 폴더 밖을 볼 수 있습니다")
+                try:
+                    folders.rename_project(_repo(base, "not-mine"), root, "x-new")
+                except projects.ProjectError:
+                    pass
+                else:
+                    raise AssertionError("Solomon이 만들지 않은 폴더의 이름이 바뀌었습니다")
+            finally:
+                if old_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = old_home
+
         def project_folders():
             root = base / "root"
             made = projects.create_project(root, "demo-app", "python", "demo")
@@ -212,6 +248,7 @@ def run_selftest(out: Callable[[str], None] = print) -> int:
             ("단계마다 AI 최대 3개 (계획 검토 · 구현 교대·자문 · 3중 검수) + 프로젝트 카드 집계", three_ais_per_stage),
             ("영상 분석: 자막 인용 검증 · AI 간 교차 확인 · 제목으로 직접 시청 판별", video_analysis),
             ("신규 프로젝트 폴더 · 휴지통 · 복원 · 기존 프로젝트 삭제 거부", project_folders),
+            ("폴더 편집: 이름 변경 · git 초기화(비밀 파일 제외) · 찾아보기(홈 밖 차단)", folder_tools),
         ):
             check(title, fn)
         subprocess.run(["git", "worktree", "prune"], cwd=base, capture_output=True)

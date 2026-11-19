@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analysis as analysis_mod, autofix as autofix_mod, gitops, manage, portfolio, projects as projects_mod, video as video_mod
+from . import __version__, analysis as analysis_mod, autofix as autofix_mod, folders, gitops, manage, portfolio, projects as projects_mod, video as video_mod
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
 from .status import load_runs
@@ -52,8 +52,11 @@ class ApiError(Exception):
 def _default_launcher(args: list[str], log_path: Path) -> subprocess.Popen:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = open(log_path, "w", encoding="utf-8")
+    env = os.environ.copy()  # jobs must find this very copy of solomon even when it was started from a checkout without pip install
+    pkg_parent = str(Path(__file__).resolve().parent.parent)
+    env["PYTHONPATH"] = pkg_parent + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     popen = subprocess.Popen(
-        args, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True
+        args, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True, env=env
     )
     keep_awake(popen.pid)
     return popen
@@ -91,6 +94,7 @@ class DashboardApp:
         self._providers_cache: tuple[float, list[dict]] = (0.0, [])
         self._git_cache: dict[str, tuple[float, bool]] = {}
         self._portfolio_cache: Optional[tuple[float, dict]] = None
+        self.boot = f"{time.time():.3f}"  # changes when the dashboard restarts, so an open page knows to reload itself
         self._load_store()
         for p in list(projects or []) + ([settings.project_path] if settings.project_path else []):
             try:
@@ -149,7 +153,8 @@ class DashboardApp:
         rows = []
         for path in sorted(self._projects):
             cmd, source = self.effective_test_command(path)
-            rows.append({"path": path, "name": Path(path).name, "managed": projects_mod.is_managed(Path(path), self.projects_root()),
+            rows.append({"path": path, "name": Path(path).name, "alias": self._projects[path].get("alias", ""), "memo": self._projects[path].get("memo", ""),
+                         "managed": projects_mod.is_managed(Path(path), self.projects_root()),
                          "git": self.is_git(path), "test_command": " ".join(cmd) if cmd else "", "busy": self._busy_here(path)})
         return {"projects": rows, "trash": projects_mod.list_trash(self.trash_dir), "root": str(self.projects_root()),
                 "stacks": {k: v["label"] for k, v in projects_mod.STACKS.items()}}
@@ -168,7 +173,7 @@ class DashboardApp:
                                    test_command=" ".join(cmd) if cmd else "", busy=self._busy_here(path))
             except Exception as exc:  # one broken project folder must not blank the whole board
                 c = {"error": f"{type(exc).__name__}: {exc}", "counts": {}, "ais": {}, "recent": [], "next": {"label": "", "action": ""}}
-            c.update(path=path, name=Path(path).name)
+            c.update(path=path, name=Path(path).name, alias=self._projects[path].get("alias", ""), memo=self._projects[path].get("memo", ""))
             cards.append(c)
         ok = [c for c in cards if "error" not in c]
         data = {"projects": cards, "ais": portfolio.merge_ais(ok), "roles": self.settings.roles,
@@ -177,6 +182,144 @@ class DashboardApp:
                            "tokens": sum(c["tokens"] for c in ok)}}
         self._portfolio_cache = (now, data)
         return data
+
+    # ------------------------------------------------------- folder tools (no terminal needed)
+    def browse(self, path: Optional[str]) -> dict:
+        try:
+            return folders.browse(path, set(self._projects))
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+
+    def _fresh(self, project: Optional[str] = None) -> None:
+        self._portfolio_cache = None
+        self._git_cache.clear()
+
+    def project_meta(self, path: str, alias: str, memo: str) -> dict:
+        path = self._known(path)
+        alias, memo = (alias or "").strip(), (memo or "").strip()
+        if len(alias) > 40 or len(memo) > 500:
+            raise ApiError(400, "별명은 40자, 메모는 500자 이하로 입력하세요.")
+        with self._lock:
+            cfg = self._projects[path]
+            for key, val in (("alias", alias), ("memo", memo)):
+                if val:
+                    cfg[key] = val
+                else:
+                    cfg.pop(key, None)
+            self._save_store()
+        self._fresh()
+        return {"ok": True, "message": "저장했습니다. (폴더와 파일은 바뀌지 않습니다)"}
+
+    def rename_project(self, path: str, name: str) -> dict:
+        path = self._known(path)
+        if self._busy_here(path):
+            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝난 뒤 바꾸세요.")
+        try:
+            target = folders.rename_project(Path(path), self.projects_root(), name)
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        with self._lock:
+            self._projects[str(target)] = self._projects.pop(path)
+            self._save_store()
+        self._fresh()
+        return {"ok": True, "project": str(target), "message": f"폴더 이름을 바꿨습니다: {target.name}"}
+
+    def git_init_preview(self, path: str) -> dict:
+        path = self._known(path)
+        try:
+            return folders.git_init_preview(Path(path))
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+
+    def git_init(self, path: str) -> dict:
+        path = self._known(path)
+        if self._busy_here(path):
+            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다.")
+        try:
+            res = folders.git_init(Path(path))
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        except gitops.GitError as exc:
+            raise ApiError(500, f"git 초기화에 실패했습니다: {exc}") from exc
+        self._fresh()
+        return {"ok": True, "message": f"git 저장소를 만들고 파일 {res['files']}개를 첫 커밋으로 기록했습니다. 이제 개선·밤샘 수정을 쓸 수 있습니다."}
+
+    def open_path(self, path: str) -> dict:
+        try:
+            target = Path(path or "").expanduser().resolve()
+        except OSError as exc:
+            raise ApiError(400, "경로를 해석할 수 없습니다.") from exc
+        ok = False
+        for proj in self._projects:
+            try:
+                target.relative_to(Path(proj).resolve())
+                ok = True
+                break
+            except ValueError:
+                continue
+        if not ok:
+            raise ApiError(403, "등록된 프로젝트 안의 경로만 열 수 있습니다.")
+        if not target.exists():
+            raise ApiError(404, "경로가 없습니다.")
+        try:
+            folders.open_path(target)
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        return {"ok": True, "message": "열었습니다."}
+
+    # ------------------------------------------------------- tools: checks, installs, update, restart
+    def source_root(self) -> Optional[Path]:
+        root = Path(__file__).resolve().parent.parent
+        return root if (root / ".git").exists() and (root / "scripts" / "update.sh").is_file() else None
+
+    def started_by_script(self) -> bool:
+        pid_file = Path(os.environ.get("SOLOMON_HOME", str(Path.home() / ".solomon"))) / "dashboard.pid"
+        try:
+            return pid_file.read_text().strip() == str(os.getpid())
+        except OSError:
+            return False
+
+    def tools_status(self) -> dict:
+        from .env import resolve_cli
+        import platform
+        return {"version": __version__, "python": platform.python_version(), "git": folders.git_identity(), "ytdlp": resolve_cli("yt-dlp") or "",
+                "can_update": self.source_root() is not None, "can_restart": self.source_root() is not None and self.started_by_script(),
+                "can_open": folders.open_command() is not None, "projects_root": str(self.projects_root())}
+
+    def set_git_identity(self, name: str, email: str) -> dict:
+        try:
+            ident = folders.set_git_identity(name, email)
+        except projects_mod.ProjectError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        except gitops.GitError as exc:
+            raise ApiError(500, str(exc)) from exc
+        return {"ok": True, "git": ident, "message": "git 사용자 정보를 저장했습니다. 이제 대시보드에서 커밋할 수 있습니다."}
+
+    def run_tool(self, tool: str) -> dict:
+        py = [sys.executable, "-m"]
+        cfg = ["--config", self.config_path] if self.config_path else []
+        if tool == "doctor":
+            return self._spawn("tool", py + ["solomon", "doctor"] + cfg, None, "환경 점검")
+        if tool == "selftest":
+            return self._spawn("tool", py + ["solomon", "selftest"], None, "자체 점검 (가짜 AI)")
+        if tool == "install-ytdlp":
+            return self._spawn("tool", py + ["pip", "install", "--upgrade", "yt-dlp"], None, "yt-dlp 설치 (영상 자막 수집용)")
+        if tool == "update":
+            root = self.source_root()
+            if not root:
+                raise ApiError(501, "git으로 받은 폴더에서 시작한 경우에만 자동 업데이트할 수 있습니다.")
+            return self._spawn("tool", ["bash", str(root / "scripts" / "update.sh")], None, "Solomon 업데이트 (git pull)")
+        raise ApiError(400, "알 수 없는 도구입니다.")
+
+    def restart(self) -> dict:
+        root = self.source_root()
+        if not root or not self.started_by_script():
+            raise ApiError(501, "scripts/start.sh 로 시작한 대시보드만 이 화면에서 재시작할 수 있습니다.")
+        if self.job and self.job["popen"].poll() is None:
+            raise ApiError(409, "작업이 진행 중입니다. 끝나거나 중지한 뒤 재시작하세요 (재시작하면 진행 상황 연결이 끊깁니다).")
+        subprocess.Popen(["bash", str(root / "scripts" / "restart.sh")], start_new_session=True, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        return {"ok": True, "message": "재시작합니다. 몇 초 뒤 자동으로 다시 연결됩니다."}
 
     def create_project(self, body: dict) -> dict:
         self._portfolio_cache = None
@@ -289,7 +432,7 @@ class DashboardApp:
                 "goal": job["goal"], "exit_code": code, "started": job["started"], "kind": job.get("kind", "run")}
         if code is not None:
             try:
-                info["log_tail"] = Path(job["log_path"]).read_text(encoding="utf-8", errors="replace")[-1500:]
+                info["log_tail"] = Path(job["log_path"]).read_text(encoding="utf-8", errors="replace")[-(6000 if job.get("kind") == "tool" else 1500):]
             except OSError:
                 info["log_tail"] = ""
         return info
@@ -300,7 +443,7 @@ class DashboardApp:
             project = projects[0] if projects else None
         job = self.job_info()
         state: dict = {
-            "version": __version__, "projects": projects, "project": project, "roles": self.settings.roles,
+            "version": __version__, "boot": self.boot, "projects": projects, "project": project, "roles": self.settings.roles,
             "providers": self.providers_info(), "job": job, "runs": [], "current": None,
             "apply": {"possible": False, "applied": False}, "analyses": [], "analysis": None, "batches": [],
             "videos": [], "video": None, "video_capability": video_mod.load_capability(),
@@ -664,7 +807,7 @@ class DashboardApp:
         with self._lock:
             if self.job and self.job["popen"].poll() is None:
                 raise ApiError(409, "이미 실행 중인 작업이 있습니다. 끝나거나 중지한 뒤 다시 시도하세요.")
-            log_path = Path(project) / self.settings.state_dir / "dashboard.log"
+            log_path = (Path(project) / self.settings.state_dir / "dashboard.log") if project else self.store_path.parent / "tool.log"
             try:
                 popen = self._launcher(args, log_path)
             except OSError as exc:
@@ -752,6 +895,17 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 state = app.build_state((query.get("project") or [None])[0], (query.get("run") or [None])[0],
                                         (query.get("analysis") or [None])[0], (query.get("video") or [None])[0])
                 return self._json(200, state)
+            if url.path in ("/api/browse", "/api/tools", "/api/projects/git-init-preview"):
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    if url.path == "/api/browse":
+                        return self._json(200, app.browse((query.get("path") or [""])[0] or None))
+                    if url.path == "/api/tools":
+                        return self._json(200, app.tools_status())
+                    return self._json(200, app.git_init_preview((query.get("path") or [""])[0]))
+                except ApiError as exc:
+                    return self._json(exc.status, {"error": exc.message})
             if url.path == "/api/portfolio":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -814,6 +968,20 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                                                    str(body.get("action", "")), str(body.get("message", ""))))
                 if path == "/api/projects/create":
                     return self._json(200, app.create_project(body))
+                if path == "/api/projects/meta":
+                    return self._json(200, app.project_meta(str(body.get("path", "")), str(body.get("alias", "")), str(body.get("memo", ""))))
+                if path == "/api/projects/rename":
+                    return self._json(200, app.rename_project(str(body.get("path", "")), str(body.get("name", ""))))
+                if path == "/api/projects/git-init":
+                    return self._json(200, app.git_init(str(body.get("path", ""))))
+                if path == "/api/open":
+                    return self._json(200, app.open_path(str(body.get("path", ""))))
+                if path == "/api/tools/run":
+                    return self._json(200, {"job": app.run_tool(str(body.get("tool", "")))})
+                if path == "/api/tools/git-identity":
+                    return self._json(200, app.set_git_identity(str(body.get("name", "")), str(body.get("email", ""))))
+                if path == "/api/tools/restart":
+                    return self._json(200, app.restart())
                 if path == "/api/projects/remove":
                     return self._json(200, app.remove_project(str(body.get("path", ""))))
                 if path == "/api/projects/delete":
@@ -843,6 +1011,25 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
     return Handler
 
 
+def _persistent_token() -> str:
+    """The same access key across restarts (so the open browser tab reconnects by itself after 'restart'). Stored 0600 beside the other state."""
+    path = Path(os.environ.get("SOLOMON_HOME", str(Path.home() / ".solomon"))) / "dashboard.token"
+    try:
+        tok = path.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{24,}", tok):
+            return tok
+    except OSError:
+        pass
+    tok = secrets.token_urlsafe(24)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(tok, encoding="utf-8")
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return tok
+
+
 def serve(
     settings: Settings,
     projects: list[str],
@@ -850,7 +1037,7 @@ def serve(
     port: int = 8765,
     open_browser: bool = True,
 ) -> int:
-    token = secrets.token_urlsafe(24)
+    token = _persistent_token()
     app = DashboardApp(settings, projects, config_path)
     server = None
     for candidate in range(port, port + 10):
