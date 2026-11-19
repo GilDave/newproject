@@ -443,7 +443,7 @@ def render_report(result: AnalysisResult) -> str:
         f"# 프로젝트 분석 보고서", "",
         f"- 프로젝트: `{result.project}`",
         f"- 분석 요청: {result.focus or '전반 분석'}",
-        f"- 참여 AI: " + ", ".join(f"{a}({'완료' if v.get('ok') else '실패'})" for a, v in result.ais.items()),
+        f"- 참여 AI: " + ", ".join(f"{a}({'완료' if v.get('ok') else '건너뜀' if v.get('state') == 'skipped' else '실패'})" for a, v in result.ais.items()),
         f"- 분석한 파일: {cov.get('included', 0)}개 / 전체 {cov.get('total', 0)}개 (제외 {cov.get('excluded', 0)}개)"
         + {"git": " · git 저장소", "folder": " · 일반 폴더(git 아님)", "folder-truncated": " · 일반 폴더, 파일이 너무 많아 일부만 확인"}.get(cov.get("source", ""), ""),
         f"- 비밀 의심 값 {cov.get('redactions', 0)}개를 AI에게 보내기 전에 가렸습니다.", "",
@@ -534,6 +534,10 @@ def run_analysis(
 
     def ask(name: str) -> dict:
         provider = providers[name]
+        ctx = getattr(provider, "num_ctx", None)
+        if ctx and estimate_tokens(prompt) > ctx * 0.9:  # a local model silently cuts what does not fit: do not ask, say so
+            return {"ok": False, "state": "skipped", "error": f"입력(약 {estimate_tokens(prompt):,} 토큰)이 로컬 모델의 문맥 길이({ctx:,})보다 길어 건너뜁니다. "
+                                                            "로컬 모델은 짧은 판정용(결정권자)이며 전체 분석에는 쓰지 않습니다."}
         log.event("ai_start", provider=name, prompt_chars=len(prompt))
         started = time.time()
         feedback = ""
@@ -604,8 +608,9 @@ def run_analysis(
         }
     result.clusters = [_cluster_dict(c, i) for i, c in enumerate(cluster_findings(all_findings), 1)]
     ok = [n for n in chosen if outcomes[n]["ok"]]
+    asked = [n for n in chosen if outcomes[n].get("state") != "skipped"]
     result.status = "DONE" if ok else "FAILED"
-    result.summary = (f"{len(ok)}/{len(chosen)}개 AI가 분석을 마쳤고, 발견 {len(result.clusters)}건을 정리했습니다."
+    result.summary = (f"{len(ok)}/{len(asked)}개 AI가 분석을 마쳤고, 발견 {len(result.clusters)}건을 정리했습니다."
                       if ok else "모든 AI의 분석이 실패했습니다.")
     log.event("analysis_end", status=result.status, summary=result.summary, clusters=len(result.clusters))
     _write(result, adir)
@@ -679,12 +684,12 @@ def analysis_view(events: list[dict], result: Optional[dict] = None, analysis_id
             view["calls"].append({"at": clock, "role": "analysis", "provider": p, "sec": sec, "tokens": total or None,
                                   "turns": None, "estimated": bool(tokens.get("estimated")), "ok": ok,
                                   "error": str(ev.get("error") or "")[:140]})
-            view["providers"][p] = {"calls": 1, "failures": 0 if ok else 1, "cli_sec": sec, "tokens": total, "cache_read": 0,
+            view["providers"][p] = {"calls": 1, "failures": 0 if ok or state == "skipped" else 1, "cli_sec": sec, "tokens": total, "cache_read": 0,
                                     "estimated_calls": 1 if tokens.get("estimated") else 0}
             if state == "quota":
                 view["quota_providers"].append(p)
             view["timeline"].append(f"{clock}  {p} " + (f"분석 완료 · {sec:.0f}초 · 발견 {ev.get('findings', 0)}건 (근거 확인 {ev.get('verified', 0)})"
-                                                     if ok else f"실패 · {str(ev.get('error') or '')[:70]}"))
+                                                     if ok else f"건너뜀 · {str(ev.get('error') or '')[:70]}" if state == "skipped" else f"실패 · {str(ev.get('error') or '')[:70]}"))
         elif kind == "verify_start":
             view["stage_key"], view["stage"] = "verify", "근거 검증과 취합"
             view["timeline"].append(f"{clock}  근거 검증과 취합")

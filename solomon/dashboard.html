@@ -803,7 +803,7 @@ function renderStage(cur, isAn){
     if (isAn){
       const a = cur && cur.ais ? cur.ais[p.name] : null;
       rolesText = a ? "분석 참여" : "참여 안 함";
-      status = !p.installed ? (p.local ? "서버·모델 없음" : "설치 안 됨") : !a ? "대기" : act ? "분석 중" : a.state === "done" ? "완료 · 발견 " + (a.findings || 0) + "건" : a.state === "quota" ? "한도 소진" : a.state === "failed" ? "실패" : "대기";
+      status = !p.installed ? (p.local ? "서버·모델 없음" : "설치 안 됨") : !a ? "대기" : act ? "분석 중" : a.state === "done" ? "완료 · 발견 " + (a.findings || 0) + "건" : a.state === "quota" ? "한도 소진" : a.state === "skipped" ? "건너뜀(입력 김)" : a.state === "failed" ? "실패" : "대기";
       idle = !a;
     } else {
       const mine = ALL_ROLES.filter(r => roles[r] === p.name);
@@ -897,7 +897,7 @@ function renderReport(cur){
   Object.keys(cur.ais).forEach(n => {
     const a = cur.ais[n], c = el("span", "chip" + (a.state === "failed" || a.state === "quota" ? " bad" : ""));
     c.appendChild(el("b", "", pname(n)));
-    c.appendChild(document.createTextNode(a.state === "done" ? " · 발견 " + (a.findings || 0) + "건 · 근거 확인 " + (a.verified || 0) : a.state === "running" ? " · 분석 중…" : a.state === "waiting" ? " · 대기" : a.state === "quota" ? " · 한도 소진" : " · 실패"));
+    c.appendChild(document.createTextNode(a.state === "done" ? " · 발견 " + (a.findings || 0) + "건 · 근거 확인 " + (a.verified || 0) : a.state === "running" ? " · 분석 중…" : a.state === "waiting" ? " · 대기" : a.state === "quota" ? " · 한도 소진" : a.state === "skipped" ? " · 건너뜀(입력이 길어 로컬 모델 제외)" : " · 실패"));
     if (a.error) c.title = a.error;
     st.appendChild(c);
   });
@@ -1395,7 +1395,7 @@ function renderVideoReport(cur){
   const st = el("div", "aistat");
   Object.keys(cur.ais).forEach(n => {
     const a = cur.ais[n], c = el("span", "chip" + (a.state === "failed" || a.state === "quota" ? " bad" : "")); c.appendChild(el("b", "", pname(n)));
-    c.appendChild(document.createTextNode(a.state === "done" ? " · 항목 " + (a.findings || 0) + "개 · 근거 확인 " + (a.verified || 0) : a.state === "running" ? " · 분석 중…" : a.state === "waiting" ? " · 대기" : a.state === "quota" ? " · 한도 소진" : " · 실패"));
+    c.appendChild(document.createTextNode(a.state === "done" ? " · 항목 " + (a.findings || 0) + "개 · 근거 확인 " + (a.verified || 0) : a.state === "running" ? " · 분석 중…" : a.state === "waiting" ? " · 대기" : a.state === "quota" ? " · 한도 소진" : a.state === "skipped" ? " · 건너뜀(입력이 길어 로컬 모델 제외)" : " · 실패"));
     if (a.error) c.title = a.error; st.appendChild(c);
   });
   box.appendChild(st);

@@ -226,3 +226,20 @@ def test_the_dashboard_tool_button_runs_the_connection_test(tmp_path):
         assert sleeper.calls[-1][3:] == ["ollama"] or "ollama" in sleeper.calls[-1]
     finally:
         e.close()
+
+
+def test_analysis_skips_the_local_model_when_the_input_cannot_fit_instead_of_failing(tmp_path, fake):
+    from solomon.analysis import run_analysis
+    from helpers import make_repo, ScriptedProvider
+    repo = make_repo(tmp_path)
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "big.py").write_text("x = 1  # " + "filler " * 4000 + "\n")
+    import subprocess
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "big"], cwd=repo, check=True)
+    small = prov(fake)
+    small.num_ctx = 2048
+    ok = ScriptedProvider("claude", [json.dumps({"summary": "s", "architecture": [], "questions": [], "findings": []})])
+    r = run_analysis(Settings(), repo, providers={"claude": ok, "ollama": small}, ais=["claude", "ollama"])
+    assert r.ais["ollama"]["state"] == "skipped" and not r.ais["ollama"]["ok"] and "건너뜁니다" in r.ais["ollama"]["error"]
+    assert r.ais["claude"]["ok"] and r.status == "DONE" and "1/1" in r.summary and not fake.requests
