@@ -181,7 +181,7 @@ def fig_bot():
     f.box("legacy", 20, 310, 170, 78, "옛 3분 엔진 (engine.py)\nsignals → llm_filter → risk\n→ exchange(Paper/Live)\n`run` 명령으로만 실행", "io")
     f.box("mon", 500, 310, 240, 78, "모니터링 (읽기 전용)\ndashboard.py + scores.py 카드\nreport.py 한 줄 요약 · notify.py 텔레그램", "io")
     f.box("val", 20, 420, 440, 64, "검증 도구: backtest.py(워크포워드) · sim.py(체결 시뮬레이터) · trend-compare\n테스트: tests/ 11개 파일 (test_trend_engine 373줄 · test_exchange_engine 300줄 …)", "gate")
-    f.box("note", 500, 420, 240, 64, "확인 필요: news.apply 값 · mode 값\n(둘 다 config.json의 값이라 키 이름만 확인됨)", "bad")
+    f.box("note", 500, 420, 240, 64, "확인됨: mode=paper · live_enabled=False\nnews.apply=False (뉴스 점수는 기록만)", "ok")
     f.arrow("cfg", "te"); f.arrow("main", "te"); f.arrow("te", "trend"); f.arrow("te", "mult"); f.arrow("news", "mult"); f.arrow("te", "broker")
     f.arrow("broker", "risk", dash=True); f.arrow("te", "db", dash=True, via=[(470, 130), (470, 190)] if False else None)
     f.arrow("te", "learn", dash=True)

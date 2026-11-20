@@ -183,6 +183,7 @@
 
 - 프로젝트 설명: "Bybit ENAUSDT 선물 자동매매 봇 (**페이퍼/테스트넷 우선**)".
 - 지금 서비스로 도는 `trend-run`은 "추세추종 **페이퍼** 엔진: 4시간 봉이 닫힐 때마다 목표 포지션을 계산해 **가상 계좌**를 리밸런싱한다"고 되어 있습니다. 주문이 거래소로 나가지 않는 연구·검증용 실행입니다. (이전에 제가 "실계좌"라고 부른 것은 틀렸습니다.)
+- **config.json 확인됨**: `mode = paper`, `live_enabled = False`, `news = {enabled: True, apply: False}`. 즉 지금은 가상 계좌만 쓰고, 실거래는 꺼져 있으며, **뉴스 위험 점수는 계산·기록만 하고 노출에는 반영하지 않습니다**(그림자).
 - 실거래 경로는 별도로 있습니다: `LiveBroker`, `config.json`의 `live_enabled`, `run --i-understand-live-trading`. 이 경로는 AI가 건드리면 안 됩니다.
 
 ### 13-2. 추세 엔진 한 사이클 (4시간마다)
@@ -231,7 +232,7 @@
 
 ### 13-7. 아직 확인이 필요한 것
 
-1. `news.apply`와 `mode` 값 (config.json의 값은 키 이름만 확인됨)
+1. (확인 완료) `mode = paper`, `live_enabled = False`, `news.apply = False`
 2. `target_positions`의 구체 파라미터와 `learn2.verdict` 기준
 3. `trend_engine`·`learn2`의 테스트가 무엇을 검사하는지 (`tests/test_trend_engine.py` 373줄)
 
