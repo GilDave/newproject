@@ -164,3 +164,39 @@ def test_shadow_mode_does_not_spend_a_call_on_every_failed_attempt(tmp_path):
     r = Orchestrator(s, ps, sleep=lambda x: None).run("add module", repo)
     assert r.status == "FAILED" and r.attempts == 6
     assert len([e for e in events(r) if e["event"] == "arbiter_shadow"]) == 2  # two samples of failures, not six
+
+
+def test_waiting_events_are_listed_with_when_they_can_be_scored(tmp_path):
+    t0 = 1_787_000_000_000
+    prices = [100.0 + i * 0.1 for i in range(60)]
+    rows = [(t0, "ml2_pred", json.dumps({"ts": t0, "p": 0.6, "dir": 1.0})),
+            (t0 + 100 * 180_000, "ml2_pred", json.dumps({"ts": t0 + 100 * 180_000, "p": 0.5, "dir": -1.0})),  # beyond the prices
+            (t0 + 120 * 180_000, "news_score", json.dumps({"ts": t0 + 120 * 180_000, "risk": 0.7}))]
+    db = bot_db(tmp_path, rows)
+    now = t0 + 130 * 180_000
+    out = shadow.evaluate_bot_signals(db, candles(tmp_path, prices), horizon_bars=20, now_ms=now)
+    w = out["waiting_items"]
+    assert [x["kind"] for x in w] == ["ml2_pred", "news_score"] and out["waiting_for_price"] == 2
+    assert w[0]["ready_ms"] == t0 + 120 * 180_000 and w[1]["ready_ms"] == t0 + 140 * 180_000
+    assert w[0]["hours_left"] == 0.0 and w[1]["hours_left"] == round(10 * 180_000 / 3_600_000, 1)  # already coverable vs 30 minutes from now
+
+
+def test_spearman_handles_ties_signs_and_too_little_data():
+    r, ci = shadow.spearman([1, 2, 3, 4, 5, 6], [10, 20, 30, 40, 50, 60])
+    assert r > 0.99 and ci is not None
+    assert shadow.spearman([1, 2, 3, 4, 5], [5, 4, 3, 2, 1])[0] < -0.99
+    r2, _ = shadow.spearman([1, 1, 2, 2, 3, 3], [1, 2, 1, 2, 1, 2])
+    assert abs(r2) < 0.5
+    assert shadow.spearman([1, 1, 1], [1, 2, 3]) is None and shadow.spearman([1, 2], [1, 2]) is None
+    assert shadow.spearman([1, 2, 3], [1, 2, 3])[1] is None  # an interval needs more than three points
+
+
+def test_news_score_is_judged_on_all_scored_events_not_only_the_rare_high_ones(tmp_path):
+    t0 = 1_787_000_000_000
+    prices = [100.0 - i * (0.02 if i % 7 else 0.2) for i in range(700)]
+    rows = [(t0 + i * 180_000, "news_score", json.dumps({"ts": t0 + i * 180_000, "risk": 0.05 + (i % 9) * 0.045})) for i in range(0, 40)]
+    db = bot_db(tmp_path, rows)
+    out = shadow.evaluate_bot_signals(db, candles(tmp_path, prices), horizon_bars=30)
+    c = out["news"]["corr"]
+    assert c["n"] == 40 and c["enough"] is True and c["rho"] is not None and c["ci"] is not None
+    assert out["news"]["enough"] is True and out["news"]["high_risk"]["n"] == 0  # no score reached 0.5, yet the judgement is possible

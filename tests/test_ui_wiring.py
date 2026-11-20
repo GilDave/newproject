@@ -110,3 +110,8 @@ def test_sections_a_person_opened_or_closed_stay_that_way_across_the_automatic_r
     assert "d.open = i === arr.length - 1" not in HTML and "d1.open = true" not in HTML
     # only a real click on the summary counts as the person's choice, so the redraw itself can never overwrite it
     assert 'sm.addEventListener("click"' in HTML
+
+
+def test_the_bot_tab_has_a_short_waiting_list_and_the_whole_news_correlation():
+    for needle in ("채점 대기 중 (누르면 목록)", "data-w", "waiting_items", "목록 펼치기", "위험 점수 ↔ 이후 24시간 낙폭 크기의 상관", "뉴스 점수 채점 건수"):
+        assert needle in HTML, needle

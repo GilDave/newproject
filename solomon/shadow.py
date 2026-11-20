@@ -15,6 +15,7 @@ import csv
 import json
 import math
 import sqlite3
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional
@@ -33,6 +34,38 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     c = (p + z * z / (2 * n)) / d
     h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
     return max(0.0, c - h), min(1.0, c + h)
+
+
+def _ranks(xs: list[float]) -> list[float]:
+    order = sorted(range(len(xs)), key=lambda i: xs[i])
+    ranks = [0.0] * len(xs)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and xs[order[j + 1]] == xs[order[i]]:
+            j += 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = (i + j) / 2 + 1  # ties share the average rank
+        i = j + 1
+    return ranks
+
+
+def spearman(xs: list[float], ys: list[float]) -> Optional[tuple[float, Optional[tuple[float, float]]]]:
+    """Rank correlation of two lists (None when it cannot be computed) with a 95% interval from Fisher's z (needs n > 3)."""
+    n = len(xs)
+    if n < 3 or len(set(xs)) < 2 or len(set(ys)) < 2:
+        return None
+    rx, ry = _ranks(xs), _ranks(ys)
+    mx, my = sum(rx) / n, sum(ry) / n
+    cov = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    den = math.sqrt(sum((a - mx) ** 2 for a in rx) * sum((b - my) ** 2 for b in ry))
+    if den == 0:
+        return None
+    r = max(-0.999999, min(0.999999, cov / den))
+    if n <= 3:
+        return r, None
+    z, se = math.atanh(r), 1 / math.sqrt(n - 3)
+    return r, (math.tanh(z - 1.96 * se), math.tanh(z + 1.96 * se))
 
 
 def _vote_pattern(votes: list[dict]) -> str:
@@ -219,7 +252,7 @@ def evaluate_bot_filter(db: Path, candles_csv: Optional[Path] = None, bars: int 
             "caveat": "종가 기준 근사 결과입니다(봇의 실제 청산 규칙·체결가가 아님). 표본이 %d건 미만인 칸은 결론이 아닙니다." % MIN_SAMPLES}
 
 
-def evaluate_bot_signals(db: Path, candles_csv: Optional[Path], horizon_bars: int = 480) -> dict:
+def evaluate_bot_signals(db: Path, candles_csv: Optional[Path], horizon_bars: int = 480, now_ms: Optional[int] = None) -> dict:
     """Score the trend bot's own shadow signals against what the price then did (read-only).
 
     ml2_pred  : direction `dir` (+1/-1) with probability `p` that the trend is right after `horizon_bars` (480 x 3 min = 24 h).
@@ -233,7 +266,8 @@ def evaluate_bot_signals(db: Path, candles_csv: Optional[Path], horizon_bars: in
         con.close()
     candles = _load_candles(Path(candles_csv)) if candles_csv else []
     last_ts = candles[-1][0] if candles else 0
-    ml, news, waiting = [], [], 0
+    ml, news, waiting, waiting_items = [], [], 0, []
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     for ts, kind, raw in rows:
         try:
             d = json.loads(raw)
@@ -243,6 +277,8 @@ def evaluate_bot_signals(db: Path, candles_csv: Optional[Path], horizon_bars: in
         r = _forward_return(candles, t, "long", horizon_bars) if candles else None
         if r is None:
             waiting += 1
+            ready = t + horizon_bars * 180_000  # the prices must reach this far before the event can be scored
+            waiting_items.append({"kind": kind, "ts_ms": t, "ready_ms": ready, "hours_left": round(max(0.0, (ready - now_ms) / 3_600_000), 1)})
             continue
         if kind == "ml2_pred" and d.get("dir") not in (None, 0, 0.0) and d.get("p") is not None:
             ml.append({"p": float(d["p"]), "hit": (r > 0) == (float(d["dir"]) > 0)})
@@ -270,11 +306,16 @@ def evaluate_bot_signals(db: Path, candles_csv: Optional[Path], horizon_bars: in
 
     hi_r = [x for x in news if x["risk"] >= 0.5]
     lo_r = [x for x in news if x["risk"] < 0.5]
-    return {"horizon_bars": horizon_bars, "candles_end_ts_ms": last_ts, "waiting_for_price": waiting,
+    # every scored score counts: rank correlation between the risk score and how deep the following 24 hours dipped
+    sp = spearman([x["risk"] for x in news], [-x["drawdown"] for x in news])
+    corr = {"n": len(news), "rho": round(sp[0], 3) if sp else None, "ci": [round(sp[1][0], 3), round(sp[1][1], 3)] if sp and sp[1] else None,
+            "enough": len(news) >= MIN_SAMPLES}
+    waiting_items.sort(key=lambda w: w["ready_ms"])
+    return {"horizon_bars": horizon_bars, "candles_end_ts_ms": last_ts, "waiting_for_price": waiting, "waiting_items": waiting_items[:40],
             "ml2": {"overall": hit(ml), "by_probability": bins,
                     "note": "p가 높을수록 적중률이 높아지지 않으면 이 예측은 쓸모가 없습니다(보정 실패)."},
             "news": {"high_risk": {"n": len(hi_r), "mean_abs_return": mean([x["abs_ret"] for x in hi_r]), "mean_drawdown": mean([x["drawdown"] for x in hi_r])},
                      "low_risk": {"n": len(lo_r), "mean_abs_return": mean([x["abs_ret"] for x in lo_r]), "mean_drawdown": mean([x["drawdown"] for x in lo_r]),},
-                     "enough": len(hi_r) >= MIN_SAMPLES and len(lo_r) >= MIN_SAMPLES,
-                     "note": "높은 위험 점수 뒤에 낙폭이 더 깊어져야 뉴스 점수가 쓸모 있습니다. 양쪽 30건 미만이면 결론이 아닙니다."},
+                     "corr": corr, "enough": corr["enough"],
+                     "note": "위험 점수가 높을수록 이후 24시간의 낙폭이 깊어지면(상관 +) 뉴스 점수가 쓸모 있습니다. 전체 채점이 30건 미만이면 결론이 아닙니다."},
             "caveat": "캔들 파일이 이벤트 시각 +24시간까지 있어야 채점됩니다. 부족한 건은 waiting_for_price로 셉니다."}
