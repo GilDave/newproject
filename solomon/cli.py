@@ -325,6 +325,30 @@ def _autofix(args: argparse.Namespace) -> int:
     return {"DONE": 0, "NOTHING": 0, "PARTIAL": 1, "FAILED": 1, "STOPPED": 130}.get(res.status, 2)
 
 
+def _report(args: argparse.Namespace) -> int:
+    from . import report as report_mod
+
+    settings = load_settings(args.config)
+    ais = [a for a in (args.ais or "").split(",") if a] or None
+
+    def _stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        project = Path(args.project or settings.project_path or ".").expanduser()
+        res = report_mod.run_report(settings, project, args.question, ais, use_project_context=args.context)
+    except (report_mod.ReportError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"report:   {res['report_id']}\nstatus:   {res['status']}\nsummary:  {res['summary']}")
+    for name, info in res["ais"].items():
+        print(f"  {name:<12} {'ok' if info.get('ok') else 'FAILED: ' + str(info.get('error', ''))}")
+    if res.get("report_path"):
+        print(f"file:     {res['report_path']}")
+    return 0 if res["status"] == "DONE" else 1
+
+
 def _video(args: argparse.Namespace) -> int:
     from . import video as video_mod
 
@@ -477,6 +501,14 @@ def build_parser() -> argparse.ArgumentParser:
     vd.add_argument("--probe", action="store_true", help="test which AIs can really open the video (compares the title they give with YouTube's)")
     vd.add_argument("--config", help="path to solomon.toml")
     vd.set_defaults(func=_video)
+
+    rp = sub.add_parser("report", help="answer a question as a document: several AIs write drafts independently, one merges them (read-only)")
+    rp.add_argument("question", help="the question, e.g. 'how to train the bot's model from YouTube captions: report and implementation plan'")
+    rp.add_argument("--project", help="where the report is stored (default: `project` in solomon.toml, else the current folder)")
+    rp.add_argument("--ais", help="comma-separated AIs to use (default: every installed one)")
+    rp.add_argument("--context", action="store_true", help="also send the project's file list and README start so the plan is concrete")
+    rp.add_argument("--config", help="path to solomon.toml")
+    rp.set_defaults(func=_report)
 
     ini = sub.add_parser("init", help="write an editable solomon.toml (all options, commented)")
     ini.add_argument("--path", help="where to write it (default: ./solomon.toml)")

@@ -30,7 +30,7 @@ from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
 from . import (__version__, joblock, analysis as analysis_mod, alerts as alerts_mod, attachments as attach_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
-               portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
+               portfolio, projects as projects_mod, report as report_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
 from .status import load_runs
@@ -1133,6 +1133,40 @@ class DashboardApp:
             args += ["--config", self.config_path]
         return self._spawn("video", args, project, "영상 분석: " + (focus or url))
 
+    def start_report(self, project: str, body: dict) -> dict:
+        question = str(body.get("question", "")).strip()
+        if not question:
+            raise ApiError(400, "질문을 입력하세요.")
+        if len(question) > report_mod.MAX_QUESTION:
+            raise ApiError(400, f"질문이 너무 깁니다 ({report_mod.MAX_QUESTION}자 이하).")
+        chosen = self._check_ais(body.get("ais"))
+        self._ensure_idle()
+        project = self._project_for(project)
+        args = [sys.executable, "-m", "solomon", "report", question, "--project", project, "--ais", ",".join(chosen)]
+        if body.get("context"):
+            args += ["--context"]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        return self._spawn("report", args, project, "보고서: " + question[:40])
+
+    def list_reports(self, project: str) -> dict:
+        project = self._known(project)
+        return {"project": project, "reports": report_mod.list_reports(Path(project), self.settings.state_dir)}
+
+    def get_report(self, project: str, rid: str) -> dict:
+        project = self._known(project)
+        try:
+            view = report_mod.load_report(Path(project), self.settings.state_dir, rid)
+        except report_mod.ReportError as exc:
+            raise ApiError(400, str(exc)) from exc
+        if view is None:
+            raise ApiError(404, "보고서를 찾을 수 없습니다.")
+        from . import mdhtml
+
+        view["html"] = mdhtml.render(view["markdown"])[0] if view.get("markdown") else ""
+        view["drafts_html"] = {n: mdhtml.render(t)[0] for n, t in view.get("drafts", {}).items()}
+        return view
+
     def start_video_probe(self, project: str, body: dict) -> dict:
         url = str(body.get("url", "")).strip()
         try:
@@ -1289,6 +1323,16 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
                 return self._json(200, app.botlab_state())
+            if url.path in ("/api/reports", "/api/report"):
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    proj = (query.get("project") or [""])[0]
+                    if url.path == "/api/reports":
+                        return self._json(200, app.list_reports(proj))
+                    return self._json(200, app.get_report(proj, (query.get("id") or [""])[0]))
+                except ApiError as exc:
+                    return self._json(exc.status, {"error": exc.message})
             if url.path == "/api/shadow":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1346,6 +1390,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_analysis(str(body.get("project", "")), str(body.get("focus", "")), body.get("ais"))})
                 if path == "/api/video":
                     return self._json(200, {"job": app.start_video(str(body.get("project", "")), body)})
+                if path == "/api/report":
+                    return self._json(200, {"job": app.start_report(str(body.get("project", "")), body)})
                 if path == "/api/video-probe":
                     return self._json(200, {"job": app.start_video_probe(str(body.get("project", "")), body)})
                 if path == "/api/botlab/config":

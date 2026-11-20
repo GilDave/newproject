@@ -1,0 +1,163 @@
+import json
+from pathlib import Path
+from urllib.parse import quote
+
+import pytest
+
+from solomon import cli, report as R
+from solomon.providers.base import ProviderError, QuotaExhausted
+
+from helpers import ScriptedProvider, make_repo, make_settings
+from test_dashboard import Env, sleeper
+
+DOC = "# 제목 {n}\n## 한 줄 결론\n결론 {n}\n## 구현 방안\n" + "1. 단계 설명이 충분히 길어야 보고서로 인정됩니다. " * 6 + "\n## 위험과 한계\n위험 {n}\n"
+
+
+def doc(n):
+    return DOC.format(n=n)
+
+
+def merged():
+    return "# 통합 보고서\n## 한 줄 결론\n합쳤습니다\n## 구현 방안\n" + "단계 " * 80 + "\n## AI 간 의견 차이\n| 주제 | AI별 의견 | 판단 |\n|---|---|---|\n| a | b | c |\n"
+
+
+def providers(**steps):
+    out = {}
+    for name, st in steps.items():
+        p = ScriptedProvider(name, list(st))
+        p.supports_write = False
+        out[name] = p
+    return out
+
+
+@pytest.fixture
+def repo(tmp_path):
+    return make_repo(tmp_path)
+
+
+def run(repo, ps, ais=None, question="유튜브 자막으로 ena 봇 모델 육성 방법 보고서와 구현 방안", ctx=False):
+    return R.run_report(make_settings(), repo, question, ais or list(ps), use_project_context=ctx, providers=ps)
+
+
+def test_independent_drafts_are_merged_into_one_report_and_everything_is_kept(repo):
+    ps = providers(claude=[doc(1), merged()], codex=[doc(2)], antigravity=[doc(3)])
+    res = run(repo, ps)
+    assert res["status"] == "DONE" and res["synthesizer"] == "claude" and res["title"] == "통합 보고서"
+    d = Path(res["report_path"]).parent
+    assert (d / "report.md").read_text().startswith("# 통합 보고서") and {f.name for f in d.glob("draft-*.md")} == {"draft-claude.md", "draft-codex.md", "draft-antigravity.md"}
+    merge_prompt = ps["claude"].calls[1]["prompt"]  # the second call of the claude provider is the merge
+    assert all(f"결론 {n}" in merge_prompt for n in (1, 2, 3)) and "AI 간 의견 차이" in merge_prompt and "단독 주장" in merge_prompt
+    for p in ps.values():  # read-only, and each draft prompt carries the question and the report structure
+        assert p.calls[0]["write"] is False and "유튜브 자막으로 ena 봇" in p.calls[0]["prompt"] and "## 한 줄 결론" in p.calls[0]["prompt"]
+    assert not any(f"결론 {n}" in ps["codex"].calls[0]["prompt"] for n in (1, 3))  # independent: nobody sees the others while drafting
+    ev = [json.loads(l)["event"] for l in (d / "events.jsonl").read_text().splitlines()]
+    assert ev[0] == "report_start" and ev[-1] == "report_end" and "merge_start" in ev and ev.count("ai_end") == 3
+
+
+def test_a_failed_ai_does_not_stop_the_report_and_a_single_draft_is_flagged(repo):
+    ps = providers(claude=[doc(1)], codex=[QuotaExhausted("usage limit reached")], antigravity=[ProviderError("boom")])
+    res = run(repo, ps)
+    assert res["status"] == "DONE" and res["ais"]["codex"]["state"] == "quota" and res["ais"]["antigravity"]["state"] == "failed"
+    md = Path(res["report_path"]).read_text()
+    assert "교차 검증이 되지 않았습니다" in md and md.startswith("# 제목 1")
+    assert "초안 1개" in res["summary"]
+
+
+def test_when_the_merger_fails_the_longest_draft_is_shown_with_a_note(repo):
+    ps = providers(claude=[doc(1), ProviderError("down")], codex=[doc(2) + "추가 내용 " * 100, ProviderError("down")])
+    res = run(repo, ps)
+    assert res["status"] == "DONE" and res["synthesizer"] == "codex"
+    assert "통합을 맡을 AI가 응답하지 못해" in Path(res["report_path"]).read_text()
+
+
+def test_nothing_usable_is_a_clear_failure(repo):
+    ps = providers(claude=["짧은 답"], codex=[ProviderError("x")])
+    res = run(repo, ps)
+    assert res["status"] == "FAILED" and "어떤 AI도 보고서를 쓰지 못했습니다" in res["summary"] and "report_path" not in res
+
+
+def test_chatty_wrappers_around_the_markdown_are_removed():
+    assert R._clean("```markdown\n# 제목\n본문\n```").startswith("# 제목")
+    assert R._clean("네, 작성하겠습니다.\n# 제목\n본문").startswith("# 제목")
+    assert R._clean("# 이미 제목\n본문") == "# 이미 제목\n본문"
+
+
+def test_validation(repo):
+    with pytest.raises(R.ReportError):
+        run(repo, providers(claude=[]), question="  ")
+    with pytest.raises(R.ReportError):
+        run(repo, providers(claude=[]), question="가" * (R.MAX_QUESTION + 1))
+    with pytest.raises(ValueError):
+        R.run_report(make_settings(), repo, "q", ["nobody"], providers=providers(claude=[]))
+
+
+def test_project_context_is_sent_only_when_asked(repo):
+    ps = providers(claude=[doc(1)])
+    run(repo, ps, ctx=True)
+    assert "PROJECT CONTEXT" in ps["claude"].calls[0]["prompt"]
+    ps2 = providers(claude=[doc(1)])
+    run(repo, ps2, ctx=False)
+    assert "PROJECT CONTEXT" not in ps2["claude"].calls[0]["prompt"]
+
+
+def test_listing_and_loading_validate_the_id(repo):
+    res = run(repo, providers(claude=[doc(1), merged()], codex=[doc(2)]))
+    rows = R.list_reports(repo, ".solomon")
+    assert rows[0]["report_id"] == res["report_id"] and rows[0]["finished"] and rows[0]["status"] == "DONE" and rows[0]["title"] == "통합 보고서"
+    view = R.load_report(repo, ".solomon", res["report_id"])
+    assert view["finished"] and view["markdown"].startswith("# 통합 보고서") and set(view["drafts"]) == {"claude", "codex"}
+    for bad in ("../../etc", "x", "20260101-000000-zzzzzz", ""):
+        with pytest.raises(R.ReportError):
+            R.load_report(repo, ".solomon", bad)
+    assert R.load_report(repo, ".solomon", "20260101-000000-abcdef") is None
+
+
+def test_cli_command_exists_and_is_a_job_command():
+    from solomon import joblock
+    parser = cli.build_parser()
+    rp = next(a for a in parser._actions if a.dest == "command").choices["report"]
+    assert {"--project", "--ais", "--context"} <= {o for a in rp._actions for o in a.option_strings}
+    assert "report" in joblock.JOB_COMMANDS
+
+
+# ---------------------------------------------------------------- dashboard
+@pytest.fixture
+def env(tmp_path):
+    sleeper.calls.clear()
+    e = Env(tmp_path)
+    yield e
+    e.close()
+
+
+def test_dashboard_starts_a_report_job_and_validates(env):
+    st, body, _ = env.call("POST", "/api/report", {"project": env.project, "question": "ena 봇 모델 육성 방법과 구현 방안", "ais": ["claude"], "context": True})
+    assert st == 200
+    args = sleeper.calls[-1]
+    assert args[3] == "report" and "ena 봇 모델 육성 방법과 구현 방안" in args and args[args.index("--ais") + 1] == "claude" and "--context" in args
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+    before = len(sleeper.calls)
+    assert env.call("POST", "/api/report", {"project": env.project, "question": "  "})[0] == 400
+    assert env.call("POST", "/api/report", {"project": env.project, "question": "q" * (R.MAX_QUESTION + 1)})[0] == 400
+    assert env.call("POST", "/api/report", {"project": env.project, "question": "q", "ais": ["nobody"]})[0] == 400
+    assert len(sleeper.calls) == before
+
+
+def test_dashboard_serves_the_report_as_safe_html_and_needs_the_token(env):
+    repo = Path(env.project)
+    res = run(repo, providers(claude=[doc(1) + "\n<script>alert(1)</script>\n", merged()], codex=[doc(2)]))
+    q = lambda **k: "/api/report?project=" + quote(env.project) + "".join(f"&{a}={quote(str(b))}" for a, b in k.items())
+    assert env.call("GET", q(id=res["report_id"]), token=None)[0] == 401
+    st, view, _ = env.call("GET", q(id=res["report_id"]))
+    assert st == 200 and "<h1" in view["html"] and "<table" in view["html"] and view["finished"]
+    st, view, _ = env.call("GET", "/api/reports?project=" + quote(env.project))
+    assert st == 200 and view["reports"][0]["report_id"] == res["report_id"]
+    d = env.call("GET", q(id=res["report_id"]))[1]["drafts_html"]
+    assert "<script>" not in d["claude"] and "&lt;script&gt;" in d["claude"]  # a draft cannot inject markup into the page
+    assert env.call("GET", q(id="../../etc"))[0] == 400 and env.call("GET", q(id="20260101-000000-abcdef"))[0] == 404
+
+
+def test_the_report_tab_is_wired():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ('id="tab-rp"', 'id="view-rp"', 'id="rp-q"', 'id="rp-go"', 'id="rp-body"', '"/api/report"', "/api/reports?project=", "rpOpen()", 'if (t === "rp") rpOpen();',
+                   '["work", "mg", "pj", "bot", "rp"]', "window.print()", "report: \"보고서\""):
+        assert needle in html, needle
