@@ -417,6 +417,9 @@ def _signal_text(prev: Optional[float], cur: float, raw: str) -> tuple[str, str]
 
 def _error_text(raw: str) -> str:
     try:
-        return str(json.loads(raw).get("error", raw))[:140]
+        text = str(json.loads(raw).get("error", raw))
     except ValueError:
-        return str(raw)[:140]
+        text = str(raw)
+    if "10006" in text or "too many visits" in text.lower() or "rate limit" in text.lower():
+        return "거래소 호출 한도 초과 (대개 일시적이며 봇이 다시 시도합니다) — " + text[:100]
+    return text[:140]

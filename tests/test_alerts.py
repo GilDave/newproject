@@ -298,3 +298,9 @@ def test_card_offers_the_period_and_quiet_hours_controls():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     for needle in ("주기 상태 알림", "report_minutes", "조용한 시간", "quiet_from", "error_gap_min", "stale_hours", "signal_step"):
         assert needle in html, needle
+
+
+def test_an_exchange_rate_limit_error_is_explained_in_korean():
+    text = A._error_text(json.dumps({"error": "Bybit error 10006: Too many visits. Exceeded the API Rate Limit. (/v5/market/kline)"}))
+    assert text.startswith("거래소 호출 한도 초과") and "일시적" in text and "10006" in text
+    assert A._error_text(json.dumps({"error": "something else"})) == "something else"

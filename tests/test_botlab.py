@@ -252,3 +252,23 @@ def test_the_bots_own_monitor_page_is_probed_with_a_short_timeout_and_cached(tmp
     srv.shutdown(); srv.server_close()
     now[0] += 11
     assert lab.monitor(port)["up"] is False  # nothing listening any more
+
+
+def test_price_fetch_asks_only_for_the_days_the_scoring_needs_and_keeps_off_the_bar_close(home):
+    bot = make_bot(home)
+    now = [T0 / 1000 + 3 * 86400 + 5000]  # the oldest scored event is 3 days (+) old
+    L = botlab.BotLab(home / "lab", run=FakeRun(), clock=lambda: now[0])
+    days = L.needed_days(bot / "data" / "bot.db", 30)
+    assert 5.0 <= days <= 6.0  # 3 days + 2 days margin, never below 5
+    assert L.needed_days(bot / "data" / "bot.db", 4) == 4.0  # never above the cap
+    assert L.needed_days(home / "missing.db", 30) == 30.0  # unreadable: the old behaviour
+    L.update({"bot_dir": str(bot), "interval_hours": 6})
+    now[0] = 1_800_000_000 - (1_800_000_000 % 14400) + 120  # two minutes after a 4-hour bar closed
+    assert not L.due_eval()
+    now[0] += 300
+    assert L.due_eval()
+    run = FakeRun()
+    L._run = run
+    now[0] = T0 / 1000 + 3 * 86400 + 5000
+    L.evaluate()
+    assert "--days" in run.calls[0] and int(run.calls[0][run.calls[0].index("--days") + 1]) < 30

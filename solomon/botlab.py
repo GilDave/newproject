@@ -182,6 +182,21 @@ class BotLab:
             except OSError:
                 pass
 
+    def needed_days(self, db: Path, cap: float) -> float:
+        """How many days of prices the scoring really needs: back to the oldest scored event plus its 24-hour horizon, never more than
+        the configured cap. (Asking the exchange for 30 days every time is 80% wasted load on the same IP the bot itself uses.)"""
+        try:
+            con = shadow._open_ro(db)
+            try:
+                first = con.execute("select min(ts_ms) from events where kind in ('ml2_pred','news_score')").fetchone()[0]
+            finally:
+                con.close()
+        except Exception:
+            return float(cap)
+        if not first:
+            return float(min(cap, 5.0))
+        return float(min(cap, max(5.0, (self._clock() * 1000 - first) / 86_400_000 + 2)))
+
     def evaluate(self) -> dict:
         cfg = self.config()
         if not cfg["bot_dir"]:
@@ -192,7 +207,7 @@ class BotLab:
         try:
             bot = Path(cfg["bot_dir"])
             csv_path = self.dir / "ENAUSDT_3m.csv"
-            err = self._fetch(bot, cfg["fetch_days"], csv_path)
+            err = self._fetch(bot, self.needed_days(bot / "data" / "bot.db", cfg["fetch_days"]), csv_path)
             have_prices = csv_path.is_file()
             db = bot / "data" / "bot.db"
             entry = {"ts": self._clock(), "fetch_error": err, "stale_prices": bool(err) and have_prices,
@@ -237,7 +252,9 @@ class BotLab:
     # ------------------------------------------------------------------ scheduling
     def due_eval(self) -> bool:
         c = self.config()
-        return bool(c["enabled"] and c["bot_dir"] and not self.running and self._clock() - c["last_eval"] >= c["interval_hours"] * 3600)
+        now = self._clock()
+        near_bar_close = (now % 14400) < 240  # the bot fetches its own prices when a 4-hour bar closes: stay out of its way
+        return bool(c["enabled"] and c["bot_dir"] and not self.running and not near_bar_close and now - c["last_eval"] >= c["interval_hours"] * 3600)
 
     def due_analyze(self) -> bool:
         c = self.config()
