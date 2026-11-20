@@ -224,6 +224,44 @@ def run_report(settings: Settings, project: Path, question: str, ais: Optional[l
     return result
 
 
+def delete_report(project: Path, state_dir: str, rid: str) -> None:
+    """Remove one report folder (the id is validated: nothing outside .solomon/reports can be reached)."""
+    import shutil
+
+    if not REPORT_ID.match(rid or ""):
+        raise ReportError("보고서 번호가 올바르지 않습니다.")
+    root = (Path(project) / state_dir / "reports").resolve()
+    target = (root / rid).resolve()
+    if target.parent != root or not target.is_dir():
+        raise ReportError("보고서를 찾을 수 없습니다.")
+    shutil.rmtree(target)
+
+
+def _safe_name(text: str) -> str:
+    t = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", " ", text or "").strip(" .")
+    return re.sub(r"\s+", " ", t)[:60] or "보고서"
+
+
+def export_report(project: Path, state_dir: str, rid: str, folder: str) -> Path:
+    """Copy the final report as a .md file into a folder the person chose (inside the home folder). Never overwrites."""
+    from . import folders
+
+    view = load_report(project, state_dir, rid)
+    if view is None or not view.get("markdown"):
+        raise ReportError("내보낼 보고서가 없습니다 (아직 작성 중이거나 실패한 보고서입니다).")
+    dest = Path(folder or "").expanduser()
+    if not dest.is_absolute() or not folders.within_home(dest) or not dest.is_dir():
+        raise ReportError("저장할 폴더는 홈 폴더 안에 있는 기존 폴더여야 합니다.")
+    base = f"{_safe_name(view.get('title') or view.get('question', ''))}-{rid}"
+    target = dest.resolve() / f"{base}.md"
+    n = 2
+    while target.exists():
+        target = dest.resolve() / f"{base}-{n}.md"
+        n += 1
+    target.write_text(view["markdown"], encoding="utf-8")
+    return target
+
+
 def _save(result: dict, rdir: Path) -> None:
     (rdir / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -304,7 +342,7 @@ def load_report(project: Path, state_dir: str, rid: str) -> Optional[dict]:
     drafts = {}
     for f in sorted(rdir.glob("draft-*.md")):
         drafts[f.stem[len("draft-"):]] = f.read_text(encoding="utf-8", errors="replace")
-    view.update(report_id=rid, markdown=md, drafts=drafts, title=meta.get("title", ""), synthesizer=meta.get("synthesizer", ""),
+    view.update(report_id=rid, report_dir=str(rdir), markdown=md, drafts=drafts, title=meta.get("title", ""), synthesizer=meta.get("synthesizer", ""),
                 project=meta.get("project", str(project)), context=meta.get("context", False), created=meta.get("created", view["started"]))
     view["interrupted"] = bool(not view["finished"] and not meta)
     return view

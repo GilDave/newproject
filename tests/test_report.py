@@ -161,3 +161,78 @@ def test_the_report_tab_is_wired():
     for needle in ('id="tab-rp"', 'id="view-rp"', 'id="rp-q"', 'id="rp-go"', 'id="rp-body"', '"/api/report"', "/api/reports?project=", "rpOpen()", 'if (t === "rp") rpOpen();',
                    '["work", "mg", "pj", "bot", "rp"]', "window.print()", "report: \"보고서\""):
         assert needle in html, needle
+
+
+# ---------------------------------------------------------------- folder management
+def test_export_copies_the_report_into_a_chosen_home_folder_and_never_overwrites(repo, tmp_path):
+    import os
+    res = run(repo, providers(claude=[doc(1), merged()], codex=[doc(2)]))
+    out = Path(os.environ["HOME"]) / "Documents" / "reports"
+    out.mkdir(parents=True)
+    a = R.export_report(repo, ".solomon", res["report_id"], str(out))
+    b = R.export_report(repo, ".solomon", res["report_id"], str(out))
+    assert a != b and a.read_text().startswith("# 통합 보고서") and b.name.endswith("-2.md") and a.name.startswith("통합 보고서-" + res["report_id"])
+    for bad in (str(tmp_path / "outside"), "relative/path", "", str(out / "missing")):
+        with pytest.raises(R.ReportError):
+            R.export_report(repo, ".solomon", res["report_id"], bad)
+    (tmp_path / "outside").mkdir()
+    with pytest.raises(R.ReportError, match="홈 폴더"):
+        R.export_report(repo, ".solomon", res["report_id"], str(tmp_path / "outside"))  # not inside the home folder
+    with pytest.raises(R.ReportError):
+        R.export_report(repo, ".solomon", "../../x", str(out))
+
+
+def test_delete_removes_exactly_one_report_and_cannot_reach_anything_else(repo):
+    one = run(repo, providers(claude=[doc(1)]))
+    two = run(repo, providers(claude=[doc(2)]))
+    keep = repo / "README.md"
+    R.delete_report(repo, ".solomon", one["report_id"])
+    assert [r["report_id"] for r in R.list_reports(repo, ".solomon")] == [two["report_id"]] and keep.exists()
+    for bad in ("../../..", "..", ".", "x", "", "20260101-000000-abcdef"):
+        with pytest.raises(R.ReportError):
+            R.delete_report(repo, ".solomon", bad)
+    assert (repo / ".solomon" / "reports" / two["report_id"]).is_dir()
+
+
+def test_dashboard_delete_and_export_endpoints(env, tmp_path):
+    import os
+    repo = Path(env.project)
+    res = run(repo, providers(claude=[doc(1)]))
+    out = Path(os.environ["HOME"]) / "exports"
+    out.mkdir()
+    st, body, _ = env.call("POST", "/api/report/export", {"project": env.project, "id": res["report_id"], "folder": str(out)})
+    assert st == 200 and Path(body["path"]).read_text().startswith("# 제목 1") and Path(body["path"]).parent == out.resolve()
+    assert env.call("POST", "/api/report/export", {"project": env.project, "id": res["report_id"], "folder": "/etc"})[0] == 400
+    assert env.call("POST", "/api/report/export", {"project": "/nowhere", "id": res["report_id"], "folder": str(out)})[0] == 400
+    assert env.call("POST", "/api/report/delete", {"project": env.project, "id": "../../x"})[0] == 400
+    assert env.call("POST", "/api/report/delete", {"project": env.project, "id": "20260101-000000-abcdef"})[0] == 404
+    assert env.call("POST", "/api/report/delete", {"project": env.project, "id": res["report_id"]})[0] == 200
+    assert R.list_reports(repo, ".solomon") == []
+    q = "/api/report?project=" + quote(env.project) + "&id=" + res["report_id"]
+    assert env.call("GET", q)[0] == 404
+    assert env.call("POST", "/api/report/delete", {"project": env.project, "id": res["report_id"]}, token=None)[0] == 401
+
+
+def test_a_report_that_is_being_written_cannot_be_deleted(env):
+    repo = Path(env.project)
+    rid = "29990101-000000-aaaaaa"
+    d = repo / ".solomon" / "reports" / rid
+    d.mkdir(parents=True)
+    (d / "events.jsonl").write_text(json.dumps({"ts": "2026-11-21T08:00:00", "event": "report_start", "question": "q", "ais": ["claude"]}) + "\n")
+    assert env.call("POST", "/api/report", {"project": env.project, "question": "q", "ais": ["claude"]})[0] == 200
+    st, body, _ = env.call("POST", "/api/report/delete", {"project": env.project, "id": rid})
+    assert st == 409 and "작성 중" in body["error"] and d.is_dir()
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+
+
+def test_the_report_tab_has_folder_management():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ('id="rp-project" list="rp-projects"', 'id="rp-browse"', 'id="rp-openfolder"', 'id="rp-export"', 'id="rp-del"', "/api/report/export", "/api/report/delete",
+                   'openBrowser("보고서를 저장할 프로젝트 폴더 고르기"', "openOnDisk(target)", "저장 위치: "):
+        assert needle in html, needle
+    assert '<select id="rp-project">' not in html
+
+
+def test_the_folder_picker_falls_back_to_home_instead_of_a_dead_end():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    assert '그 폴더는 열 수 없어 홈 폴더에서 시작합니다' in html and 'return load("")' in html

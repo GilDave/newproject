@@ -1167,6 +1167,26 @@ class DashboardApp:
         view["drafts_html"] = {n: mdhtml.render(t)[0] for n, t in view.get("drafts", {}).items()}
         return view
 
+    def delete_report(self, project: str, rid: str) -> dict:
+        project = self._known(project)
+        if self.job and self.job["popen"].poll() is None and self.job.get("kind") == "report" and self.job.get("project") == project:
+            view = report_mod.load_report(Path(project), self.settings.state_dir, rid) if report_mod.REPORT_ID.match(rid or "") else None
+            if view is not None and not view.get("finished"):
+                raise ApiError(409, "작성 중인 보고서는 지울 수 없습니다. 끝나거나 중지한 뒤 지우세요.")
+        try:
+            report_mod.delete_report(Path(project), self.settings.state_dir, rid)
+        except report_mod.ReportError as exc:
+            raise ApiError(404 if "찾을 수" in str(exc) else 400, str(exc)) from exc
+        return {"ok": True, "message": "보고서를 지웠습니다."}
+
+    def export_report(self, project: str, rid: str, folder: str) -> dict:
+        project = self._known(project)
+        try:
+            target = report_mod.export_report(Path(project), self.settings.state_dir, rid, folder)
+        except report_mod.ReportError as exc:
+            raise ApiError(400, str(exc)) from exc
+        return {"ok": True, "path": str(target), "message": f"저장했습니다: {target}"}
+
     def start_video_probe(self, project: str, body: dict) -> dict:
         url = str(body.get("url", "")).strip()
         try:
@@ -1392,6 +1412,10 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_video(str(body.get("project", "")), body)})
                 if path == "/api/report":
                     return self._json(200, {"job": app.start_report(str(body.get("project", "")), body)})
+                if path == "/api/report/delete":
+                    return self._json(200, app.delete_report(str(body.get("project", "")), str(body.get("id", ""))))
+                if path == "/api/report/export":
+                    return self._json(200, app.export_report(str(body.get("project", "")), str(body.get("id", "")), str(body.get("folder", ""))))
                 if path == "/api/video-probe":
                     return self._json(200, {"job": app.start_video_probe(str(body.get("project", "")), body)})
                 if path == "/api/botlab/config":

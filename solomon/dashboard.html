@@ -543,8 +543,10 @@ button{max-width:100%}
       <h2>질문하기</h2>
       <label for="rp-q">질문 — 알고 싶은 것과 원하는 결과물을 함께 적으세요</label>
       <textarea id="rp-q" placeholder="예: 유튜브 영상의 자막을 수집해서 ena 봇 모델을 육성하는 방법 보고서와 구현 방안을 작성해줘"></textarea>
-      <label for="rp-project">프로젝트 (결과를 저장할 곳 · 맥락으로 쓸 곳)</label>
-      <select id="rp-project"></select>
+      <label for="rp-project">프로젝트 폴더 (보고서를 저장할 곳 · 맥락으로 쓸 곳)</label>
+      <div class="row projrow"><input type="text" id="rp-project" list="rp-projects" placeholder="/Users/…/프로젝트" autocomplete="off"><button id="rp-browse" title="폴더 찾아보기 · 새 폴더 만들기" style="white-space:nowrap">찾아보기</button><button id="rp-openfolder" title="Finder에서 보고서 폴더 열기" style="white-space:nowrap">폴더 열기</button></div>
+      <datalist id="rp-projects"></datalist>
+      <div class="hint" id="rp-where"></div>
       <label class="chk"><input type="checkbox" id="rp-ctx" checked> 프로젝트의 파일 목록과 README 앞부분을 AI에게 보내 구체적인 계획 받기 (비밀 값은 가립니다)</label>
       <label>보고서를 쓸 AI — 각자 독립적으로 쓰고 하나가 합칩니다</label>
       <div class="aichecks" id="rp-ais"></div>
@@ -564,7 +566,7 @@ button{max-width:100%}
       <div id="rp-docbox" hidden>
         <div class="rp-bar">
           <div class="rp-tabs"><button id="rp-t-final" class="on">최종 보고서</button><button id="rp-t-drafts">AI별 초안</button></div>
-          <div class="rp-acts"><button id="rp-copy">복사</button><button id="rp-save">.md 내려받기</button><button id="rp-print">인쇄 · PDF</button></div>
+          <div class="rp-acts"><button id="rp-copy">복사</button><button id="rp-save">.md 내려받기</button><button id="rp-export" title="내가 고른 폴더에 .md 파일로 저장">다른 폴더에 저장</button><button id="rp-print">인쇄 · PDF</button><button id="rp-del" class="danger">삭제</button></div>
         </div>
         <div class="rp-meta" id="rp-meta"></div>
         <div class="doc" id="rp-body"></div>
@@ -2262,7 +2264,9 @@ async function openBrowser(title, onPick, start){
     let d;
     try { d = await api("/api/browse" + (path ? "?path=" + encodeURIComponent(path) : "")); }
     catch (e) {
-      if (request === folderRequest) folderView.textContent = e.message;
+      if (request !== folderRequest) return;
+      if (path){ toast("그 폴더는 열 수 없어 홈 폴더에서 시작합니다: " + e.message, true); return load(""); }  // a stale or outside-home start folder must not leave a dead end
+      folderView.textContent = e.message;
       return;
     }
     if (request !== folderRequest) return;
@@ -2756,15 +2760,13 @@ for (const id of ["np-name", "goal"]){
 $("botBody").addEventListener("input", () => { botDirty = true; });
 
 // ---------------------------------------------------------------- 보고서: 질문 -> 여러 AI가 초안 -> 하나로 통합 -> 문서
-function rpProject(){ return $("rp-project").value || (state && state.project) || ""; }
+function rpProject(){ return $("rp-project").value.trim() || (state && state.project) || ""; }
 function rpFillProjects(){
   if (!state) return;
-  const sel = $("rp-project"), keep = sel.value, opts = JSON.stringify(state.projects);
-  if (sel.dataset.options !== opts){
-    sel.dataset.options = opts; clear(sel);
-    state.projects.forEach(p => { const o = el("option", "", p.split("/").slice(-1)[0] + " — " + p); o.value = p; sel.appendChild(o); });
-    sel.value = state.projects.includes(keep) ? keep : (state.project || state.projects[0] || "");
-  }
+  const dl = $("rp-projects"), opts = JSON.stringify(state.projects);
+  if (dl.dataset.options !== opts){ dl.dataset.options = opts; clear(dl); state.projects.forEach(p => { const o = el("option"); o.value = p; dl.appendChild(o); }); }
+  const inp = $("rp-project");
+  if (!inp.value && document.activeElement !== inp) inp.value = state.project || state.projects[0] || "";  // the folder the dashboard is on, until the person picks another
   const box = $("rp-ais"), options = JSON.stringify(state.providers.map(p => [p.name, p.installed, p.default, p.local]));
   if (box.dataset.options !== options){
     const checked = {}; box.querySelectorAll("input").forEach(i => checked[i.value] = i.checked);
@@ -2775,9 +2777,15 @@ function rpFillProjects(){
       l.appendChild(i); l.appendChild(document.createTextNode(pname(p.name) + (p.local ? " (로컬)" : "") + (p.installed ? "" : " (미설치)"))); box.appendChild(l);
     });
   }
+  const proj = rpProject();
+  $("rp-where").textContent = proj ? (state.projects.includes(proj) ? "보고서 저장 위치: " + proj + "/.solomon/reports/" : "아직 등록되지 않은 폴더입니다. 보고서를 만들면 자동으로 프로젝트에 등록됩니다 (파일은 바뀌지 않습니다).") : "";
 }
 async function rpLoadList(){
   const project = rpProject(); if (!project) return;
+  if (!state.projects.includes(project)){  // not registered yet: nothing to list
+    if (rp.listKey !== "unregistered"){ rp.listKey = "unregistered"; rp.list = []; rpRenderList(); }
+    return;
+  }
   try {
     const r = await api("/api/reports?project=" + encodeURIComponent(project));
     if (rpProject() !== project) return;
@@ -2810,6 +2818,7 @@ function rpRenderDoc(){
   $("rp-t-final").className = rp.tab === "final" ? "on" : ""; $("rp-t-drafts").className = rp.tab === "drafts" ? "on" : "";
   const meta = $("rp-meta"); clear(meta);
   meta.appendChild(el("div", "", "질문: " + r.question));
+  meta.appendChild(el("div", "", "저장 위치: " + (r.report_dir || "")));
   meta.appendChild(el("div", "", "작성: " + Object.entries(r.ais).map(([n, a]) => pname(n) + (a.state === "done" ? " ✓" : a.state === "running" ? " …" : a.state === "waiting" ? " (대기)" : " ✗")).join(" · ")
     + (r.synthesizer ? " · 통합: " + pname(r.synthesizer) : "") + (r.context ? " · 프로젝트 맥락 포함" : "")));
   const body = $("rp-body");
@@ -2847,7 +2856,29 @@ async function rpTick(){
 function rpOpen(){ rpFillProjects(); rp.listKey = null; rpTick(); }
 $("tab-rp").onclick = () => setTab("rp");
 setInterval(rpTick, 2500);
-$("rp-project").addEventListener("change", () => { rp.id = null; rp.cur = null; rp.listKey = null; $("rp-empty").hidden = false; $("rp-docbox").hidden = true; rpTick(); });
+function rpSwitchFolder(){ rp.id = null; rp.cur = null; rp.listKey = null; $("rp-empty").hidden = false; $("rp-docbox").hidden = true; rpTick(); }
+$("rp-project").addEventListener("change", rpSwitchFolder);
+$("rp-browse").onclick = () => openBrowser("보고서를 저장할 프로젝트 폴더 고르기", async (path) => {
+  try { await api("/api/project", {path}); $("rp-project").value = path; toast("프로젝트로 등록했습니다. 보고서는 이 폴더의 .solomon/reports 에 저장됩니다."); await poll(); loadProjects(); rpSwitchFolder(); }
+  catch (e) { toast(e.message, true); }
+}, rpProject());
+$("rp-openfolder").onclick = () => {
+  const target = rp.cur && rp.cur.report_dir ? rp.cur.report_dir : (state && state.projects.includes(rpProject()) ? rpProject() : "");
+  if (!target) return toast("먼저 등록된 프로젝트 폴더를 고르세요.", true);
+  openOnDisk(target);
+};
+$("rp-export").onclick = () => {
+  if (!rp.cur || !rp.cur.markdown) return toast("저장할 보고서가 없습니다.", true);
+  const id = rp.cur.report_id;
+  openBrowser("보고서(.md)를 저장할 폴더 고르기", async (folder) => {
+    try { const r = await api("/api/report/export", {project: rpProject(), id, folder}); toast(r.message); } catch (e) { toast(e.message, true); }
+  }, "");
+};
+$("rp-del").onclick = async () => {
+  if (!rp.cur) return toast("지울 보고서를 먼저 여세요.", true);
+  if (!confirm("이 보고서를 지웁니다 (최종 보고서와 AI별 초안 모두). 되돌릴 수 없습니다. 계속할까요?")) return;
+  try { await api("/api/report/delete", {project: rpProject(), id: rp.cur.report_id}); toast("보고서를 지웠습니다."); rpSwitchFolder(); } catch (e) { toast(e.message, true); }
+};
 $("rp-t-final").onclick = () => { rp.tab = "final"; rpRenderDoc(); };
 $("rp-t-drafts").onclick = () => { rp.tab = "drafts"; rpRenderDoc(); };
 $("rp-go").onclick = async () => {
