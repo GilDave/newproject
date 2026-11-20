@@ -150,7 +150,7 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                     attempt["builder"] = {"provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),
                                           "tokens": int(exact["total"]) if isinstance(exact, dict) and exact.get("total") else None}
             run.calls.append({
-                "at": clock, "role": role, "provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),
+                "at": clock, "day": ts.strftime("%Y-%m-%d") if ts else "", "role": role, "provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),
                 "tokens": int(exact["total"]) if isinstance(exact, dict) and exact.get("total") else None,
                 "turns": int(exact["turns"]) if isinstance(exact, dict) and exact.get("turns") else None,
                 "estimated": not (isinstance(exact, dict) and exact.get("total")), "ok": True,
@@ -158,7 +158,7 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
         elif kind == "call_error":
             pending.pop(str(ev.get("role")), None)
             run.active = None
-            run.calls.append({"at": clock, "role": str(ev.get("role")), "provider": str(ev.get("provider")), "sec": 0,
+            run.calls.append({"at": clock, "day": ts.strftime("%Y-%m-%d") if ts else "", "role": str(ev.get("role")), "provider": str(ev.get("provider")), "sec": 0,
                               "tokens": None, "turns": None, "estimated": False, "ok": False,
                               "error": str(ev.get("error", ""))[:140]})
             _stats(run, str(ev.get("provider"))).failures += 1

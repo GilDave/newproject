@@ -578,7 +578,7 @@ class DashboardApp:
         if job["state"] == "exited" and job.get("project") == project and job.get("started"):
             since = datetime.fromtimestamp(job["started"]) - timedelta(seconds=5)
             job["orphan"] = not any(r.started and r.started >= since for r in runs)  # died before creating a run
-        state["provider_cards"] = self._provider_cards(runs, state["providers"])
+        state["provider_cards"] = self._provider_cards(runs, state["providers"], project)
         state["apply_pending"] = sum(
             1 for r in runs[-30:]
             if r.status == "PASSED" and (Path(project) / self.settings.state_dir / "runs" / r.run_id / "result.patch").is_file()
@@ -603,22 +603,50 @@ class DashboardApp:
                               "patch": str(patch) if patch.is_file() else None}
         return state
 
-    def _provider_cards(self, runs: list, providers: list[dict]) -> list[dict]:
-        """Per-AI facts for the work room: status, today's calls and the most recent call."""
-        today = datetime.now().date()
+    def _analysis_calls(self, project: str, day: str) -> list[dict]:
+        """AI calls made by today's analyses (they live next to the runs, not inside them)."""
+        out: list[dict] = []
+        root = Path(project) / self.settings.state_dir / "analyses"
+        if not root.is_dir():
+            return out
+        stamp = day.replace("-", "")
+        for d in sorted(root.iterdir()):
+            if not d.name.startswith(stamp):
+                continue
+            try:
+                lines = (d / "events.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("event") == "ai_end" and ev.get("provider"):
+                    ts = str(ev.get("ts", ""))
+                    out.append({"provider": str(ev["provider"]), "role": "analysis", "sec": round(float(ev.get("duration_sec") or 0), 1),
+                                "day": ts[:10], "at": ts[11:19], "ok": bool(ev.get("ok")), "run_id": d.name})
+        return out
+
+    def _provider_cards(self, runs: list, providers: list[dict], project: Optional[str] = None) -> list[dict]:
+        """Per-AI facts for the work room: status, today's calls and the most recent call.
+        Counted by the day of each call (a run that started yesterday evening still counts its calls after midnight) and including analyses."""
+        day = datetime.now().strftime("%Y-%m-%d")
         latest = runs[-1] if runs else None
+        extra = self._analysis_calls(project, day) if project else []
         cards = []
         for p in providers:
             name = p["name"]
-            calls_today, last = 0, None
-            for r in reversed(runs):
-                for c in reversed(r.calls):
-                    if c["provider"] != name:
-                        continue
-                    if last is None:
-                        last = {"role": c["role"], "sec": c["sec"], "at": c["at"], "ok": c["ok"], "run_id": r.run_id}
-                    if r.started and r.started.date() == today:
-                        calls_today += 1
+            calls_today, last, last_key = 0, None, ""
+            mine = [dict(c, run_id=r.run_id, day=c.get("day") or (r.started.strftime("%Y-%m-%d") if r.started else ""))
+                    for r in runs[-60:] for c in r.calls if c["provider"] == name]
+            mine += [c for c in extra if c["provider"] == name]
+            for c in mine:
+                if c["day"] == day:
+                    calls_today += 1
+                key = f"{c['day']} {c['at']}"
+                if key >= last_key:
+                    last_key, last = key, {"role": c["role"], "sec": c["sec"], "at": c["at"], "ok": c["ok"], "run_id": c["run_id"]}
             quota = bool(latest and name in latest.quota_providers)
             cards.append({"name": name, "vendor": VENDORS.get(name, ""), "installed": p["installed"],
                           "supports_write": p["supports_write"],

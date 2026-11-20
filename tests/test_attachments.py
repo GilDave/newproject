@@ -229,3 +229,23 @@ def test_the_page_shows_a_job_started_elsewhere_as_busy(env):
 def test_ollama_keeps_the_top_seat_even_without_a_role():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     assert 'provs.some(p => p.name === "ollama") ? "ollama" : null' in html
+
+
+def test_ai_cards_count_calls_by_their_own_day_and_include_analyses(env):
+    from datetime import datetime, timedelta
+    today = datetime.now().strftime("%Y-%m-%d")
+    yest = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    root = Path(env.project) / ".solomon"
+    run = root / "runs" / (yest.replace("-", "") + "-230000-aaaaaa")  # started yesterday evening, still calling after midnight
+    run.mkdir(parents=True)
+    ev = [{"ts": f"{yest}T23:00:00", "event": "run_start", "goal": "g", "roles": {}},
+          {"ts": f"{yest}T23:30:00", "event": "call_end", "role": "builder", "provider": "codex", "duration_sec": 5},
+          {"ts": f"{today}T00:10:00", "event": "call_end", "role": "builder", "provider": "codex", "duration_sec": 6},
+          {"ts": f"{today}T00:20:00", "event": "call_end", "role": "reviewer", "provider": "codex", "duration_sec": 7}]
+    (run / "events.jsonl").write_text("\n".join(json.dumps(e) for e in ev) + "\n")
+    an = root / "analyses" / (today.replace("-", "") + "-010000-bbbbbb")
+    an.mkdir(parents=True)
+    (an / "events.jsonl").write_text(json.dumps({"ts": f"{today}T01:00:05", "event": "ai_end", "provider": "claude", "ok": True, "duration_sec": 30}) + "\n")
+    cards = {c["name"]: c for c in env.app._provider_cards(__import__("solomon.status", fromlist=["x"]).load_runs(Path(env.project)), env.app.providers_info(), env.project)}
+    assert cards["codex"]["calls_today"] == 2 and cards["codex"]["last_call"]["role"] == "reviewer"
+    assert cards["claude"]["calls_today"] == 1 and cards["claude"]["last_call"]["role"] == "analysis"
