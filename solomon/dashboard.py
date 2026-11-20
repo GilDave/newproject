@@ -440,7 +440,7 @@ class DashboardApp:
         goal = str(body.get("goal", "")).strip()
         job = None
         if goal:
-            job = self.start_run(goal, path, body.get("roles"), bool(body.get("persist")), fresh=True)
+            job = self.start_run(goal, path, body.get("roles"), bool(body.get("persist")), fresh=True, shadow=bool(body.get("shadow")))
         return {"project": path, "job": job, "message": f"프로젝트 폴더를 만들었습니다: {path}" + (" · 첫 구현을 시작했습니다." if job else "")}
 
     def remove_project(self, path: str) -> dict:
@@ -568,11 +568,12 @@ class DashboardApp:
         cmd, source = self.effective_test_command(project)
         state["test_command"] = {"text": " ".join(cmd) if cmd else "없음", "source": source}
         runs = load_runs(Path(project), self.settings.state_dir)
+        tracing_runs = job["state"] == "running" and job.get("project") == project and job.get("kind") in {"run", "autofix"}
         latest = runs[-1] if runs else None
         state["runs"] = [
             {"run_id": r.run_id, "status": r.status, "goal": r.goal[:120], "attempts": r.attempts, "finished": r.finished,
              "elapsed_sec": r.elapsed_sec(),
-             "live": bool(job["state"] == "running" and job.get("project") == project and r is latest and not r.finished)}
+             "live": bool(tracing_runs and r is latest and not r.finished)}
             for r in reversed(runs[-30:])
         ]
         if job["state"] == "exited" and job.get("project") == project and job.get("started"):
@@ -589,7 +590,7 @@ class DashboardApp:
             pick = next((r for r in runs if r.run_id == run_id), None)
         pick = pick or latest
         if pick:
-            running_here = job["state"] == "running" and job.get("project") == project and pick is latest
+            running_here = tracing_runs and pick is latest
             cur = pick.to_dict()
             cur["live"] = bool(running_here and not pick.finished)
             cur["interrupted"] = bool(not pick.finished and not cur["live"])
@@ -1005,15 +1006,17 @@ class DashboardApp:
 
     def inbox(self, project: str) -> dict:
         project = self._known(project)
-        if not self.is_git(project):
-            return {"entries": [], "dirty": [], "branch": "", "pending": 0, "not_git": True}
+        path = Path(project)
         try:
-            data = manage.list_inbox(Path(project), self.settings.state_dir)
+            if self.is_git(project):
+                data = manage.list_inbox(path, self.settings.state_dir)
+                cmd, _ = self.effective_test_command(project)
+                data["test_command"] = " ".join(cmd) if cmd else ""
+            else:
+                data = {"entries": [], "dirty": [], "branch": "", "pending": 0, "not_git": True}
+            data["history"] = manage.list_history(path, self.settings.state_dir)
         except Exception as exc:
             raise ApiError(500, f"결과함을 읽지 못했습니다: {type(exc).__name__}: {exc}") from exc
-        cmd, source = self.effective_test_command(project)
-        data["test_command"] = " ".join(cmd) if cmd else ""
-        data["history"] = manage.list_history(Path(project), self.settings.state_dir)
         return data
 
     def describe(self, project: str, key: str) -> dict:

@@ -77,6 +77,26 @@ def test_revert_and_discard(env):
     act(env, key, "apply", expect=409)
 
 
+def test_applied_batch_can_be_reverted_and_discarded_if_the_patch_still_matches(env):
+    batch = make_batch(env)
+    key = f"batch:{batch.batch_id}"
+    act(env, key, "apply")
+    changed = env.repo / "src" / "new.py"
+    applied = changed.read_bytes()
+    edited = applied + b"\n# user edit\n"
+    changed.write_bytes(edited)
+    act(env, key, "revert_discard", expect=409)
+    assert changed.read_bytes() == edited
+    assert next(x for x in inbox(env)["entries"] if x["key"] == key)["state"] == "applied"
+
+    changed.write_bytes(applied)
+    act(env, key, "revert_discard")
+    assert not changed.exists()
+    assert next(x for x in inbox(env)["entries"] if x["key"] == key)["state"] == "discarded"
+    act(env, key, "restore")
+    assert next(x for x in inbox(env)["entries"] if x["key"] == key)["state"] == "pending"
+
+
 def test_cannot_apply_while_a_job_runs_in_the_project(env):
     res = env.finish_a_run()
     env.call("POST", "/api/analyze", {"project": env.project})
@@ -229,6 +249,18 @@ def test_5w1h_for_run_batch_item_and_analysis(env):
         json.dumps({"ts": "2026-01-01T00:00:00", "event": "analysis_start", "ais": ["claude"], "focus": "x"}) + "\n")
     ad = env.call("GET", f"/api/describe?project={quote(env.project)}&key=analysis:20260101-000000-aaaa")[1]
     assert ad["kind"] == "analysis"
+
+
+def test_analysis_history_is_available_in_a_project_without_git(env, tmp_path):
+    folder = tmp_path / "plain-folder"
+    folder.mkdir()
+    put_analysis(folder, [cluster(1)])
+    env.app.add_project(str(folder))
+
+    status, data, _ = env.call("GET", "/api/inbox?project=" + quote(str(folder.resolve())))
+    assert status == 200
+    assert data["not_git"] and data["entries"] == []
+    assert [item["key"] for item in data["history"]] == ["analysis:20260101-000000-aaaa"]
 
 
 @pytest.mark.parametrize("key", ["run:../../etc", "batch:x", "item:20260101-000000-abcd:zz", "bogus", "run:20261118-234722-c7c18a;rm"])

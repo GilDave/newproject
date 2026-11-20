@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solomon"
-version = "1.13.1"
+version = "1.13.2"
 description = "Cross-verified AI development pipeline (Claude x Codex x Antigravity) driven only by signed-in subscription CLIs"
 readme = "README.md"
 requires-python = ">=3.11"

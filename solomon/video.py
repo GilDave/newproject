@@ -355,7 +355,7 @@ def fetch_transcript(video_id: str, *, langs: tuple[str, ...] = ("ko", "en"), ht
                      run=run_process) -> Transcript:
     errors: list[str] = []
     transcript: Optional[Transcript] = None
-    exe = ytdlp or resolve_cli("yt-dlp")
+    exe = resolve_cli("yt-dlp") if ytdlp is None else ytdlp
     if exe:
         try:
             transcript = fetch_via_ytdlp(video_id, langs, exe, run)

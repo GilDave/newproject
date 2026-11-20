@@ -298,18 +298,23 @@ def perform(project: Path, state_dir: str, key: str, action: str, message: str =
                 marker.write_text(json.dumps({"applied_at": _now()}), encoding="utf-8")
             return {"ok": True, "message": f"작업 폴더에 적용했습니다 (파일 {len(files)}개). 커밋은 하지 않았습니다."}
 
-        if action == "revert":
+        if action in ("revert", "revert_discard"):
             if state != "applied":
                 raise ManageError(409, "되돌릴 수 있는 것은 적용만 하고 커밋하지 않은 항목입니다.")
+            if busy:
+                raise ManageError(409, "이 프로젝트에서 진행 중인 작업이 끝난 뒤 되돌리세요.")
             p = patch_path(project, state_dir, key)
             ok, why = _check(project, p, reverse=True)
             if not ok:
                 raise ManageError(409, f"되돌릴 수 없습니다 (적용 뒤 같은 파일을 더 고쳤을 수 있습니다): {why}")
             gitops.git(["apply", "-R", str(p)], project)
-            _set(project, state_dir, key, None)
+            discard = action == "revert_discard"
+            _set(project, state_dir, key, {"state": "discarded", "at": _now()} if discard else None)
             marker = _legacy_marker(project, state_dir, key)
             if marker and marker.exists():
                 marker.unlink()
+            if discard:
+                return {"ok": True, "message": "적용을 되돌리고 폐기함으로 옮겼습니다. 필요하면 복원할 수 있습니다."}
             return {"ok": True, "message": "적용을 되돌렸습니다. 작업 폴더가 적용 전 상태입니다."}
 
         if action == "commit":

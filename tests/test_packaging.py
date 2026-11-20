@@ -15,7 +15,7 @@ GUIDE = ROOT / "solomon" / "USER_GUIDE.md"
 
 def test_version_is_one_number_everywhere():
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    assert meta["project"]["version"] == __version__ == "1.13.1"
+    assert meta["project"]["version"] == __version__ == "1.13.2"
     assert "USER_GUIDE.md" in meta["tool"]["setuptools"]["package-data"]["solomon"]
     assert "solomon.example.toml" in meta["tool"]["setuptools"]["package-data"]["solomon"]
 
