@@ -307,3 +307,40 @@ def test_a_bundle_that_fails_is_retried_one_problem_at_a_time(tmp_path):
     statuses = [i.status for i in r.items]
     assert statuses[0] == "FAILED" and "하나씩 따로" in r.items[0].summary and len(r.items) == 3
     assert statuses[1] == "PASSED"  # the first problem alone succeeds; the batch carries on instead of giving up
+
+
+def test_a_batch_starts_from_the_folder_as_it_is_on_disk_so_its_patch_still_applies(tmp_path):
+    from solomon import manage
+    repo = make_repo(tmp_path)
+    (repo / "src" / "app.py").write_text("print('edited by the user, not committed')\n")  # an uncommitted edit of the very file the fix touches
+    put_analysis(repo, [cluster(1, file="src/app.py")])
+    s = make_settings(include_uncommitted=True)
+
+    def edit(prompt, cwd):  # the builder changes the same line again and adds the file the tests need
+        (Path(cwd) / "src" / "app.py").write_text("print('fixed')\n")
+        (Path(cwd) / "src" / "new.py").write_text("x = 1\n")
+        return "done"
+
+    o = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(allowed=("src/",)), review_json()]), "codex": ScriptedProvider("codex", [edit])})
+    r = autofix.run_autofix(s, repo, orchestrator=o, ids=[1])
+    assert r.status == "DONE" and "커밋 안 된 변경" in r.summary
+    ok, why = manage._check(repo, Path(r.patch_path))
+    assert ok, why  # the finished patch applies onto the edited folder (a HEAD-based batch could not)
+
+
+
+def test_conflict_reason_lists_every_conflicting_file(tmp_path):
+    from solomon import manage
+    repo = make_repo(tmp_path)
+    (repo / "src" / "b.py").write_text("one\ntwo\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b"], cwd=repo, check=True)
+    (repo / "src" / "app.py").write_text("print('A')\n")
+    (repo / "src" / "b.py").write_text("one\nTWO\n")
+    patch = subprocess.run(["git", "diff"], cwd=repo, capture_output=True, text=True, check=True).stdout
+    (repo / "src" / "app.py").write_text("print('somebody else')\n")  # the folder moved on after the patch was made
+    (repo / "src" / "b.py").write_text("one\nelse\n")
+    pf = tmp_path / "x.patch"
+    pf.write_text(patch)
+    ok, why = manage._check(repo, pf)
+    assert not ok and "2개" in why and "src/app.py" in why and "src/b.py" in why

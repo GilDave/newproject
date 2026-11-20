@@ -57,7 +57,11 @@ def _check(project: Path, patch: Path, reverse: bool = False) -> tuple[bool, str
     p = gitops.git(args, project, check=False)
     if p.returncode == 0:
         return True, ""
-    return False, (p.stderr.strip().splitlines() or ["적용할 수 없습니다"])[0][:200]
+    lines = p.stderr.strip().splitlines() or ["적용할 수 없습니다"]
+    files = list(dict.fromkeys(re.findall(r"error: patch failed: (.+?):\d+", p.stderr) + re.findall(r"error: (.+?): patch does not apply", p.stderr)))
+    if len(files) > 1:
+        return False, f"{lines[0][:120]} — 작업 폴더와 충돌하는 파일 {len(files)}개: " + ", ".join(files[:6]) + (" …" if len(files) > 6 else "")
+    return False, lines[0][:200]
 
 
 def _dirty(project: Path) -> list[str]:

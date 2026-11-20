@@ -1476,6 +1476,20 @@ function renderEntry(e, parent, nested){
   if (e.key && e.kind !== "analysis") box.appendChild(entryButtons(e));
   if (e.items){
     const sub = el("div"); sub.style.marginTop = "8px";
+    const okItems = e.kind === "batch" && e.state === "pending" ? e.items.filter(it => it.key && it.state === "pending" && it.applicable) : [];
+    const allItems = e.items.filter(it => it.key && it.state === "pending");
+    if (okItems.length && okItems.length < allItems.length){
+      const b = el("button", "good", "충돌 없는 " + okItems.length + "개 항목만 적용"); b.style.marginBottom = "6px";
+      b.title = "작업 폴더와 겹치지 않는 항목만 순서대로 적용합니다. 나머지는 그대로 두고 따로 판단하세요.";
+      b.onclick = async () => {
+        if (!confirm("작업 폴더와 충돌하지 않는 " + okItems.length + "개 항목만 순서대로 적용합니다. 커밋은 하지 않습니다. 계속할까요?")) return;
+        let done = 0, skipped = [];
+        for (const it of okItems){ try { await api("/api/inbox/action", {project: mgProject(), key: it.key, action: "apply", message: ""}); done++; } catch (err) { skipped.push(clip(it.title, 30) + ": " + err.message); } }
+        toast(done + "개 적용" + (skipped.length ? ", " + skipped.length + "개는 적용하지 못했습니다: " + skipped[0] : "") + ". 커밋은 하지 않았습니다.", skipped.length > 0);
+        loadInbox(true); poll();
+      };
+      sub.appendChild(b);
+    }
     e.items.forEach(it => {
       const row = it.key && it.files ? it : null;
       const r = el("div", "ent"); r.style.marginBottom = "6px";
@@ -1485,6 +1499,8 @@ function renderEntry(e, parent, nested){
       if (it.key) h.onclick = () => openKey(it.key);
       r.appendChild(h);
       r.appendChild(el("div", "meta", [it.severity, it.file, it.commit && ("커밋 " + it.commit), it.attempts && ("시도 " + it.attempts + "번")].filter(Boolean).join(" · ") + (it.status !== "PASSED" && it.summary ? " — " + clip(String(it.summary).split("\n")[0], 90) : "")));
+      if (it.state === "pending" && it.applicable === false && it.reason) r.appendChild(el("div", "meta", "⚠ 적용 불가: " + it.reason));
+      if (it.overlap && it.overlap.length && it.state === "pending") r.appendChild(el("div", "meta", "⚠ 작업 폴더에서 이미 바뀐 파일과 겹침: " + it.overlap.slice(0, 4).join(", ")));
       if (it.key && it.state && it.files) r.appendChild(entryButtons(Object.assign({kind: "item", id: e.id}, it)));
       sub.appendChild(r);
     });

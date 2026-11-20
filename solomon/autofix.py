@@ -200,6 +200,16 @@ def run_autofix(
         return _finish(result, project, bdir, "HEAD", log)
 
     base = gitops.resolve(project, "HEAD")
+    snapshot_note = ""
+    if settings.include_uncommitted and gitops.is_dirty(project):
+        # the batch starts from the folder as it is on disk (secrets excluded), exactly like a single run: otherwise every
+        # file the person has edited since the last commit makes the finished patch fail to apply ("patch failed: file:3")
+        try:
+            base, kept = gitops.snapshot_worktree(project)
+            snapshot_note = f"커밋 안 된 변경 {len(kept)}개 포함"
+            log("snapshot", files=kept[:80], count=len(kept))
+        except gitops.GitError as exc:
+            log("snapshot_failed", error=str(exc)[:200])
     gitops.create_branch(project, branch, base)
     if orchestrator is None:
         s = dataclasses.replace(settings, roles=dict(settings.roles), max_attempts=ITEM_ATTEMPTS,
@@ -266,7 +276,7 @@ def run_autofix(
     passed = sum(1 for i in result.items if i.status == "PASSED")
     if result.status == "NOTHING":
         result.status = "DONE" if passed == len(result.items) else "PARTIAL" if passed else "FAILED"
-    result.summary = f"{len(result.items)}건 중 {passed}건 수정" + (f" · {stop}" if stop else "")
+    result.summary = f"{len(result.items)}건 중 {passed}건 수정" + (f" · {stop}" if stop else "") + (f" · {snapshot_note}" if snapshot_note else "")
     return _finish(result, project, bdir, base, log, tip=branch if passed else None)
 
 
