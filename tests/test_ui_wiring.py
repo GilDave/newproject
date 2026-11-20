@@ -115,3 +115,13 @@ def test_sections_a_person_opened_or_closed_stay_that_way_across_the_automatic_r
 def test_the_bot_tab_has_a_short_waiting_list_and_the_whole_news_correlation():
     for needle in ("채점 대기 중 (누르면 목록)", "data-w", "waiting_items", "목록 펼치기", "위험 점수 ↔ 이후 24시간 낙폭 크기의 상관", "뉴스 점수 채점 건수"):
         assert needle in HTML, needle
+
+
+def test_video_mode_inputs_are_labelled_and_keyboard_reachable():
+    assert re.search(r'<label for="vid-url">[^<]+</label>\s*<input[^>]*id="vid-url"[^>]*placeholder="[^"]+"', HTML)
+    assert re.search(r'<label for="project">', HTML) and 'id="project"' in HTML
+    assert re.search(r'<details[^>]*>\s*<summary>자막을 직접[^<]*</summary>\s*<textarea[^>]*id="vid-text"[^>]*aria-label="[^"]+"', HTML)
+    assert re.search(r'<button[^>]*id="run"', HTML) and 'id="m-vid"' in HTML
+    assert 'setAttribute("aria-pressed"' in SCRIPT
+    assert ".modes button:focus-visible" in HTML and ".modes button.on::before" in HTML
+    assert "참여 안 함" in SCRIPT

@@ -362,6 +362,14 @@ button{max-width:100%}
   .rgrid{grid-template-columns:35px repeat(3,minmax(0,1fr))}
   .rgrid select{min-width:0}
 }
+.projrow{margin:0;flex-wrap:wrap}
+.projrow #project{flex:1 1 14em;min-width:0;text-overflow:clip}
+.projrow #browse{flex:0 0 auto;white-space:nowrap}
+#vid-url,#vid-text{box-sizing:border-box;width:100%;max-width:100%}
+.vidtx{margin:10px 0}.vidtx summary{padding:6px 2px;color:var(--text)}.vidtx textarea{display:block;margin-top:6px;resize:vertical}
+.modes button.on::before{content:"✓ "}
+.modes button:focus-visible{outline:3px solid #fff;outline-offset:2px;box-shadow:0 0 0 5px #2f74e6}
+#run:focus-visible,#vid-probe:focus-visible{outline:3px solid #fff;box-shadow:0 0 0 5px #2f74e6}
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
 }
@@ -427,7 +435,7 @@ button{max-width:100%}
       </div>
       <div id="projBlock">
         <label for="project">프로젝트 폴더 (분석은 아무 폴더, 개선은 git 저장소)</label>
-        <div class="row" style="margin:0;flex-wrap:nowrap"><input type="text" id="project" list="projects" placeholder="/Users/…/프로젝트" autocomplete="off"><button id="browse" title="폴더 찾아보기" style="white-space:nowrap">찾아보기</button></div>
+        <div class="row projrow"><input type="text" id="project" list="projects" placeholder="/Users/…/프로젝트" autocomplete="off"><button id="browse" title="폴더 찾아보기" style="white-space:nowrap">찾아보기</button></div>
         <datalist id="projects"></datalist>
       </div>
       <div id="newBlock" hidden>
@@ -460,10 +468,10 @@ button{max-width:100%}
       </div>
       <div id="vidBlock" hidden>
         <label for="vid-url">유튜브 영상 주소</label>
-        <input type="text" id="vid-url" placeholder="https://www.youtube.com/watch?v=… 또는 https://youtu.be/…" autocomplete="off">
+        <input type="text" id="vid-url" placeholder="예: https://youtu.be/…" autocomplete="off" inputmode="url" spellcheck="false">
         <label class="chk"><input type="checkbox" id="vid-ctx"> 위 프로젝트에 적용할 아이디어도 찾기 (프로젝트의 파일 목록과 README 앞부분을 AI에게 보냅니다)</label>
-        <details><summary>자막을 직접 붙여넣기 (자동 수집이 안 될 때)</summary>
-          <textarea id="vid-text" placeholder="유튜브 영상 아래 ⋯ → '스크립트 표시'에서 복사해 붙여넣으세요. 0:05 같은 시각이 있으면 시각 링크가 만들어집니다." style="min-height:90px"></textarea></details>
+        <details class="vidtx"><summary>자막을 직접 붙여넣기 (자동 수집이 안 될 때)</summary>
+          <textarea id="vid-text" aria-label="자막 직접 입력" placeholder="유튜브 영상 아래 ⋯ → '스크립트 표시'에서 복사해 붙여넣으세요. 0:05 같은 시각이 있으면 시각 링크가 만들어집니다." style="min-height:90px"></textarea></details>
         <div id="vid-cap" class="chips"></div>
         <div class="row"><button id="vid-probe">AI별 영상 직접 시청 시험</button></div>
         <div class="hint">기본은 자막을 읽어 분석합니다(모든 AI 가능, 인용 문장은 자막과 대조해 검증). 위 시험은 각 AI가 영상을 직접 열 수 있는지 확인합니다: 영상의 실제 제목을 맞히면 '확인됨', 틀리면 '추측'입니다.</div>
@@ -2736,6 +2744,7 @@ $("tab-mg").onclick = () => { setTab("mg"); loadInbox(true); };
 $("tab-pj").onclick = () => setTab("pj");
 $("tab-bot").onclick = () => { setTab("bot"); loadBot(); }; setInterval(() => { if (tab === "bot") loadBot(); }, 15000);
 $("tab-dash").onclick = () => setTab("dash"); $("tab-work").onclick = () => setTab("work");
+for (const id of ["project", "vid-url"]){ const f = $(id); const sync = () => { f.title = f.value; }; f.addEventListener("input", sync); f.addEventListener("change", sync); sync(); }
 $("m-run").onclick = () => setMode("run"); $("m-an").onclick = () => setMode("analyze"); $("m-new").onclick = () => setMode("new"); $("m-vid").onclick = () => setMode("video");
 
 setTab(tab); poll().then(loadProjects); setInterval(() => { if (!pendingPoll) poll(); }, 1500); setInterval(tick, 1000);
