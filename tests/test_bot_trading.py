@@ -211,3 +211,12 @@ def test_the_tab_has_the_switch_the_key_menu_and_does_not_wipe_typing():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     for needle in ("거래 모드", "openLiveDialog", "/api/botlab/keys", "/api/botlab/mode", "typing", "type = \"password\"", "페이퍼 전용 프리셋"):
         assert needle in html, needle
+
+
+def test_the_monitor_card_is_really_on_the_bot_tab_and_is_fed_by_the_state(env, tmp_path):
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    assert html.count("봇 자체 모니터") == 1 and "ENA 트레이딩 모니터 열기" in html and "bot.monitor" in html
+    assert env.call("GET", "/api/botlab")[1]["monitor"] is None  # not connected yet: no card
+    connect(env, tmp_path)
+    m = env.call("GET", "/api/botlab")[1]["monitor"]
+    assert m["url"] == "http://127.0.0.1:8787/" and m["up"] in (True, False)

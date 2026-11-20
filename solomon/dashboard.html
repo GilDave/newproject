@@ -644,6 +644,16 @@ function renderBot(){
     "지금은 데이터를 쌓는 단계입니다. 표본이 30건 미만이라 어떤 결론도 내지 않고, 봇은 아무것도 바뀌지 않습니다. 평가와 분석은 자동으로 계속됩니다."));
   if (lat && lat.stale_prices) root.appendChild(el("div", "banner", "가격 새로 받기에 실패해 이전 가격으로 계산했습니다: " + lat.fetch_error));
 
+  // 봇 자체의 모니터 화면
+  if (bot.monitor) {
+    const a = el("a", "", "ENA 트레이딩 모니터 열기 (" + bot.monitor.url + ")"); a.href = bot.monitor.url; a.target = "_blank"; a.rel = "noopener";
+    a.style.cssText = "display:inline-block;padding:7px 14px;border:1px solid #2f74e6;border-radius:8px;color:#cfe0ff;text-decoration:none";
+    const mc = el("div"); mc.appendChild(a);
+    mc.appendChild(el("span", "hint", "  " + (bot.monitor.up ? "● 켜져 있음" : "○ 응답 없음 — 봇 서비스(com.ena.dashboard)가 꺼져 있을 수 있습니다")));
+    mc.appendChild(el("div", "hint", "봇이 직접 보여 주는 읽기 전용 화면입니다(점수 카드·뉴스·가상 계좌). Solomon은 이 화면을 대신하지 않고, 평가와 개선 작업만 맡습니다."));
+    root.appendChild(bcard("🖥 봇 자체 모니터", mc));
+  }
+
   // 자동화
   const bf = {}, tg = (id, label, on) => { const l = el("label", "chk"), i = el("input"); i.type = "checkbox"; i.id = id; bf[id] = i; i.checked = on; l.appendChild(i); l.appendChild(document.createTextNode(" " + label)); return l; };
   const num = (id, v) => { const i = el("input"); i.type = "number"; i.id = id; bf[id] = i; i.value = v; i.min = 1; return i; };
