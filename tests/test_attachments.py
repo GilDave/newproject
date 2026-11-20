@@ -296,3 +296,33 @@ def test_codex_read_only_calls_work_outside_a_git_folder_but_the_builder_keeps_t
     x._images = ["/a/img-1.png"]
     argv = x.build_argv("codex", False)
     assert "--skip-git-repo-check" in argv and argv[-2:] == ["--", "-"] and argv.index("--skip-git-repo-check") < argv.index("-i")
+
+
+# ---------------------------------------------------------------- self-improvement: the test phase and the lock
+def test_tests_never_use_the_real_job_lock(tmp_path):
+    from solomon import joblock
+    assert joblock.lock_path() == tmp_path / "test-job.lock"
+    assert not joblock.is_busy()  # a Solomon job holding the real lock cannot make the project's own tests fail
+
+
+def test_the_screen_says_when_the_whole_test_suite_runs_before_the_first_attempt(tmp_path):
+    from solomon import status
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.test_command = ["python3", "-c", "print('ok')"]
+    s.approved_commands = ["python3"]
+    s.baseline_check = True
+    r = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json()]), "codex": ScriptedProvider("codex", [write_file("src/new.py")])}).run("goal", repo)
+    evs = events(r)
+    names = [e["event"] for e in evs]
+    assert names.index("baseline_start") < names.index("baseline") < names.index("attempt_start")
+    assert "seconds" in next(e for e in evs if e["event"] == "baseline")
+    mid = status.summarize_run("x", evs[:names.index("baseline") ])
+    assert mid.stage_key == "baseline" and "시작 전 점검" in mid.stage and any("수정 전 코드의 테스트를 돌립니다" in t for t in mid.timeline)
+    done = status.summarize_run("x", evs[:names.index("attempt_start")])
+    assert done.stage_key == "build" and any("시작 전 점검 통과" in t for t in done.timeline)
+
+
+def test_the_now_card_names_the_test_phase():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    assert '"수정 전 코드의 테스트를 돌리는 중입니다"' in html and "baseline:0.5" in html

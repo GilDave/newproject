@@ -50,7 +50,7 @@ class RunSummary:
     providers: dict[str, ProviderStats] = field(default_factory=dict)
     timeline: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    stage_key: str = "start"  # start | plan | build | scope | test | review | decide | quota | done
+    stage_key: str = "start"  # start | plan | baseline | build | scope | test | review | decide | quota | done
     roles: dict = field(default_factory=dict)
     calls: list[dict] = field(default_factory=list)  # one entry per finished or failed AI call
     active: Optional[dict] = None  # the call in flight right now: {role, provider, since}
@@ -215,6 +215,14 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.stage = "결정"
             run.timeline.append(f"{clock}  결정권자 {ev.get('provider')}: {ev.get('final')}"
                                 + (f" (원래 {ev.get('decision')})" if ev.get("final") != ev.get("decision") else "") + f" · 확신 {ev.get('confidence')}")
+        elif kind == "baseline_start":
+            run.stage_key = "baseline"
+            run.stage = "시작 전 점검 (수정 전 테스트)"
+            run.timeline.append(f"{clock}  시작 전 점검: 수정 전 코드의 테스트를 돌립니다 ({str(ev.get('command') or '')[:60]})")
+        elif kind == "baseline":
+            run.stage_key = "build"
+            run.stage = "구현 준비"
+            run.timeline.append(f"{clock}  시작 전 점검 {'통과' if ev.get('passed') else '실패'}" + (f" · {ev.get('seconds')}초" if ev.get("seconds") is not None else ""))
         elif kind == "order":
             run.stage_key = "plan"
             run.stage = _STAGE_BY_EVENT[kind]

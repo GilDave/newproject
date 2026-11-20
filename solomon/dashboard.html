@@ -1113,7 +1113,7 @@ function renderDash(){
     else { title.textContent = noun + "을 기다립니다"; sub.textContent = isVid ? "유튜브 주소를 넣고 영상 분석 시작을 누르세요" : "프로젝트 폴더를 넣고 분석 시작을 누르세요"; }
   } else {
     if (cur && cur.live){
-      title.textContent = cur.active ? pname(cur.active.provider) + "가 " + ROLE_KO[cur.active.role] + " 중입니다" : "다음 단계로 넘어가는 중입니다";
+      title.textContent = cur.active ? pname(cur.active.provider) + "가 " + ROLE_KO[cur.active.role] + " 중입니다" : cur.stage_key === "baseline" ? "수정 전 코드의 테스트를 돌리는 중입니다" : "다음 단계로 넘어가는 중입니다";
       sub.textContent = "시도 " + (cur.attempts || 1) + " · " + cur.stage;
     } else if (here && !selectedRun){ title.textContent = "시작하는 중입니다"; sub.textContent = "AI를 호출할 준비를 합니다"; }
     else if (cur && cur.interrupted){ title.textContent = "중단된 실행입니다"; sub.textContent = "끝 기록 없이 멈췄습니다. 비정상 종료일 수 있습니다"; }
@@ -1562,7 +1562,7 @@ function renderReport(cur){
 }
 
 // ------------------------------------------------------------------ work room tab
-const STAGE_ORDER = {plan:0, build:1, scope:1.5, test:1.7, review:2, decide:3, done:4};
+const STAGE_ORDER = {plan:0, baseline:0.5, build:1, scope:1.5, test:1.7, review:2, decide:3, done:4};
 function latestAttempt(cur){ return cur && cur.attempt_details && cur.attempt_details.length ? cur.attempt_details[cur.attempt_details.length - 1] : null; }
 function nextFor(provider, cur, roles){
   if (!cur || !cur.live) return "다음 실행 대기";

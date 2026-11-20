@@ -19,7 +19,10 @@ BUSY = "이미 실행 중인 작업이 있습니다 (터미널이나 다른/이�
 
 
 def lock_path() -> Path:
-    return Path.home() / ".solomon" / "job.lock"
+    """SOLOMON_JOB_LOCK redirects the file. The test suite always does: when Solomon improves Solomon, its own job holds the real lock
+    while the project's tests run, and those tests must never see that lock as 'another job running'."""
+    override = os.environ.get("SOLOMON_JOB_LOCK")
+    return Path(override).expanduser() if override else Path.home() / ".solomon" / "job.lock"
 
 
 def _open():

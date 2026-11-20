@@ -551,9 +551,11 @@ class Orchestrator:
         advise_next = True
 
         if s.baseline_check and s.test_command:
+            log.event("baseline_start", command=" ".join(s.test_command))  # the project's whole test suite runs now: the screen must say so
+            t0 = self._clock()
             base = verify(s, wt)
             gitops.clean_untracked(wt)
-            log.event("baseline", passed=base.passed, exit_code=base.exit_code, command=base.command,
+            log.event("baseline", passed=base.passed, exit_code=base.exit_code, command=base.command, seconds=round(self._clock() - t0, 1),
                       output_tail=base.output_tail[-1500:])
             if not base.passed:
                 result.status = "ERROR"
