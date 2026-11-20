@@ -411,8 +411,10 @@ def test_reset_time_in_the_message_is_used_and_the_board_forgets_after_it():
     assert parse_reset("Claude AI usage limit reached|1900000000", 1000.0) == 1900000000.0
     assert parse_reset("usage limit reached", 1000.0) is None
     b = QuotaBoard()
-    assert b.mark("claude", "limit", 1000.0, 60) == 4600.0
-    assert b.exhausted("claude", 4599.0) and not b.exhausted("claude", 4601.0)
+    assert b.mark("claude", "limit", 1000.0, 60) == 4600.0  # a guess: it is retried after GUESS_RETRY_MIN, long before the guessed end
+    assert b.exhausted("claude", 1000.0 + 60) and not b.exhausted("claude", 4599.0)
+    assert b.mark("claude", "limit|1900000000", 1000.0, 60) == 1900000000.0  # a stated reset time is respected to the end
+    assert b.exhausted("claude", 4599.0) and not b.exhausted("claude", 1900000001.0)
     b.clear("claude")
     assert not b.exhausted("claude", 1001.0)
 

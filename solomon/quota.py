@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 DEFAULT_COOLDOWN_MIN = 120.0
+GUESS_RETRY_MIN = 20.0  # when the CLI did not say when it resets, the end of the wait is only a guess: try the AI again this often
 
 
 def parse_reset(detail: str, now: float) -> Optional[float]:
@@ -55,15 +56,19 @@ class QuotaBoard:
 
     def mark(self, provider: str, detail: str, now: Optional[float] = None, cooldown_min: float = DEFAULT_COOLDOWN_MIN) -> float:
         now = time.time() if now is None else now
-        until = parse_reset(detail, now) or now + cooldown_min * 60
+        known = parse_reset(detail, now)
+        until = known or now + cooldown_min * 60
         data = self._load()
-        data[provider] = {"until": until, "since": now, "detail": (detail or "")[:200]}
+        data[provider] = {"until": until, "since": now, "detail": (detail or "")[:200], "guess": not known}
         self._save(data)
         return until
 
     def until(self, provider: str, now: Optional[float] = None) -> float:
         now = time.time() if now is None else now
-        u = float((self._load().get(provider) or {}).get("until") or 0)
+        e = self._load().get(provider) or {}
+        u = float(e.get("until") or 0)
+        if e.get("guess") and now - float(e.get("since") or 0) >= GUESS_RETRY_MIN * 60:
+            return 0.0  # the usage may have been reset long ago: the next call simply tries this AI again (a new limit marks it again)
         return u if u > now else 0.0
 
     def exhausted(self, provider: str, now: Optional[float] = None) -> bool:
@@ -79,4 +84,4 @@ class QuotaBoard:
 
     def snapshot(self, now: Optional[float] = None) -> dict:
         now = time.time() if now is None else now
-        return {k: v for k, v in self._load().items() if float(v.get("until") or 0) > now}
+        return {k: v for k, v in self._load().items() if self.until(k, now) > 0}
