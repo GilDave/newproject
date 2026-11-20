@@ -224,3 +224,8 @@ def test_the_page_shows_a_job_started_elsewhere_as_busy(env):
     assert env.app.build_state(env.project, None)["job"]["external"]  # the buttons are disabled like for its own job
     held.close()
     assert env.app.job_info()["state"] == "idle"
+
+
+def test_ollama_keeps_the_top_seat_even_without_a_role():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    assert 'provs.some(p => p.name === "ollama") ? "ollama" : null' in html

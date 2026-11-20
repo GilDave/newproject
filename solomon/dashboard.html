@@ -1164,7 +1164,7 @@ function activeCalls(cur, isAn){
 function renderStage(cur, isAn){
   const roles = isAn ? {} : currentRoles(cur), actives = activeCalls(cur, isAn);
   const provs = state.providers, stage = $("stage"), edges = $("edges");
-  const arbName = (!isAn && roles.arbiter && provs.some(p => p.name === roles.arbiter)) ? roles.arbiter : null;
+  const arbName = isAn ? null : (roles.arbiter && provs.some(p => p.name === roles.arbiter)) ? roles.arbiter : (provs.some(p => p.name === "ollama") ? "ollama" : null);  // the decision-maker's seat is on top even while it has no role (Ollama stopped / not chosen yet)
   let pos;
   if (arbName){  // the decision-maker sits above the others; its lines run down to each of them
     const others = provs.filter(p => p.name !== arbName), m = others.length;
