@@ -407,3 +407,13 @@ def test_the_cli_diagram_keeps_its_animation_and_shows_when_solomon_itself_is_wo
                    'path.style.animation = "flow 1s linear infinite"', 'attributeName: "r"', '"직접 작업 중 · "',
                    "animation-iteration-count:1 !important"):  # reduced motion: no flicker from a 0.01ms infinite loop
         assert needle in html, needle
+
+
+def test_the_current_job_card_is_on_top_and_sticks_and_checkboxes_do_not_redraw_the_page():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    main = html.index('<main class="grid" id="view-dash">')
+    assert main < html.index('id="now"') < html.index('<section class="col">', main) < html.index('id="cmd"')  # first thing on the page, before the settings
+    css = next(l for l in html.splitlines() if l.startswith("#now{"))
+    assert "position:sticky" in css and "grid-column:1/-1" in css
+    assert "if (box.dataset.key === key) return;" in html and "window.scrollTo(0, keepY)" in html  # an unchanged list is left alone; a redraw never moves the page
+    assert "renderReport(state.analysis); }; h.appendChild(k)" not in html and "boxes.set(c.id, k)" in html and "refreshFix()" in html

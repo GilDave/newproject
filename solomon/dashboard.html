@@ -310,7 +310,11 @@ button{max-width:100%}
 .row>*{min-width:0}
 .row button{white-space:normal}
 #project,#gi-name,#gi-email{flex:1}
-#now{border-left:3px solid #829fd7}
+#now{grid-column:1/-1;border-left:3px solid #829fd7;position:sticky;top:8px;z-index:6;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 14px;align-items:center;padding:12px 16px;box-shadow:0 8px 18px #0008}
+#now h2{grid-column:1/-1;margin:0 0 2px;font-size:12px;color:var(--dim)}
+#now .now-title{font-size:18px;margin:0}
+#now .timer{grid-row:2/4;grid-column:2;margin:0;font-size:22px}
+#now .tail{grid-column:1/-1;max-height:110px;overflow:auto;margin:8px 0 0}
 .kpi b{font-variant-numeric:tabular-nums}
 .kpis,.pcards,.aigrid,.w5{grid-template-columns:repeat(auto-fit,minmax(min(100%, 270px),1fr))}
 .kpis{grid-template-columns:repeat(auto-fit,minmax(min(100%, 155px),1fr))}
@@ -375,6 +379,14 @@ button{max-width:100%}
 
 <main class="grid" id="view-dash">
   <div class="page-head"><h1>대시보드<span>(개선과 분석을 시작하고 AI의 진행 상황을 확인합니다)</span></h1></div>
+  <div class="card" id="now">
+      <h2>현재 작업</h2>
+      <div class="now-title" id="nowTitle" role="status">불러오는 중…</div>
+      <div class="now-sub" id="nowSub"></div>
+      <div class="timer" id="timer">--:--</div>
+      <pre class="tail" id="tail" hidden></pre>
+  </div>
+
   <section class="col">
     <div class="card" id="cmd">
       <h2>작업 설정</h2>
@@ -445,14 +457,6 @@ button{max-width:100%}
         <button class="danger" id="stop" disabled>■ 중지</button>
       </div>
       <div class="hint" id="cmdhint">원본 프로젝트는 <b>적용</b>을 누르기 전에는 바뀌지 않습니다. 작업은 격리된 복사본에서 이뤄집니다.</div>
-    </div>
-
-    <div class="card" id="now">
-      <h2>현재 작업</h2>
-      <div class="now-title" id="nowTitle" role="status">불러오는 중…</div>
-      <div class="now-sub" id="nowSub"></div>
-      <div class="timer" id="timer">--:--</div>
-      <pre class="tail" id="tail" hidden></pre>
     </div>
 
     <div class="card"><h2>진행 기록</h2><div class="log" id="log"></div></div>
@@ -1471,6 +1475,15 @@ function fixText(c){
     "\n문제: " + m.problem + "\n제안: " + m.suggestion + (m.quote ? "\n해당 코드:\n" + m.quote : "");
 }
 function renderReport(cur){
+  const box = $("report");
+  const key = JSON.stringify([cur && cur.analysis_id, cur && cur.finished, cur && cur.status, cur && cur.clusters.length, cur && Object.values(cur.ais).map(a => a.state + ":" + a.findings),
+    state.job.state, state.project_git, state.test_command && state.test_command.text, state.protect]);
+  if (box.dataset.key === key) return;  // nothing changed: leave the list (and the checkboxes the person is clicking) alone
+  box.dataset.key = key;
+  const keepY = window.scrollY;  // a redraw empties the box for a moment: the page must not jump
+  try { drawReport(cur); } finally { window.scrollTo(0, keepY); }
+}
+function drawReport(cur){
   const box = $("report"); clear(box);
   if (!cur){ box.hidden = true; return; }
   box.hidden = false;
@@ -1491,13 +1504,15 @@ function renderReport(cur){
   const total = Object.keys(cur.ais).length;
   const aid = cur.analysis_id, fixable = cur.clusters.filter(c => c.file && !isProtected(c.file)), shielded = cur.clusters.filter(c => c.file && isProtected(c.file));
   if (!fixSel[aid]) fixSel[aid] = new Set(fixable.filter(c => c.verified && c.severity !== "low").map(c => c.id));
-  const sel = fixSel[aid];
+  const sel = fixSel[aid], boxes = new Map();
+  let refreshFix = () => {};
+  const syncBoxes = () => boxes.forEach((input, id) => { input.checked = sel.has(id); });
   if (fixable.length){
     const bar = el("div", "fixbar");
     bar.appendChild(el("div", "hl", "한 번에 순서대로 자동 수정"));
     const info = el("div", "hint", ""); info.id = "fixInfo"; bar.appendChild(info);
     const r1 = el("div", "row"); r1.style.marginTop = "6px";
-    const mk = (label, fn) => { const b = el("button", "", label); b.style.padding = "5px 11px"; b.style.fontSize = "12px"; b.onclick = () => { fn(); renderReport(state.analysis); }; r1.appendChild(b); };
+    const mk = (label, fn) => { const b = el("button", "", label); b.style.padding = "5px 11px"; b.style.fontSize = "12px"; b.onclick = () => { fn(); syncBoxes(); refreshFix(); }; r1.appendChild(b); };
     mk("전체 선택", () => fixable.forEach(c => sel.add(c.id)));
     mk("근거 확인된 것만", () => { sel.clear(); fixable.filter(c => c.verified).forEach(c => sel.add(c.id)); });
     mk("2개 이상 AI가 지적한 것만", () => { sel.clear(); fixable.filter(c => c.agreement >= 2).forEach(c => sel.add(c.id)); });
@@ -1527,12 +1542,12 @@ function renderReport(cur){
       go.textContent = n ? "▶ 선택한 " + n + "건 전부 순서대로 자동 수정" : "고칠 문제를 선택하세요";
       go.disabled = !n || state.job.state === "running" || state.project_git === false;
     };
-    refresh(); bar.refresh = refresh;
+    refresh(); refreshFix = refresh;
   }
   cur.clusters.forEach(c => {
     const f = el("div", "finding"), h = el("h3");
     if (c.file && isProtected(c.file)) h.appendChild(el("span", "tag STOPPED", "🛡 보호 경로 — 자동 수정 제외")); 
-    else if (c.file){ const k = el("input"); k.type = "checkbox"; k.checked = sel.has(c.id); k.title = "자동 수정 대상에 포함"; k.style.marginRight = "8px"; k.onchange = () => { k.checked ? sel.add(c.id) : sel.delete(c.id); renderReport(state.analysis); }; h.appendChild(k); }
+    else if (c.file){ const k = el("input"); k.type = "checkbox"; k.checked = sel.has(c.id); k.title = "자동 수정 대상에 포함"; k.style.marginRight = "8px"; k.onchange = () => { k.checked ? sel.add(c.id) : sel.delete(c.id); refreshFix(); }; boxes.set(c.id, k); h.appendChild(k); }
     h.appendChild(el("span", "sev " + c.severity, SEV_KO[c.severity])); h.appendChild(document.createTextNode(c.members[0].title)); f.appendChild(h);
     const ev = EV[c.verified ? "verified" : c.members[0].evidence] || EV.unchecked;
     const meta = el("div", "meta", (c.file ? c.file + ":" + c.line_start : "위치 불명") + " · 지적한 AI " + c.ais.map(pname).join(", ") + " (" + c.agreement + "/" + total + ")");
