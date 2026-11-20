@@ -743,6 +743,32 @@ function renderBot(){
     root.appendChild(bcard("🔑 거래소 API 키 — 바이비트 · 바이낸스", kb));
   }
 
+  // 아이폰 알림 (Bark)
+  if (bot.alerts) {
+    const al = bot.alerts, ab = el("div");
+    ab.appendChild(el("div", "hint", "아이폰의 Bark 앱으로 푸시 알림을 보냅니다. 봇이 아니라 Solomon이 봇 DB를 읽기 전용으로 보다가 새 신호·오류가 생기면 보냅니다(봇은 건드리지 않음). 키는 이 컴퓨터의 ~/.solomon에만 저장되고 화면에 다시 보이지 않으며, 암호화 키를 넣으면 알림 내용이 암호화되어 중계 서버가 읽지 못합니다."));
+    ab.appendChild(el("div", al.enabled ? "banner ok" : "hint", al.enabled ? "알림이 켜져 있습니다" + (al.last_sent ? " · 마지막 발송 " + fmtTs(al.last_sent) : "") + (al.last_failure ? " · ⚠ 최근 실패: " + al.last_failure : "") : "알림이 꺼져 있습니다" + (al.key_set ? "" : " — 아래에서 Bark 키를 저장하세요")));
+    ab.appendChild(el("div", "hint", `Bark 키: ${al.key_set ? "저장됨 (…" + al.key_tail + ")" : "없음"} · 암호화 키: ${al.enc_set ? "저장됨" : "없음(암호화 안 함)"}`));
+    const dk = el("input"); dk.type = "password"; dk.placeholder = "Bark 키 (앱의 주소 전체를 붙여넣어도 됩니다)"; dk.autocomplete = "off"; dk.spellcheck = false;
+    const ek = el("input"); ek.type = "text"; ek.placeholder = "암호화 키 (영문·숫자 16자, 선택)"; ek.autocomplete = "off"; ek.spellcheck = false;
+    const gen = el("button", "", "무작위 암호화 키 만들기"); gen.onclick = () => { const cs = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; const a = new Uint32Array(16); crypto.getRandomValues(a); ek.value = Array.from(a, v => cs[v % cs.length]).join(""); toast("이 키를 아이폰 Bark 앱의 푸시 암호화 설정에도 똑같이 넣고(AES128 · CBC · pkcs7), 여기서 저장을 누르세요. 저장하면 다시 볼 수 없습니다."); };
+    dk.style.cssText = ek.style.cssText = "width:100%;margin:4px 0";
+    ab.appendChild(dk); ab.appendChild(ek);
+    const r1 = el("div", "row"); r1.appendChild(gen); ab.appendChild(r1);
+    const mk = (label, on) => { const l = el("label", "chk"), i = el("input"); i.type = "checkbox"; i.checked = on; l.appendChild(i); l.appendChild(document.createTextNode(" " + label)); ab.appendChild(l); return i; };
+    const cs = mk("추세 신호 알림", al.signal), cm = el("select"); [["change", "방향이 바뀌거나 노출이 0.1 이상 변할 때만"], ["every", "4시간마다 매번"]].forEach(([v, t]) => { const o = el("option", "", t); o.value = v; cm.appendChild(o); }); cm.value = al.signal_mode; cm.style.width = "auto"; ab.appendChild(cm);
+    const ce = mk("오류 알림 (30분에 한 번까지)", al.error), cz = mk("봇 응답 없음 알림 (마지막 판단 9시간 경과)", al.stale);
+    const row = el("div", "row");
+    const sv = el("button", "primary", "저장"); sv.onclick = async () => { const body = {action: "save", signal: cs.checked, signal_mode: cm.value, error: ce.checked, stale: cz.checked}; if (dk.value.trim()) body.device_key = dk.value; if (ek.value.trim()) body.enc_key = ek.value; dk.value = ""; ek.value = ""; await botPost("/api/botlab/alerts", body, "저장했습니다."); };
+    const ts = el("button", "", "테스트 알림 보내기"); ts.disabled = !al.key_set; ts.onclick = () => botPost("/api/botlab/alerts", {action: "test"}, "테스트 알림을 보냈습니다.");
+    const on = el("button", al.enabled ? "danger" : "good", al.enabled ? "알림 끄기" : "알림 켜기"); on.disabled = !al.key_set && !al.enabled;
+    on.onclick = () => botPost("/api/botlab/alerts", {action: "save", enabled: !al.enabled}, al.enabled ? "알림을 껐습니다." : "알림을 켰습니다. 지금까지 쌓인 신호는 보내지 않고 이후 것부터 보냅니다.");
+    const fg = el("button", "danger", "키 지우기"); fg.disabled = !al.key_set; fg.onclick = () => { if (confirm("Bark 키와 암호화 키를 지우고 알림을 끕니다. 계속할까요?")) botPost("/api/botlab/alerts", {action: "forget"}, "지웠습니다."); };
+    row.appendChild(sv); row.appendChild(ts); row.appendChild(on); row.appendChild(fg); ab.appendChild(row);
+    ab.appendChild(el("div", "hint", "Bark 앱 암호화 설정: 설정 → 푸시 암호화(Encryption) → 알고리즘 AES128, 모드 CBC, 패딩 pkcs7, 키 = 위의 암호화 키. 테스트 알림이 안 보이면 키를 비우고(암호화 끔) 다시 시험해 어디가 문제인지 가려보세요."));
+    root.appendChild(bcard("🔔 아이폰 알림 (Bark)", ab));
+  }
+
   // 서비스
   const sv2 = bot.services;
   root.appendChild(bcard("🛰 봇 서비스 상태 (읽기 전용)", sv2.available && sv2.items.length ? btable(["서비스", "상태", "마지막 종료 코드"], sv2.items.map(x => [x.label, x.running ? "● 실행 중" : "○ 중지", x.last_exit])) :

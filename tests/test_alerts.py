@@ -1,0 +1,219 @@
+import base64
+import json
+import os
+import shutil
+import sqlite3
+import stat
+import subprocess
+import time
+from pathlib import Path
+
+import pytest
+
+from solomon import alerts as A
+
+from test_botlab import FakeRun, make_bot  # noqa: F401
+from test_dashboard import Env, sleeper
+
+DEVICE = "AbCdEfGh12345678XyZ"
+ENC = "0123456789abcdef"
+
+
+# ---------------------------------------------------------------- the cipher (checked against the standard's own vector and OpenSSL)
+def test_aes_matches_the_fips_197_vector_and_openssl():
+    key = bytes(range(16))
+    assert A._encrypt_block(bytes.fromhex("00112233445566778899aabbccddeeff"), A._expand_key(key)).hex() == "69c4e0d86a7b0430d8cdb78070b4c55a"
+    assert A._SBOX[0x53] == 0xED and A._SBOX[0x00] == 0x63
+    data = "📈 ENA 추세 신호 목표 노출 -0.48 → -0.31".encode()
+    mine = A.aes128_cbc_encrypt(ENC.encode(), b"abcdefghijklmnop", data)
+    if shutil.which("openssl"):
+        out = subprocess.run(["openssl", "enc", "-aes-128-cbc", "-K", ENC.encode().hex(), "-iv", b"abcdefghijklmnop".hex()], input=data, capture_output=True).stdout
+        assert out == mine
+    assert len(mine) % 16 == 0 and len(mine) > len(data)
+    with pytest.raises(ValueError):
+        A.aes128_cbc_encrypt(b"short", b"abcdefghijklmnop", b"x")
+
+
+def test_payload_is_plain_without_a_key_and_encrypted_with_one():
+    plain = A.build_payload(DEVICE, "제목", "내용")
+    assert plain["device_key"] == DEVICE and plain["title"] == "제목" and "ciphertext" not in plain
+    enc = A.build_payload(DEVICE, "제목", "비밀 내용", ENC)
+    assert "title" not in enc and "비밀" not in json.dumps(enc, ensure_ascii=False) and len(enc["iv"]) == 16
+    raw = base64.b64decode(enc["ciphertext"])
+    if shutil.which("openssl"):
+        out = subprocess.run(["openssl", "enc", "-d", "-aes-128-cbc", "-K", ENC.encode().hex(), "-iv", enc["iv"].encode().hex()], input=raw, capture_output=True).stdout
+        assert json.loads(out.decode())["body"] == "비밀 내용"  # a receiver with the key reads it
+    assert A.build_payload(DEVICE, "t", "b", ENC)["iv"] != A.build_payload(DEVICE, "t", "b", ENC)["iv"]  # a fresh iv every time
+
+
+def test_send_reports_success_and_failures_without_leaking_the_key():
+    ok, why = A.send("https://api.day.app", DEVICE, "t", "b", http=lambda u, p: (200, {"code": 200, "message": "success"}))
+    assert ok and why == ""
+    seen = {}
+    A.send("https://api.day.app/", DEVICE, "t", "b", http=lambda u, p: seen.update(u=u) or (200, {}))
+    assert seen["u"] == "https://api.day.app/push"
+    ok, why = A.send("https://api.day.app", DEVICE, "t", "b", http=lambda u, p: (400, {"message": "failed to get device token"}))
+    assert not ok and "받아주지 않았습니다" in why and DEVICE not in why
+
+    def boom(u, p):
+        raise OSError("down")
+
+    assert "연결하지 못했습니다" in A.send("https://api.day.app", DEVICE, "t", "b", http=boom)[1]
+
+
+# ---------------------------------------------------------------- config and secrets
+def make(tmp_path, http=None, now=None):
+    sent = []
+    http = http or (lambda u, p: (sent.append(p) or (200, {"code": 200})))
+    clock = (lambda: now[0]) if now else time.time
+    return A.Alerts(tmp_path / "lab", clock=clock, http=http), sent
+
+
+def test_secrets_are_stored_apart_with_600_and_never_returned(tmp_path):
+    a, _ = make(tmp_path)
+    pub = a.update({"device_key": "https://api.day.app/" + DEVICE + "/title/body", "enc_key": ENC})
+    assert pub["key_set"] and pub["enc_set"] and pub["key_tail"] == DEVICE[-4:]
+    assert DEVICE not in json.dumps(pub) and ENC not in json.dumps(pub)
+    assert stat.S_IMODE(os.stat(a.secret_path).st_mode) == 0o600
+    assert DEVICE in a.secret_path.read_text() and DEVICE not in a.cfg_path.read_text() and ENC not in a.cfg_path.read_text()  # the pasted address was reduced to the key
+    for bad in ({"device_key": "no way!"}, {"enc_key": "tooshort"}, {"server": "http://plain.example"}, {"enabled": True} if False else {"server": "ftp://x"}):
+        with pytest.raises(A.AlertError):
+            a.update(bad)
+    b, _ = make(tmp_path / "other")
+    with pytest.raises(A.AlertError):
+        b.update({"enabled": True})  # nothing to send with yet
+    a.forget()
+    assert not a.secret_path.exists() and not a.public()["key_set"] and not a.public()["enabled"]
+
+
+def test_test_message_is_sent_encrypted_when_a_key_is_set(tmp_path):
+    a, sent = make(tmp_path)
+    a.update({"device_key": DEVICE, "enc_key": ENC})
+    a.test()
+    assert "ciphertext" in sent[0] and "title" not in sent[0]
+    a2, sent2 = make(tmp_path / "p")
+    a2.update({"device_key": DEVICE})
+    a2.test()
+    assert sent2[0]["title"].startswith("🔔")
+    bad, _ = make(tmp_path / "q", http=lambda u, p: (400, {"message": "nope"}))
+    bad.update({"device_key": DEVICE})
+    with pytest.raises(A.AlertError):
+        bad.test()
+    assert "nope" in bad.public()["last_failure"]
+
+
+# ---------------------------------------------------------------- the watcher
+def put(bot, kind, data, ts=None):
+    con = sqlite3.connect(bot / "data" / "bot.db")
+    con.execute("insert into events(ts_ms, kind, data) values (?,?,?)", (ts or int(time.time() * 1000), kind, json.dumps(data)))
+    con.commit()
+    con.close()
+
+
+def cycle(exp, price=0.118, eq=999.8):
+    return {"ts": 1, "price": price, "target_exposure": exp, "equity": eq}
+
+
+def test_first_look_sends_nothing_old_then_only_what_is_worth_telling(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    a, sent = make(tmp_path)
+    put(bot, "trend_cycle", cycle(-0.44))  # already in the log when alerts are switched on: never sent
+    a.update({"device_key": DEVICE, "enabled": True})
+    assert a.tick(bot) == 0 and not sent  # remembers where the log is
+    put(bot, "trend_cycle", cycle(-0.45))
+    put(bot, "trend_cycle", cycle(-0.46))  # a tiny move: not worth a push
+    assert a.tick(bot) == 0 and not sent
+    sent.clear()
+    put(bot, "trend_cycle", cycle(0.30))  # the direction flipped
+    n = a.tick(bot)
+    assert n == 1 and "방향 전환" in sent[0]["title"] and "+0.30" in sent[0]["body"] and "숏" in sent[0]["body"] and "롱" in sent[0]["body"]
+    sent.clear()
+    put(bot, "trend_cycle", cycle(0.31))
+    assert a.tick(bot) == 0 and not sent
+    assert a.tick(bot) == 0  # the same events are never told twice
+
+
+def test_every_mode_errors_and_silence(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    now = [time.time()]
+    a, sent = make(tmp_path, now=now)
+    a.update({"device_key": DEVICE, "enabled": True, "signal_mode": "every"})
+    a.tick(bot)
+    put(bot, "trend_cycle", cycle(0.2), ts=int(now[0] * 1000))
+    put(bot, "error", {"error": "Bybit error 10006: Too many visits"})
+    put(bot, "error", {"error": "second one right after"})
+    a.tick(bot)
+    titles = [p["title"] for p in sent]
+    assert any("추세 신호" in t for t in titles) and titles.count("⚠ ENA 봇 오류") == 1  # two errors, one message
+    sent.clear()
+    now[0] += 12 * 3600  # the bot has said nothing for 12 hours
+    a.tick(bot)
+    assert any("응답 없음" in p["title"] for p in sent)
+    sent.clear()
+    now[0] += 3600
+    a.tick(bot)
+    assert not any("응답 없음" in p["title"] for p in sent)  # not repeated every minute
+
+
+def test_a_failed_send_is_retried_without_losing_the_event(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    up = [False]
+    sent = []
+
+    def http(u, p):
+        if not up[0]:
+            return 502, {"message": "bad gateway"}
+        sent.append(p)
+        return 200, {"code": 200}
+
+    a = A.Alerts(tmp_path / "lab", http=http)
+    put(bot, "trend_cycle", cycle(-0.4))  # what the bot already said before alerts were switched on
+    a.update({"device_key": DEVICE, "enabled": True})
+    a.tick(bot)
+    put(bot, "trend_cycle", cycle(-0.45))  # not worth telling
+    put(bot, "trend_cycle", cycle(0.5))  # the direction flipped
+    assert a.tick(bot) == 0 and "bad gateway" in a.public()["last_failure"]
+    up[0] = True
+    assert a.tick(bot) == 1 and a.public()["last_failure"] == ""  # told once it works again
+
+
+def test_disabled_or_missing_db_does_nothing(tmp_path):
+    a, sent = make(tmp_path)
+    assert a.tick(tmp_path / "nowhere") == 0
+    a.update({"device_key": DEVICE, "enabled": True})
+    assert a.tick(tmp_path / "nowhere") == 0 and not sent
+
+
+# ---------------------------------------------------------------- through the dashboard
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sleeper.calls.clear()
+    e = Env(tmp_path)
+    e.app.botlab._run = FakeRun()
+    sent = []
+    e.app.alerts._http = lambda u, p: (sent.append(p) or (200, {"code": 200}))
+    e.sent = sent
+    yield e
+    e.close()
+
+
+def test_endpoints_save_test_forget_and_never_echo_the_secrets(env, tmp_path):
+    st, body, _ = env.call("POST", "/api/botlab/alerts", {"action": "save", "device_key": DEVICE, "enc_key": ENC})
+    assert st == 200 and body["alerts"]["key_set"] and body["alerts"]["enc_set"]
+    st, body, _ = env.call("POST", "/api/botlab/alerts", {"action": "test"})
+    assert st == 200 and env.sent and "ciphertext" in env.sent[0]
+    for resp in (body, env.call("GET", "/api/botlab")[1]):
+        assert DEVICE not in json.dumps(resp) and ENC not in json.dumps(resp)
+    assert env.call("POST", "/api/botlab/alerts", {"action": "save", "device_key": "bad key!"})[0] == 400
+    assert env.call("POST", "/api/botlab/alerts", {"action": "nope"})[0] == 400
+    assert env.call("POST", "/api/botlab/alerts", {"action": "test"}, token=None)[0] == 401
+    assert env.call("POST", "/api/botlab/alerts", {"action": "forget"})[1]["alerts"]["key_set"] is False
+    for f in tmp_path.rglob("*.log"):
+        assert DEVICE not in f.read_text(errors="ignore") and ENC not in f.read_text(errors="ignore")
+
+
+def test_the_card_is_on_the_bot_tab():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ("🔔 아이폰 알림 (Bark)", "/api/botlab/alerts", "테스트 알림 보내기", "무작위 암호화 키 만들기", "crypto.getRandomValues"):
+        assert needle in html, needle

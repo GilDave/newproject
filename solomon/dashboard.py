@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analysis as analysis_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
+from . import (__version__, analysis as analysis_mod, alerts as alerts_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
                portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
@@ -97,6 +97,7 @@ class DashboardApp:
         self._git_cache: dict[str, tuple[float, bool]] = {}
         self._portfolio_cache: Optional[tuple[float, dict]] = None
         self.botlab = botlab_mod.BotLab(self.store_path.parent / "botlab")
+        self.alerts = alerts_mod.Alerts(self.botlab.dir)
         self._scheduler_stop = threading.Event()
         self.boot = f"{time.time():.3f}"  # changes when the dashboard restarts, so an open page knows to reload itself
         self._load_store()
@@ -650,7 +651,8 @@ class DashboardApp:
                "default_protect": botlab_mod.DEFAULT_PROTECT, "latest": hist[-1] if hist else None, "series": lab.series(hist),
                "services": lab.services(), "health": lab.health(proj) if proj else None, "policy": None, "arbiter_shadow": None,
                "ollama": next((p for p in self.providers_info() if p["name"] == "ollama"), None), "recommended_protect": botlab_mod.PAPER_PROTECT,
-               "trading": None, "keys": None, "keys_check": self._keys_check(), "monitor": self.botlab.monitor() if proj else None}
+               "trading": None, "keys": None, "keys_check": self._keys_check(), "monitor": self.botlab.monitor() if proj else None,
+               "alerts": self.alerts.public()}
         if proj:
             out["keys"] = keys_mod.status(proj)
             out["trading"] = mode_mod.state(proj, out["health"], out["keys_check"], time.time())
@@ -707,6 +709,26 @@ class DashboardApp:
             else:
                 raise ApiError(400, "알 수 없는 동작입니다.")
         except keys_mod.KeyError_ as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        out = self.botlab_state()
+        out["message"] = msg
+        return out
+
+    def botlab_alerts(self, body: dict) -> dict:
+        action = str(body.get("action", ""))
+        try:
+            if action == "save":
+                self.alerts.update(body)
+                msg = "저장했습니다. 키와 암호화 키는 화면에 다시 표시되지 않습니다."
+            elif action == "test":
+                self.alerts.test()
+                msg = "테스트 알림을 보냈습니다. 아이폰을 확인하세요."
+            elif action == "forget":
+                self.alerts.forget()
+                msg = "키를 지우고 알림을 껐습니다."
+            else:
+                raise ApiError(400, "알 수 없는 동작입니다.")
+        except alerts_mod.AlertError as exc:
             raise ApiError(exc.status, exc.message) from exc
         out = self.botlab_state()
         out["message"] = msg
@@ -779,6 +801,19 @@ class DashboardApp:
             except ApiError as exc:
                 if exc.status != 409:  # busy: try again next minute; anything else: record and wait for the next period
                     lab.mark_analyze(exc.message)
+
+    def start_alert_watcher(self) -> None:
+        """A light thread of its own (the evaluation thread can be busy for minutes): looks for new bot events every 20 seconds."""
+        def loop() -> None:
+            while not self._scheduler_stop.wait(20):
+                try:
+                    d = self.botlab.config()["bot_dir"]
+                    if d:
+                        self.alerts.tick(d)
+                except Exception:
+                    pass  # an alert problem must never take the dashboard down
+
+        threading.Thread(target=loop, daemon=True, name="alert-watcher").start()
 
     def start_scheduler(self) -> None:
         def loop() -> None:
@@ -1245,6 +1280,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, app.botlab_config(body))
                 if path == "/api/botlab/keys":
                     return self._json(200, app.botlab_keys(body))
+                if path == "/api/botlab/alerts":
+                    return self._json(200, app.botlab_alerts(body))
                 if path == "/api/botlab/mode":
                     return self._json(200, app.botlab_mode(body))
                 if path == "/api/botlab/policy":
@@ -1340,6 +1377,7 @@ def serve(
     token = _persistent_token()
     app = DashboardApp(settings, projects, config_path)
     app.start_scheduler()
+    app.start_alert_watcher()
     server = None
     for candidate in range(port, port + 10):
         hosts = {f"127.0.0.1:{candidate}", f"localhost:{candidate}"}
