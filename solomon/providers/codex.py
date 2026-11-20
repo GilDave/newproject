@@ -15,9 +15,13 @@ class CodexProvider(CliProvider):
     def build_argv(self, exe: str, write: bool) -> list[str]:
         sandbox = "workspace-write" if write else "read-only"
         imgs = list(getattr(self, "_images", []) or [])
+        if not write:  # a read-only call may run in a folder that is not a git repository (analysis of any folder, the picture test)
+            self_extra = ["--skip-git-repo-check", *self.extra_args]
+        else:
+            self_extra = list(self.extra_args)
         if imgs:  # `--` ends the multi-value --image list so the trailing "-" (prompt from stdin) is not taken as a file
-            return [exe, "exec", "--sandbox", sandbox, *self.extra_args, *[a for i in imgs for a in ("-i", i)], "--", "-"]
-        return [exe, "exec", "--sandbox", sandbox, *self.extra_args, "-"]
+            return [exe, "exec", "--sandbox", sandbox, *self_extra, *[a for i in imgs for a in ("-i", i)], "--", "-"]
+        return [exe, "exec", "--sandbox", sandbox, *self_extra, "-"]
 
     def extract_usage(self, stdout: str, stderr: str):
         return codex_usage(stdout, stderr)

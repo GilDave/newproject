@@ -287,3 +287,12 @@ def test_the_work_room_has_the_same_stop_button_and_labels_its_scopes():
     for needle in ('id="w-stop"', '$("w-stop").onclick = () => $("stop").click()', 'state.job.state !== "running" || !!state.job.external', "(보고 있는 실행 1건)",
                    '$("stop").disabled = !running || !!state.job.external'):
         assert needle in html, needle
+
+
+def test_codex_read_only_calls_work_outside_a_git_folder_but_the_builder_keeps_the_check():
+    x = CodexProvider()
+    assert "--skip-git-repo-check" in x.build_argv("codex", False)  # the picture test and analysis of a plain folder
+    assert "--skip-git-repo-check" not in x.build_argv("codex", True)  # the builder always works in a git worktree
+    x._images = ["/a/img-1.png"]
+    argv = x.build_argv("codex", False)
+    assert "--skip-git-repo-check" in argv and argv[-2:] == ["--", "-"] and argv.index("--skip-git-repo-check") < argv.index("-i")

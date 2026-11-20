@@ -87,7 +87,7 @@ def test_cli_argv_shapes():
     assert "acceptEdits" in write_argv and "--tools" not in write_argv  # a claude builder keeps its tools
     assert ClaudeProvider(readonly_args=[]).build_argv("claude", False) == ["claude", "--print", "--output-format", "json"]
     assert "--bare" not in ClaudeProvider().build_argv("claude", False)
-    assert CodexProvider().build_argv("codex", False) == ["codex", "exec", "--sandbox", "read-only", "-"]
+    assert CodexProvider().build_argv("codex", False) == ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-"]  # read-only calls may run outside a git repository
     assert CodexProvider().build_argv("codex", True)[3] == "workspace-write"
 
 
