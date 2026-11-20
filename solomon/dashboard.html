@@ -204,8 +204,17 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 .kv{display:grid;grid-template-columns:1fr auto;gap:2px 10px;font-size:13px}
 .kv span:nth-child(odd){color:var(--dim)} .kv span:nth-child(even){text-align:right;font-variant-numeric:tabular-nums}
 .pname{font-weight:800;margin-bottom:6px}
-.calls div{display:flex;gap:8px;font-size:12.5px;padding:4px 0;border-bottom:1px solid #131f2e;color:#b9c6d8}
-.calls .bad{color:#ffb3bd}
+.calls{container-type:inline-size}
+.call-row{display:grid;grid-template-columns:8ch minmax(0,1fr) minmax(0,1.3fr);gap:4px 10px;align-items:baseline;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line);color:var(--dim)}
+.call-time,.call-metric{white-space:nowrap;font-variant-numeric:tabular-nums}
+.call-metrics{display:flex;gap:2px 7px;flex-wrap:wrap}
+.call-metric+.call-metric::before{content:"·";margin-right:7px}
+.call-error{overflow-wrap:anywhere}
+.call-row.bad .call-detail{color:#ffb3bd}
+@container (max-width:390px){
+  .call-row{grid-template-columns:8ch minmax(0,1fr);row-gap:1px}
+  .call-detail{grid-column:2}
+}
 .summary{white-space:pre-wrap;word-break:break-word;font-size:13px;color:#c8d3e2;max-height:180px;overflow:auto}
 .warnbox{color:var(--warn);font-size:12.5px;margin-top:6px}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#12202f;border:1px solid #34507a;border-radius:10px;padding:10px 16px;display:none;max-width:80vw;z-index:5}
@@ -259,22 +268,116 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
 .aicard .work-line{margin-top:8px;font-size:12.5px;color:var(--ok)}
 .st-ok{color:var(--ok)}.st-bad{color:var(--bad)}
 @media (max-width:1180px){.grid{grid-template-columns:1fr}.stage{height:440px}.w-steps{grid-template-columns:1fr 1fr}.w-two{grid-template-columns:1fr}}
+:root{
+  color-scheme:dark;
+  --bg:#101317; --panel:#191e25; --panel2:#191e25; --line:#303946;
+  --text:#f2f4f7; --dim:#adbaca; --faint:#8999ad;
+  --accent:#b8ceff; --gutter:clamp(14px,1.5vw,24px);
+}
+body{background:var(--bg);font-size:14px}
+header{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:12px 24px;background:#15191f;padding:14px var(--gutter)}
+header>.spacer{display:none}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text);font-size:20px;letter-spacing:-.04em;line-height:1.15}
+.brand small{margin-top:4px;font-size:11px}
+.brand-mark{display:grid;place-items:center;width:36px;height:36px;border-radius:11px;background:#c9d9ff;color:#182744;font-size:22px;letter-spacing:0}
+.guide{color:var(--dim);font-size:13px;text-underline-offset:4px}
+.connection{color:var(--dim);font-size:12px;min-width:0;overflow-wrap:anywhere}
+.strip{grid-row:2;grid-column:1/-1;justify-self:start;margin:0;max-width:100%;border-radius:8px;background:#1b222c;font-size:12px}
+.strip button{display:flex;gap:8px;align-items:center;min-width:0;padding:0;border:0;background:transparent;text-align:left;font-size:inherit;font-weight:600}
+#stripText{overflow:hidden;text-overflow:ellipsis}
+.strip .need{padding-left:8px;border-left:1px solid var(--line);border-radius:0}
+.ent .hd:is(button){width:100%;padding:0;border:0;background:transparent;text-align:left;font-weight:400;white-space:normal}
+.dirrow:is(button){width:100%;background:transparent;text-align:left;border-width:0 0 1px;border-radius:0}
+.strip .need{flex:none}
+.tabs{margin:0;overflow:auto;scrollbar-width:thin}
+.tabs button{white-space:nowrap;flex:none;padding:8px 12px}
+.tabs button.on,.modes button.on{background:#273852;border-color:#566f98;color:#edf3ff}
+:where(button,a,input,select,textarea,summary,[tabindex]):focus-visible{outline:2px solid #b3caff;outline-offset:2px}
+main{min-width:0;overflow-wrap:anywhere}
+.grid,.pjw,.mg,.work{padding:0 var(--gutter) 32px;gap:18px}
+.grid{grid-template-columns:minmax(300px,360px) minmax(0,1fr) minmax(238px,300px)}
+.grid>section:nth-of-type(2),.grid>section:nth-of-type(3){min-width:0}
+.mg{grid-template-columns:minmax(265px,360px) minmax(0,1fr)}
+.page-head{grid-column:1/-1;padding-block:22px 6px;min-width:0}
+.page-head h1{display:flex;align-items:center;gap:clamp(4px,.8vw,12px);margin:0;font-size:clamp(25px,3vw,36px);line-height:1.2;letter-spacing:-.035em;word-break:keep-all}
+.page-head h1 span{color:var(--dim);font-size:clamp(10px,3.1vw,15px);font-weight:500;line-height:1.35;letter-spacing:0}
+.card,.kpi{background:var(--panel);border-radius:12px;min-width:0;overflow-wrap:anywhere}
+.card{padding:16px}
+.card h2{font-size:15px;letter-spacing:-.02em;line-height:1.35;color:var(--text);text-transform:none;margin-bottom:12px}
+#cmd{border-top:2px solid #8eaef7}
+#run.primary,#pjNew.primary{background:#c6d6ff;border-color:#c6d6ff;color:#192842}
+button{max-width:100%}
+.row>*{min-width:0}
+.row button{white-space:normal}
+#project,#gi-name,#gi-email{flex:1}
+#now{border-left:3px solid #829fd7}
+.kpi b{font-variant-numeric:tabular-nums}
+.kpis,.pcards,.aigrid,.w5{grid-template-columns:repeat(auto-fit,minmax(min(100%, 270px),1fr))}
+.kpis{grid-template-columns:repeat(auto-fit,minmax(min(100%, 155px),1fr))}
+.w-cards,.w-steps{grid-template-columns:repeat(auto-fit,minmax(min(100%, 175px),1fr))}
+.toolbar{flex-wrap:wrap}
+.toolbar h2{font-size:20px;letter-spacing:-.03em}
+.toolbar>select{max-width:100%}
+.w-top span{min-width:0;overflow-wrap:anywhere}
+.stage{height:clamp(420px,42vw,560px);background:radial-gradient(ellipse at center,#1c2b42,#141c27 75%)}
+.bar{flex-wrap:wrap}
+.table-scroll{overflow-x:auto;margin-top:8px}
+.bot-tbl{min-width:max-content;font-variant-numeric:tabular-nums}
+.bot-tbl tbody tr:nth-child(odd){background:#1d2630}
+.modal{display:none;inset:0;max-width:100%;max-height:100%;width:100%;height:100%;margin:0;border:0;color:var(--text);background:transparent}
+.modal[open]{display:flex}
+.modal::backdrop{background:#05080dba}
+.mbox{height:max-content}
+@media(max-width:1250px){
+  .grid{grid-template-columns:minmax(280px,350px) minmax(0,1fr)}
+  .grid>section:nth-of-type(3){grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media(max-width:1000px){
+  header{grid-template-columns:minmax(0,1fr) auto auto;column-gap:12px}
+  .tabs{grid-row:2;grid-column:1/-1}
+  .strip{grid-row:3}
+}
+@media(max-width:730px){
+  .grid,.mg,.w-two{grid-template-columns:minmax(0,1fr)}
+  .grid>section:nth-of-type(3){grid-template-columns:minmax(0,1fr)}
+  .page-head{padding-top:16px}
+  .page-head h1{font-size:clamp(16px,5vw,25px)}
+  .card{padding:13px}
+  .stage{height:420px}
+  .node .orb{scale:.72}
+  .node{max-width:100px}
+  .node .st{overflow-wrap:anywhere}
+  .bar>*{flex:1 1 28%;min-width:0}
+  .sd{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:450px){
+  header{grid-template-columns:minmax(0,1fr) auto}
+  .connection{grid-row:3;grid-column:1/-1}
+  .strip{grid-row:4}
+  .live-row{flex-wrap:wrap}
+  .rgrid{grid-template-columns:35px repeat(3,minmax(0,1fr))}
+  .rgrid select{min-width:0}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
 </style>
 </head>
 <body>
 <header>
-  <div class="brand" id="brand" style="cursor:pointer" title="대시보드로">SOLOMON<small>여러 AI가 서로 검증하며 만듭니다</small></div>
-  <nav class="tabs" aria-label="화면 선택"><button id="tab-dash" class="on">대시보드</button><button id="tab-work">작업실</button><button id="tab-mg">관리 <span id="mgBadge"></span></button><button id="tab-pj">프로젝트</button><button id="tab-bot">🤖 봇 연구실</button></nav>
-  <div class="strip" id="strip" title="지금 하고 있는 일"><span class="led"></span><span id="stripText">대기 중</span><span class="need" id="stripNeed"></span></div>
+  <a class="brand" id="brand" href="#" aria-label="Solomon 대시보드"><span class="brand-mark" aria-hidden="true">S</span><span>Solomon<small>AI 교차 검증 워크스페이스</small></span></a>
+  <nav class="tabs" aria-label="화면 선택"><button id="tab-dash" class="on">대시보드</button><button id="tab-work">작업실</button><button id="tab-mg">관리 <span id="mgBadge"></span></button><button id="tab-pj">프로젝트</button><button id="tab-bot">봇 연구실</button></nav>
+  <div class="strip" id="strip"><button id="stripJob" type="button"><span class="led" aria-hidden="true"></span><span id="stripText">대기 중</span></button><button class="need" id="stripNeed" type="button" hidden></button></div>
   <div class="spacer"></div>
-  <a href="/guide" target="_blank" rel="noopener" style="color:var(--dim);font-size:13px;margin-right:16px">사용 가이드</a>
-  <div><span class="dot" id="dot"></span><span id="conn">연결 중…</span></div>
+  <a class="guide" href="/guide" target="_blank" rel="noopener">사용 가이드</a>
+  <div class="connection" role="status"><span class="dot" id="dot"></span><span id="conn">연결 중…</span></div>
 </header>
 
 <main class="grid" id="view-dash">
+  <div class="page-head"><h1>대시보드<span>(개선과 분석을 시작하고 AI의 진행 상황을 확인합니다)</span></h1></div>
   <section class="col">
     <div class="card" id="cmd">
-      <h2>명령</h2>
+      <h2>작업 설정</h2>
       <div class="modes"><button id="m-run" class="on">개선 · 코드 수정</button><button id="m-an">분석 · 읽기 전용</button><button id="m-new">신규 프로젝트</button><button id="m-vid">영상 분석</button></div>
       <label for="goal" id="goalLabel">목표 (고칠 에러 로그를 그대로 붙여 넣어도 됩니다)</label>
       <textarea id="goal" placeholder="예: 봇이 시작할 때 아래 에러로 죽는다. 원인을 찾아 고쳐줘&#10;(에러 로그 붙여넣기)"></textarea>
@@ -344,9 +447,9 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
       <div class="hint" id="cmdhint">원본 프로젝트는 <b>적용</b>을 누르기 전에는 바뀌지 않습니다. 작업은 격리된 복사본에서 이뤄집니다.</div>
     </div>
 
-    <div class="card" id="now" aria-live="polite">
-      <h2>지금</h2>
-      <div class="now-title" id="nowTitle">불러오는 중…</div>
+    <div class="card" id="now">
+      <h2>현재 작업</h2>
+      <div class="now-title" id="nowTitle" role="status">불러오는 중…</div>
       <div class="now-sub" id="nowSub"></div>
       <div class="timer" id="timer">--:--</div>
       <pre class="tail" id="tail" hidden></pre>
@@ -395,15 +498,14 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
 </main>
 
 <main class="pjw" id="view-bot" hidden>
+  <div class="page-head"><h1>봇 연구실<span>(봇 상태와 평가 결과를 확인하고 설정을 관리합니다)</span></h1></div>
   <section class="kpis" id="botKpi"></section>
+  <div id="botStatus" class="banner" role="status" hidden></div>
   <div id="botBody" class="pjw" style="padding:0"></div>
 </main>
 <main class="pjw" id="view-pj" hidden>
+  <div class="page-head"><h1>프로젝트<span>(등록한 프로젝트와 다음 작업을 확인합니다)</span></h1></div>
   <section class="kpis" id="pjKpi"></section>
-  <section class="card"><h2>단계별 AI 참여 도식 — 단계마다 최대 3개 AI</h2><div id="flowDiagram"></div>
-    <div class="hint">칩을 누르면 대시보드의 역할 배정으로 이동합니다. 범위 검사와 테스트는 AI의 말이 아니라 기계가 판정하고, 적용은 사람이 합니다.</div></section>
-  <section class="card" id="arbCard"><h2>👑 결정권자 성적표 — 판정을 사람의 결정과 비교</h2><div id="arbBody"></div></section>
-  <section class="card"><h2>AI · 모델 성능 (모든 프로젝트 합계, 기록에서 집계)</h2><div class="aigrid" id="pjAIs"></div></section>
   <section>
     <div class="toolbar"><h2 style="margin:0">프로젝트 카드</h2><span class="spacer"></span>
       <select id="pjSort" style="width:auto"><option value="attention">주의 필요한 순</option><option value="recent">최근 활동 순</option><option value="name">이름 순</option></select>
@@ -411,6 +513,10 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
     <div class="pcards" id="pjCards"></div>
     <div class="hint" id="pjRoot"></div>
   </section>
+  <section class="card"><h2>단계별 AI 참여 도식 — 단계마다 최대 3개 AI</h2><div id="flowDiagram"></div>
+    <div class="hint">칩을 누르면 대시보드의 역할 배정으로 이동합니다. 범위 검사와 테스트는 AI의 말이 아니라 기계가 판정하고, 적용은 사람이 합니다.</div></section>
+  <section class="card" id="arbCard"><h2>👑 결정권자 성적표 — 판정을 사람의 결정과 비교</h2><div id="arbBody"></div></section>
+  <section class="card"><h2>AI · 모델 성능 (모든 프로젝트 합계, 기록에서 집계)</h2><div class="aigrid" id="pjAIs"></div></section>
   <section class="card"><h2>휴지통 — 삭제한 프로젝트 (복원 가능)</h2><div id="pjTrash"></div></section>
   <section class="card"><h2>도구 · 설정 — 터미널 대신 여기서</h2>
     <div class="kvt" id="toolInfo"></div>
@@ -426,9 +532,10 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
 </main>
 
 <main class="mg" id="view-mg" hidden>
+  <div class="page-head"><h1>관리<span>(프로젝트별 결과를 검토하고 변경을 적용하거나 커밋합니다)</span></h1></div>
   <section class="col">
     <div class="card"><h2>작업 폴더</h2>
-      <select id="mgProjectSel" title="결과를 볼 프로젝트"></select>
+      <label for="mgProjectSel">결과를 볼 프로젝트</label><select id="mgProjectSel"></select>
       <div id="mgTree" class="hint"></div>
       <div class="row"><button id="mgTest">작업 폴더 테스트 실행</button></div>
       <div id="mgJob" class="hint"></div>
@@ -440,6 +547,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
 </main>
 
 <main class="work" id="view-work" hidden>
+  <div class="page-head"><h1>작업실<span>(단계별 결과와 AI 호출 기록을 확인합니다)</span></h1></div>
   <div class="row" style="margin:0 0 4px"><button id="w-to-mg">이 실행의 5W1H · 적용 (관리 탭)</button><button id="w-to-pj">프로젝트 카드</button><button id="w-to-dash">대시보드로</button></div>
   <div class="card w-top" id="w-top"></div>
   <div class="w-steps" id="w-steps"></div>
@@ -455,7 +563,7 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
   <div class="w-cards" id="w-cards"></div>
   <div class="card"><h2>CLI 연결</h2><svg id="w-cli" viewBox="0 0 560 200" style="width:100%;max-width:640px;height:auto" role="img" aria-label="AI CLI 연결 상태"></svg></div>
 </main>
-<div class="modal" id="modal" hidden><div class="mbox"><div class="mhead"><b id="mTitle"></b><button id="mClose">닫기</button></div><div id="mBody"></div></div></div>
+<dialog class="modal" id="modal" aria-labelledby="mTitle"><div class="mbox"><div class="mhead"><b id="mTitle"></b><button id="mClose">닫기</button></div><div id="mBody"></div></div></dialog>
 <div id="toast" role="status"></div>
 
 <script>
@@ -506,26 +614,36 @@ async function api(path, body){
   }
   let j = {}; try { j = await r.json(); } catch (e) { j = {error: "응답을 해석하지 못했습니다"}; }
   if (r.status === 404 && j.error === "not found") throw new Error("대시보드 서버가 옛 버전입니다. 터미널에서 bash scripts/stop.sh 후 bash scripts/start.sh 로 다시 시작하세요.");
-  if (!r.ok) throw new Error(j.error || ("오류 " + r.status));
+  if (!r.ok || j.error) throw new Error(j.error || ("오류 " + r.status));
   return j;
 }
 
+let pollVersion = 0, pendingPoll = 0;
 async function poll(){
+  const version = ++pollVersion;
+  pendingPoll++;
   try {
     const q = new URLSearchParams();
     if (selectedProject) q.set("project", selectedProject);
     if (selectedRun) q.set("run", selectedRun);
     if (selectedAnalysis) q.set("analysis", selectedAnalysis);
     if (selectedVideo) q.set("video", selectedVideo);
-    state = await api("/api/state?" + q.toString());
+    const next = await api("/api/state?" + q.toString());
+    if (version !== pollVersion) return;
+    if (state && next.project !== state.project) resetInbox();
+    state = next;
+    if (selectedProject && !state.projects.includes(selectedProject)) selectedProject = state.project;
     receivedAt = Date.now();
     if (bootSeen && state.boot !== bootSeen){ location.reload(); return; }
     bootSeen = state.boot;
-    $("dot").className = "dot on"; $("conn").textContent = "연결됨 · v" + state.version;
+    $("dot").className = "dot on";
+    const connection = "연결됨 · v" + state.version;
+    if ($("conn").textContent !== connection) $("conn").textContent = connection;
     render();
   } catch (e) {
+    if (version !== pollVersion) return;
     $("dot").className = "dot off"; $("conn").textContent = TOKEN ? "연결 끊김: " + e.message : "터미널에 표시된 주소로 여세요";
-  }
+  } finally { pendingPoll--; }
 }
 
 function isProtected(file){  // mirrors scope_guard.is_protected: a glob, a file or a folder prefix; "!x" is an exception
@@ -560,16 +678,21 @@ function dur(sec){ sec = Math.max(0, Math.floor(sec || 0)); return sec >= 60 ? M
 function num(n){ return Number(n || 0).toLocaleString("ko-KR"); }
 
 function fillRoleSelects(cur){
+  const providerOptions = JSON.stringify(state.providers.map(p => [p.name, p.installed, p.supports_write, p.local]));
+  const rebuild = fillRoleSelects.options !== providerOptions;
+  fillRoleSelects.options = providerOptions;
   const want = (cur && cur.roles && Object.keys(cur.roles).length) ? cur.roles : state.roles;
   ALL_ROLES.forEach(role => {
     const sel = $("r-" + role), keep = sel.value, optional = isOptRole(role), base = roleBase(role);
-    clear(sel);
-    if (optional){ const none = el("option", "", "없음"); none.value = ""; sel.appendChild(none); }
-    state.providers.forEach(p => {
-      const readOnly = base === "builder" && !p.supports_write;
-      const o = el("option", "", pname(p.name) + (p.local ? " (로컬)" : "") + (p.installed ? "" : " (미설치)") + (readOnly ? (optional ? " (자문만)" : " (구현 불가)") : ""));
-      o.value = p.name; o.disabled = !p.installed || (readOnly && !optional); sel.appendChild(o);
-    });
+    if (rebuild){
+      clear(sel);
+      if (optional){ const none = el("option", "", "없음"); none.value = ""; sel.appendChild(none); }
+      state.providers.forEach(p => {
+        const readOnly = base === "builder" && !p.supports_write;
+        const o = el("option", "", pname(p.name) + (p.local ? " (로컬)" : "") + (p.installed ? "" : " (미설치)") + (readOnly ? (optional ? " (자문만)" : " (구현 불가)") : ""));
+        o.value = p.name; o.disabled = !p.installed || (readOnly && !optional); sel.appendChild(o);
+      });
+    }
     // the next run's decision-maker defaults to the local model when it is connected (an earlier run having had none does not change that)
     const arbDefault = role === "arbiter" && (state.providers.find(p => p.name === "ollama") || {}).installed ? "ollama" : "";
     const target = rolesDirty && keep !== undefined && sel.dataset.touched ? keep : (want[role] || arbDefault);
@@ -590,6 +713,9 @@ function fillRoleSelects(cur){
 
 function fillAnalysisChecks(){
   const box = $("anais"), checked = {};
+  const options = JSON.stringify(state.providers.map(p => [p.name, p.installed, p.default, p.local]));
+  if (box.dataset.options === options) return;
+  box.dataset.options = options;
   box.querySelectorAll("input").forEach(i => checked[i.value] = i.checked);
   clear(box);
   state.providers.forEach(p => {
@@ -601,26 +727,83 @@ function fillAnalysisChecks(){
 
 function setTab(t){
   tab = t; $("view-dash").hidden = t !== "dash"; $("view-work").hidden = t !== "work"; $("view-mg").hidden = t !== "mg"; $("view-pj").hidden = t !== "pj"; $("view-bot").hidden = t !== "bot";
-  $("tab-bot").className = t === "bot" ? "on" : "";
-  $("tab-dash").className = t === "dash" ? "on" : ""; $("tab-work").className = t === "work" ? "on" : ""; $("tab-mg").className = t === "mg" ? "on" : ""; $("tab-pj").className = t === "pj" ? "on" : "";
+  for (const name of ["dash", "work", "mg", "pj", "bot"]){
+    const button = $("tab-" + name);
+    button.classList.toggle("on", t === name);
+    if (t === name) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
   try { history.replaceState(null, "", t === "dash" ? location.pathname : "#" + t); } catch (e) {}
   if (state) render();
+  if (t === "pj"){ renderProjects(); loadProjects(); loadTools(); }
 }
 
 // ---------------------------------------------------------------- 봇 연구실: 실계좌 봇을 읽기 전용으로 평가하고 자동으로 개선안을 만든다
-let bot = null, botBusy = false;
+let bot = null, botBusy = false, botLoading = false, botDirty = false, botVersion = 0;
 const fmtTs = ts => ts ? new Date(ts * 1000).toLocaleString("ko-KR", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "아직 없음";
 const pct = v => v === null || v === undefined ? "-" : Math.round(v * 1000) / 10 + "%";
 async function loadBot(){
-  if (botBusy) return;
-  try { bot = await api("/api/botlab"); } catch (e) { return; }
-  const root = $("botBody"), a = document.activeElement;
-  const typing = (a && root.contains(a) && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) || Array.from(root.querySelectorAll('input[type="password"]')).some(i => i.value);
-  if (!typing) renderBot();  // a refresh must never erase a key someone is in the middle of typing
+  if (botBusy || botLoading) return;
+  const version = ++botVersion;
+  botLoading = true;
+  try {
+    const next = await api("/api/botlab");
+    if (version !== botVersion) return;
+    bot = next;
+    $("botStatus").hidden = true;
+    const active = document.activeElement;
+    const typing = $("botBody").contains(active) && active.matches("input, textarea, select");
+    if (!botDirty && !typing) renderBot();
+  } catch (e) {
+    if (version !== botVersion) return;
+    if (bot){
+      $("botStatus").textContent = "마지막으로 받은 정보를 표시 중입니다. " + e.message;
+      $("botStatus").hidden = false;
+      return;
+    }
+    const retry = el("button", "primary", "다시 연결");
+    retry.onclick = loadBot;
+    clear($("botBody"));
+    $("botBody").appendChild(bcard("봇 연구실에 연결하지 못했습니다", el("p", "hint", e.message), retry));
+  } finally { botLoading = false; }
 }
-async function botPost(path, body, okMsg){ botBusy = true; try { bot = await api(path, body || {}); if (okMsg) toast(okMsg); } catch (e) { toast(e.message || String(e), true); } finally { botBusy = false; } if (bot && bot.config) renderBot(); else loadBot(); }
+async function botPost(path, body, okMsg){
+  if (botBusy) return;
+  botBusy = true;
+  botVersion++;
+  try {
+    const result = await api(path, body || {});
+    toast(result.message || okMsg);
+    if (result.config){
+      $("botStatus").hidden = true;
+      bot = result;
+      botDirty = false;
+      renderBot();
+    }
+  } catch (e) { toast(e.message, true); }
+  finally { botBusy = false; }
+  if (path === "/api/botlab/run") loadBot();
+}
 function bcard(title, ...kids){ const c = el("section", "card"); c.appendChild(el("h2", "", title)); kids.forEach(k => k && c.appendChild(k)); return c; }
-function btable(head, rows){ const t = el("table", "bot-tbl"), h = el("tr"); head.forEach(x => h.appendChild(el("th", "", x))); t.appendChild(h); rows.forEach(r => { const tr = el("tr"); r.forEach(x => tr.appendChild(el("td", "", String(x)))); t.appendChild(tr); }); return t; }
+function btable(head, rows){
+  const wrap = el("div", "table-scroll"), table = el("table", "bot-tbl");
+  wrap.tabIndex = 0;
+  wrap.setAttribute("role", "region");
+  wrap.setAttribute("aria-label", head.join(", "));
+  const heading = table.createTHead().insertRow();
+  head.forEach(value => {
+    const cell = el("th", "", value);
+    cell.scope = "col";
+    heading.appendChild(cell);
+  });
+  const body = table.createTBody();
+  rows.forEach(row => {
+    const tr = body.insertRow();
+    row.forEach(value => { tr.insertCell().textContent = String(value); });
+  });
+  wrap.appendChild(table);
+  return wrap;
+}
 function bprog(n, goal){ const w = el("div", "pbar" + (n >= goal ? " full" : "")), i = el("i"); i.style.width = Math.min(100, n / goal * 100) + "%"; w.appendChild(i); return w; }
 
 function openLiveDialog(tr){
@@ -829,8 +1012,8 @@ function renderBot(){
   root.appendChild(bcard("🛡 보호 구역 — AI가 절대 바꿀 수 없는 파일 (한 줄에 하나)", ta, sh, pr, el("div", "hint", "계획 AI가 빼려 해도 빠지지 않으며, 어떤 경로로 실행해도 적용됩니다. 주문·리스크·실행 루프·키·데이터·서비스 정의가 기본 보호 대상입니다. 이 파일들의 변경은 사람이 직접 합니다.")));
 
   // 개선 작업
-  const go = el("button", "primary", "개선 분석 지금 시작 (3개 AI, 읽기 전용)"); go.onclick = async () => { try { await api("/api/analyze", {project: cfg.bot_dir, focus: bot.focus_hint || "예측과 뉴스 점수를 수익률 개선에 쓸모 있게 만들 방법 (표본 밖 검증 방법 포함)"}); toast("분석을 시작했습니다. 대시보드 탭에서 진행을 볼 수 있습니다."); setTab("dash"); poll(); } catch (e) { toast(e.message || String(e), true); } };
-  const fix = el("button", "", "개선 작업 열기 (작업실에서 3AI 구현)"); fix.onclick = () => { selectedProject = cfg.bot_dir; $("goal").value = "ena-bot의 예측(learn.py/learn2.py)과 뉴스 점수 사용 방식을 개선하세요. 보호 구역 파일은 바꾸지 말고, 변경은 표본 밖 워크포워드로 검증할 수 있게 하세요."; setMode("run"); setTab("dash"); toast("목표를 채웠습니다. 역할을 확인하고 실행하세요 (보호 구역·그림자 모드가 자동 적용됩니다)."); };
+  const go = el("button", "primary", "개선 분석 지금 시작 (3개 AI, 읽기 전용)"); go.onclick = async () => { try { await api("/api/analyze", {project: cfg.bot_dir, focus: bot.focus_hint || "예측과 뉴스 점수를 수익률 개선에 쓸모 있게 만들 방법 (표본 밖 검증 방법 포함)"}); toast("분석을 시작했습니다. 대시보드 탭에서 진행을 볼 수 있습니다."); await openProject(cfg.bot_dir, {tab: "dash", mode: "analyze"}); } catch (e) { toast(e.message || String(e), true); } };
+  const fix = el("button", "", "개선 작업 열기 (작업실에서 3AI 구현)"); fix.onclick = () => { openProject(cfg.bot_dir, {tab: "dash", mode: "run"}); $("goal").value = "ena-bot의 예측(learn.py/learn2.py)과 뉴스 점수 사용 방식을 개선하세요. 보호 구역 파일은 바꾸지 말고, 변경은 표본 밖 워크포워드로 검증할 수 있게 하세요."; toast("목표를 채웠습니다. 역할을 확인하고 실행하세요 (보호 구역·그림자 모드가 자동 적용됩니다)."); };
   root.appendChild(bcard("🔧 개선 작업", el("div", "hint", "분석은 자동으로 주기마다 실행되고, 결과는 대시보드·관리 탭에 쌓입니다. 코드 변경은 격리된 복사본에서만 만들어지며 원본은 사람이 적용할 때만 바뀝니다. 수익률 관문(표본 밖 백테스트로 합격 판정)은 다음 단계입니다: 그 전까지 변경 후보는 반드시 사람이 검토하세요."), (() => { const r = el("div", "row"); r.appendChild(go); r.appendChild(fix); return r; })()));
 }
 
@@ -843,9 +1026,12 @@ function renderCommand(){
   const isVid = mode === "video", isAn = mode === "analyze" || isVid, isNew = mode === "new", running = state.job.state === "running";
   $("roleBlock").hidden = isAn; $("attBlock").hidden = isAn || isNew; $("testBlock").hidden = isAn || isNew; $("anBlock").hidden = !isAn; $("vidBlock").hidden = !isVid;
   $("projBlock").hidden = isNew; $("newBlock").hidden = !isNew; $("batchCard").hidden = isVid;
+  for (const [id, value] of [["m-run", "run"], ["m-an", "analyze"], ["m-new", "new"], ["m-vid", "video"]]){
+    $(id).setAttribute("aria-pressed", String(mode === value));
+  }
   $("goalLabel").textContent = isVid ? "무엇을 중점으로 볼까요? (비워 두면 요약·핵심·확인할 주장·해볼 것 전체)" : isAn ? "분석 요청 (비워 두면 전체 분석. 예: 에러가 날 만한 곳 위주로)" : isNew ? "무엇을 만들까요? (비워 두면 폴더만 만들고 시작하지 않습니다)" : "목표 (고칠 에러 로그를 그대로 붙여 넣어도 됩니다)";
   $("goal").placeholder = isVid ? "예: 손절·리스크 관리 규칙과, 숫자로 검증해야 할 주장 위주로" : isAn ? "예: 시작할 때 죽을 수 있는 곳과 비밀 값 관리가 괜찮은지 봐줘" : "예: 봇이 시작할 때 아래 에러로 죽는다. 원인을 찾아 고쳐줘\n(에러 로그 붙여넣기)";
-  $("run").textContent = isVid ? "▶ 영상 분석 시작" : isAn ? "▶ 분석 시작" : isNew ? "▶ 폴더 만들고 시작" : "▶ 실행";
+  $("run").textContent = isVid ? "▶ 영상 분석 시작" : isAn ? "▶ 분석 시작" : isNew ? ($("goal").value.trim() ? "▶ 폴더 만들고 시작" : "프로젝트 만들기") : "▶ 실행";
   $("cmdhint").innerHTML = "";
   if (isVid){
     $("cmdhint").appendChild(document.createTextNode("선택한 AI가 같은 자막을 각자 읽고 분석합니다. 인용한 문장이 자막에 없으면 '근거 불일치'로 표시됩니다. 결과는 프로젝트 폴더의 .solomon/videos 에 저장됩니다."));
@@ -899,8 +1085,12 @@ function render(){
   renderBatches();
   if (tab === "dash") renderDash(); else if (tab === "work") renderWork();
   renderResultCard(); renderStrip();
-  if (tab === "mg") loadInbox();
-  if (tab === "pj"){ renderProjects(); renderToolOut(); }
+  if (tab === "mg"){
+    if (!inbox) renderManage();
+    else renderManageJob();
+    loadInbox();
+  }
+  if (tab === "pj") renderToolOut();
   tick();
 }
 
@@ -1257,10 +1447,20 @@ function renderRight(cur, isAn){
   if (!cur || !cur.calls.length) c.appendChild(el("div", "hint", "아직 호출이 없습니다."));
 }
 function callRow(x){
-  const d = el("div", x.ok ? "" : "bad");
-  d.appendChild(el("span", "", x.at));
+  const d = el("div", x.ok ? "call-row" : "call-row bad");
+  d.appendChild(el("span", "call-time", x.at));
   d.appendChild(el("span", "", (ROLE_KO[x.role] || x.role) + " · " + pname(x.provider)));
-  d.appendChild(el("span", "", x.ok ? x.sec + "초" + (x.tokens ? " · " + num(x.tokens) + (x.turns ? " · " + x.turns + "턴" : "") : x.estimated ? " · 추정" : "") : "실패 " + (x.error || "")));
+  if (x.ok){
+    const metrics = el("span", "call-detail call-metrics");
+    metrics.appendChild(el("span", "call-metric", x.sec + "초"));
+    if (x.tokens){
+      metrics.appendChild(el("span", "call-metric", num(x.tokens)));
+      if (x.turns) metrics.appendChild(el("span", "call-metric", x.turns + "턴"));
+    } else if (x.estimated) metrics.appendChild(el("span", "call-metric", "추정"));
+    d.appendChild(metrics);
+  } else {
+    d.appendChild(el("span", "call-detail call-error", x.error ? "실패 " + x.error : "실패"));
+  }
   return d;
 }
 
@@ -1407,12 +1607,13 @@ function stepCards(cur, roles){
 function renderWork(){
   const cur = state.current, job = state.job, roles = (cur && cur.roles && Object.keys(cur.roles).length) ? cur.roles : state.roles;
   const running = job.state === "running";
+  $("w-to-mg").disabled = !state.project;
   const top = $("w-top"); clear(top);
   const item = (k, v) => { const s = el("span"); s.appendChild(document.createTextNode(k + " ")); s.appendChild(el("b", "", v)); top.appendChild(s); };
   item("프로젝트", state.project || "—");
   item("최근 기록", cur && cur.timeline.length ? cur.timeline[cur.timeline.length - 1].split("  ")[0] : "없음");
-  item("결정 필요", (inbox ? inbox.pending : state.apply_pending) + "건");  // the same number as the top bar: results that wait for apply / commit
-  item("작업", running ? (job.kind === "analyze" ? "분석 진행 중" : "실행 진행 중") : "대기");
+  item("결정 필요", (inbox ? inbox.pending : state.apply_pending || 0) + "건");  // the same number as the top bar: results that wait for apply / commit
+  item("작업", running ? (KIND_JOB[job.kind] || job.kind) + " 진행 중" : "대기");
 
   const steps = $("w-steps"); clear(steps);
   stepCards(cur, roles).forEach(s => {
@@ -1550,47 +1751,90 @@ function drawCli(){
 }
 
 function tick(){
-  const cur = tab === "dash" && mode === "analyze" ? (state && state.analysis) : (state && state.current);
+  const cur = state && (mode === "video" ? state.video : mode === "analyze" ? state.analysis : state.current);
   if (!cur){ $("timer").textContent = "--:--"; return; }
   const extra = cur.live ? (Date.now() - receivedAt) / 1000 : 0;
   $("timer").textContent = fmt((cur.elapsed_sec || 0) + extra);
 }
 
 // ------------------------------------------------------------------ 관리 탭: 결과함 · 5W1H
-let bootSeen = null, selectedVideo = null, fixSel = {}, fixOpts = {group: true, hours: 6}, portfolioData = null, pjFocus = null, projectsInfo = null, mgDetailAt = 0, inbox = null, mgKey = null, mgDetail = null, mgDiff = null, mgBusy = false, mgLoading = false, mgLast = 0;
+let bootSeen = null, selectedVideo = null, fixSel = {}, fixOpts = {group: true, hours: 6}, portfolioData = null, pjFocus = null, projectsInfo = null, mgDetailAt = 0, inbox = null, mgKey = null, mgDetail = null, mgDiff = null, mgBusy = false, mgLoading = null, mgError = "", mgSelection = 0, mgLast = 0;
 const ST_KO = {pending: "적용 전", applied: "적용됨(미커밋)", committed: "커밋됨", discarded: "폐기함"};
 const KIND_KO = {run: "개선", batch: "밤샘 수정", item: "수정 항목", analysis: "분석", video: "영상 분석"};
 const W5 = [["who", "누가 · Who"], ["what", "무엇을 · What"], ["when", "언제 · When"], ["where", "어디서 · Where"], ["why", "왜 · Why"], ["how", "어떻게 · How"]];
 
-function mgProject(){ return state && state.project; }
+function mgProject(){
+  if (!state || (selectedProject && selectedProject !== state.project)) return null;
+  return state.project;
+}
+function resetInbox(){
+  mgSelection++;
+  mgKey = mgDetail = mgDiff = inbox = null;
+  mgError = "";
+  mgLast = 0;
+  mgLoading = null;
+  $("mgBadge").textContent = "";
+}
 async function loadInbox(force){
   const project = mgProject();
-  if (!project || mgLoading || mgBusy) return;
+  if (!project || mgBusy) return;
+  if (mgLoading && mgLoading.project === project && !force) return mgLoading.request;
   if (!force && Date.now() - mgLast < 2500) return;
-  mgLoading = true;
-  try {
-    inbox = await api("/api/inbox?project=" + encodeURIComponent(project));
-    mgLast = Date.now();
-    $("mgBadge").textContent = inbox.pending ? "(" + inbox.pending + ")" : "";
-    renderManage();
-  } catch (e) { if (!e.offline) toast(e.message, true); }  // a background refresh must not shout while the server restarts
-  mgLoading = false;
+  const load = {project};
+  mgLoading = load;
+  load.request = (async () => {
+    try {
+      const next = await api("/api/inbox?project=" + encodeURIComponent(project));
+      if (mgLoading !== load || mgProject() !== project) return;
+      const changed = JSON.stringify(next) !== JSON.stringify(inbox);
+      inbox = next;
+      mgLast = Date.now();
+      $("mgBadge").textContent = inbox.pending ? "(" + inbox.pending + ")" : "";
+      if (changed) renderManage();
+    } catch (e) {
+      if (force && mgLoading === load) toast(e.message, true);
+    } finally {
+      if (mgLoading === load) mgLoading = null;
+    }
+  })();
+  return load.request;
 }
 async function openKey(key){
-  mgKey = key; mgDetail = null; mgDiff = null; renderManage();
-  try { mgDetail = await api("/api/describe?project=" + encodeURIComponent(mgProject()) + "&key=" + encodeURIComponent(key)); mgDetailAt = Date.now(); } catch (e) { toast(e.message, true); }
-  renderManage();
+  const project = mgProject(), selection = ++mgSelection;
+  if (!project) return;
+  mgKey = key; mgDetail = null; mgDiff = null; mgError = ""; renderManage();
+  try {
+    const detail = await api("/api/describe?project=" + encodeURIComponent(project) + "&key=" + encodeURIComponent(key));
+    if (selection !== mgSelection) return;
+    mgDetail = detail;
+    mgDetailAt = Date.now();
+  } catch (e) {
+    if (selection !== mgSelection) return;
+    mgError = e.message;
+  }
+  renderDetail();
 }
 async function refreshDetail(){
   if (!mgKey || tab !== "mg" || !mgDetail || !mgDetail.live || Date.now() - mgDetailAt < 3000) return;
+  const selection = mgSelection;
   mgDetailAt = Date.now();
-  try { mgDetail = await api("/api/describe?project=" + encodeURIComponent(mgProject()) + "&key=" + encodeURIComponent(mgKey)); renderManage(); } catch (e) {}
+  try {
+    const detail = await api("/api/describe?project=" + encodeURIComponent(mgProject()) + "&key=" + encodeURIComponent(mgKey));
+    if (selection === mgSelection && JSON.stringify(detail) !== JSON.stringify(mgDetail)){
+      mgDetail = detail;
+      renderDetail();
+    }
+  } catch (e) {}
 }
 async function doAct(key, action, extra){
+  if (mgBusy) return;
+  const project = mgProject();
   mgBusy = true;
   try {
-    const r = await api("/api/inbox/action", Object.assign({project: mgProject(), key, action}, extra || {}));
-    toast(r.message); mgBusy = false; mgDiff = null;
+    const r = await api("/api/inbox/action", Object.assign({project, key, action}, extra || {}));
+    toast(r.message); mgBusy = false;
+    if (project !== mgProject()) return;
+    mgDiff = null;
     await loadInbox(true); if (mgKey === key) openKey(key);
   } catch (e) { toast(e.message, true); mgBusy = false; }
 }
@@ -1604,7 +1848,7 @@ function entryButtons(e){
   add("변경 보기", "", async () => { await openKey(e.key); showDiff(e.key); });
   if (e.state === "pending"){
     add("적용", "good", () => confirm("작업 폴더에 적용합니다 (커밋은 하지 않습니다). 계속할까요?") && doAct(e.key, "apply"), e.applicable === false, e.reason);
-    add("폐기", "danger", () => confirm("이 항목을 폐기합니다. 원본은 바뀌지 않습니다." + (e.kind === "batch" ? " 수정 브랜치도 삭제됩니다." : "") + " 계속할까요?") && doAct(e.key, "discard"));
+    add("폐기", "danger", () => confirm("이 항목을 폐기함으로 옮깁니다. 필요하면 복원할 수 있습니다. 계속할까요?") && doAct(e.key, "discard"));
   } else if (e.state === "discarded"){
     add("복원", "good", () => doAct(e.key, "restore"));
   } else if (e.state === "committed" && e.commit){
@@ -1613,20 +1857,28 @@ function entryButtons(e){
     add("테스트 실행", "", () => runTests());
     add("커밋", "good", () => { const m = prompt("커밋 메시지 (이 항목의 파일만 커밋됩니다)", defaultMsg(e)); if (m) doAct(e.key, "commit", {message: m}); });
     add("되돌리기", "danger", () => confirm("적용을 되돌립니다. 계속할까요?") && doAct(e.key, "revert"), e.revertible === false, e.reason);
+    add("되돌리고 폐기", "danger", () => confirm("작업 폴더에서 이 항목의 적용을 되돌리고 폐기함으로 옮깁니다. 계속할까요?") && doAct(e.key, "revert_discard"), e.revertible === false, e.reason);
+    if (e.revertible === false) row.appendChild(el("div", "hint", "되돌리거나 폐기할 수 없습니다. " + (e.reason || "작업 폴더의 변경 내용을 확인하세요.")));
   }
   return row;
 }
 async function showDiff(key){
-  try { mgDiff = await api("/api/diff?project=" + encodeURIComponent(mgProject()) + "&key=" + encodeURIComponent(key)); } catch (e) { toast(e.message, true); }
-  renderManage();
+  if (mgKey !== key) return;
+  const selection = mgSelection;
+  try {
+    const diff = await api("/api/diff?project=" + encodeURIComponent(mgProject()) + "&key=" + encodeURIComponent(key));
+    if (selection !== mgSelection) return;
+    mgDiff = diff;
+    renderDetail();
+  } catch (e) { if (selection === mgSelection) toast(e.message, true); }
 }
 async function runTests(){ try { await api("/api/tests", {project: mgProject()}); toast("작업 폴더 테스트를 시작했습니다."); poll(); } catch (e) { toast(e.message, true); } }
 
 function renderEntry(e, parent, nested){
   const box = el("div", "ent" + (mgKey === e.key ? " sel" : ""));
-  const hd = el("div", "hd");
+  const hd = el(e.key ? "button" : "div", "hd");
   hd.appendChild(el("span", "tag " + (e.state || "pending"), ST_KO[e.state] || e.state || ""));
-  const t = el("div", "ttl", (KIND_KO[e.kind] || e.kind) + " · " + clip(e.title, 90)); hd.appendChild(t);
+  const t = el("span", "ttl", (KIND_KO[e.kind] || e.kind) + " · " + clip(e.title, 90)); hd.appendChild(t);
   if (e.key) hd.onclick = () => openKey(e.key);
   box.appendChild(hd);
   const meta = [];
@@ -1647,10 +1899,15 @@ function renderEntry(e, parent, nested){
       const b = el("button", "good", "충돌 없는 " + okItems.length + "개 항목만 적용"); b.style.marginBottom = "6px";
       b.title = "작업 폴더와 겹치지 않는 항목만 순서대로 적용합니다. 나머지는 그대로 두고 따로 판단하세요.";
       b.onclick = async () => {
-        if (!confirm("작업 폴더와 충돌하지 않는 " + okItems.length + "개 항목만 순서대로 적용합니다. 커밋은 하지 않습니다. 계속할까요?")) return;
+        if (mgBusy || !confirm("작업 폴더와 충돌하지 않는 " + okItems.length + "개 항목만 순서대로 적용합니다. 커밋은 하지 않습니다. 계속할까요?")) return;
+        const project = mgProject();
+        mgBusy = true;
+        b.disabled = true;
         let done = 0, skipped = [];
-        for (const it of okItems){ try { await api("/api/inbox/action", {project: mgProject(), key: it.key, action: "apply", message: ""}); done++; } catch (err) { skipped.push(clip(it.title, 30) + ": " + err.message); } }
+        for (const it of okItems){ try { await api("/api/inbox/action", {project, key: it.key, action: "apply", message: ""}); done++; } catch (err) { skipped.push(clip(it.title, 30) + ": " + err.message); } }
         toast(done + "개 적용" + (skipped.length ? ", " + skipped.length + "개는 적용하지 못했습니다: " + skipped[0] : "") + ". 커밋은 하지 않았습니다.", skipped.length > 0);
+        mgBusy = false;
+        b.disabled = false;
         loadInbox(true); poll();
       };
       sub.appendChild(b);
@@ -1658,9 +1915,9 @@ function renderEntry(e, parent, nested){
     e.items.forEach(it => {
       const row = it.key && it.files ? it : null;
       const r = el("div", "ent"); r.style.marginBottom = "6px";
-      const h = el("div", "hd");
+      const h = el(it.key ? "button" : "div", "hd");
       h.appendChild(el("span", "tag " + (it.state || (it.status === "PASSED" ? "pending" : it.status)), it.state ? (ST_KO[it.state] || it.state) : (STATUS_KO[it.status] || it.status)));
-      h.appendChild(el("div", "ttl", clip(it.title, 80)));
+      h.appendChild(el("span", "ttl", clip(it.title, 80)));
       if (it.key) h.onclick = () => openKey(it.key);
       r.appendChild(h);
       r.appendChild(el("div", "meta", [it.severity, it.file, it.commit && ("커밋 " + it.commit), it.attempts && ("시도 " + it.attempts + "번")].filter(Boolean).join(" · ") + (it.status !== "PASSED" && it.summary ? " — " + clip(String(it.summary).split("\n")[0], 90) : "")));
@@ -1680,7 +1937,14 @@ function renderManage(){
     clear(ps); state.projects.forEach(p => { const o = el("option", "", p.split("/").pop() + "  —  " + p); o.value = p; ps.appendChild(o); });
     ps.value = state.project; ps.dataset.sig = state.projects.join("|") + "|" + state.project;
   }
-  if (!inbox) return;
+  if (!inbox){
+    $("mgTree").textContent = state.project || selectedProject ? "결과함을 불러오는 중…" : "먼저 프로젝트를 선택하세요.";
+    $("mgTest").disabled = true;
+    for (const id of ["mgEntries", "mgHistory", "mgJob"]) clear($(id));
+    delete $("mgJob").dataset.signature;
+    renderDetail();
+    return;
+  }
   const tree = $("mgTree"); clear(tree);
   if (inbox.not_git){ tree.textContent = "git 저장소가 아니어서 적용·커밋 관리를 할 수 없습니다 (분석 결과 보기는 가능)."; }
   else {
@@ -1688,9 +1952,7 @@ function renderManage(){
     if (inbox.dirty.length) { const d = el("div", "hint", inbox.dirty.slice(0, 12).join(", ") + (inbox.dirty.length > 12 ? " …" : "")); tree.appendChild(d); }
     tree.appendChild(el("div", "hint", "테스트 명령: " + (inbox.test_command || "없음")));
   }
-  $("mgTest").disabled = !inbox.test_command || (state.job.state === "running");
-  const job = $("mgJob"); clear(job);
-  if (state.job.kind === "tests"){ job.appendChild(el("div", "", state.job.state === "running" ? "🔄 테스트 실행 중…" : "테스트 끝 (종료 코드 " + state.job.exit_code + ")")); if (state.job.log_tail){ const p = el("pre", "diff"); p.textContent = state.job.log_tail; job.appendChild(p); } }
+  renderManageJob();
   const box = $("mgEntries"); clear(box);
   const open = inbox.entries.filter(e => e.state === "pending" || e.state === "applied");
   const done = inbox.entries.filter(e => !(e.state === "pending" || e.state === "applied"));
@@ -1702,10 +1964,24 @@ function renderManage(){
   renderDetail();
 }
 
+function renderManageJob(){
+  const job = state.job;
+  $("mgTest").disabled = !inbox.test_command || job.state === "running";
+  const box = $("mgJob");
+  const here = job.kind === "tests" && job.project === mgProject();
+  const text = !here ? "" : job.state === "running" ? "테스트 실행 중…" : "테스트 완료 · 종료 코드 " + job.exit_code;
+  const tail = here ? job.log_tail || "" : "";
+  const signature = JSON.stringify([text, tail]);
+  if (box.dataset.signature === signature) return;
+  box.dataset.signature = signature;
+  box.textContent = text;
+  if (tail) box.appendChild(el("pre", "diff", tail));
+}
+
 function renderDetail(){
   const box = $("mgDetail"); clear(box);
   if (!mgKey){ const c = el("div", "card"); c.appendChild(el("div", "hint", "왼쪽에서 항목을 고르면 누가·무엇을·언제·어디서·왜·어떻게를 한눈에 봅니다.")); box.appendChild(c); return; }
-  if (!mgDetail){ const c = el("div", "card"); c.appendChild(el("div", "hint", "불러오는 중…")); box.appendChild(c); return; }
+  if (!mgDetail){ const c = el("div", "card"); c.appendChild(el("div", "hint", mgError || "불러오는 중…")); box.appendChild(c); return; }
   const head = el("div", "card");
   head.appendChild(el("div", "hl", mgDetail.headline));
   head.appendChild(el("div", "hint", (KIND_KO[mgDetail.kind] || mgDetail.kind) + " 번호 " + mgDetail.id));
@@ -1763,12 +2039,13 @@ let resCache = {};
 async function renderResultCard(){
   const cur = state && state.current;
   const box = $("summary");
-  if (tab !== "dash" || mode === "analyze" || !cur || !cur.finished || !state.project) return;
+  if (tab !== "dash" || mode !== "run" || !cur || !cur.finished || !state.project) return;
   const key = "run:" + cur.run_id;
-  let d = resCache[key];
+  const cacheKey = state.project + "\n" + key;
+  let d = resCache[cacheKey];
   if (!d){
-    resCache[key] = "loading";
-    try { resCache[key] = await api("/api/describe?project=" + encodeURIComponent(state.project) + "&key=" + encodeURIComponent(key)); render(); } catch (e) { delete resCache[key]; }
+    resCache[cacheKey] = "loading";
+    try { resCache[cacheKey] = await api("/api/describe?project=" + encodeURIComponent(state.project) + "&key=" + encodeURIComponent(key)); render(); } catch (e) { delete resCache[cacheKey]; }
     return;
   }
   if (d === "loading") return;
@@ -1862,15 +2139,32 @@ function renderVideoReport(cur){
 
 // ------------------------------------------------------------------ 폴더 찾아보기 · 프로젝트 편집 · 도구 (터미널 없이)
 let toolsInfo = null, toolOutShown = "";
-function openModal(title){ $("mTitle").textContent = title; clear($("mBody")); $("modal").hidden = false; return $("mBody"); }
-function closeModal(){ $("modal").hidden = true; }
+function openModal(title){
+  $("mTitle").textContent = title;
+  clear($("mBody"));
+  if (!$("modal").open) $("modal").showModal();
+  $("mClose").focus();
+  return $("mBody");
+}
+function closeModal(){ $("modal").close(); }
 
 async function openBrowser(title, onPick, start){
   const body = openModal(title);
+  const folderView = el("div");
+  body.appendChild(folderView);
+  let folderRequest = 0;
   const load = async (path) => {
-    clear(body);
-    let d; try { d = await api("/api/browse" + (path ? "?path=" + encodeURIComponent(path) : "")); } catch (e) { body.appendChild(el("div", "ev bad", e.message)); return; }
-    const cr = el("div", "crumbs"); d.crumbs.forEach((c, i) => { const b = el("button", "", c.name); b.onclick = () => load(c.path); cr.appendChild(b); if (i < d.crumbs.length - 1) cr.appendChild(el("span", "", "›")); }); body.appendChild(cr);
+    const request = ++folderRequest;
+    folderView.textContent = "폴더 목록을 불러오는 중…";
+    let d;
+    try { d = await api("/api/browse" + (path ? "?path=" + encodeURIComponent(path) : "")); }
+    catch (e) {
+      if (request === folderRequest) folderView.textContent = e.message;
+      return;
+    }
+    if (request !== folderRequest) return;
+    clear(folderView);
+    const cr = el("div", "crumbs"); d.crumbs.forEach((c, i) => { const b = el("button", "", c.name); b.onclick = () => load(c.path); cr.appendChild(b); if (i < d.crumbs.length - 1) cr.appendChild(el("span", "", "›")); }); folderView.appendChild(cr);
     const mk = el("div", "row"); mk.style.margin = "0 0 8px"; mk.style.flexWrap = "nowrap";
     const nameIn = el("input"); nameIn.type = "text"; nameIn.placeholder = "새 폴더 이름 (예: my-bot)"; nameIn.maxLength = 80;
     const mkBtn = el("button", "", "＋ 새 폴더 만들기");
@@ -1879,23 +2173,23 @@ async function openBrowser(title, onPick, start){
       try { const r = await api("/api/folders/mkdir", {parent: d.path, name}); toast(r.message); load(r.path); } catch (e) { toast(e.message, true); }
     };
     mkBtn.onclick = make; nameIn.addEventListener("keydown", (ev) => { if (ev.key === "Enter") make(); });
-    mk.appendChild(nameIn); mk.appendChild(mkBtn); body.appendChild(mk);
+    mk.appendChild(nameIn); mk.appendChild(mkBtn); folderView.appendChild(mk);
     const pick = el("div", "row"); pick.style.margin = "0 0 8px";
     const sel = el("button", "primary", "이 폴더 선택: " + d.path.split("/").pop()); sel.onclick = () => { closeModal(); onPick(d.path); }; pick.appendChild(sel);
     if (d.parent !== undefined && d.parent){ const up = el("button", "", "↑ 위로"); up.onclick = () => load(d.parent); pick.appendChild(up); }
-    body.appendChild(pick);
+    folderView.appendChild(pick);
     const list = el("div", "dirlist");
     if (!d.dirs.length) list.appendChild(el("div", "hint", "하위 폴더가 없습니다. 위의 '이 폴더 선택'으로 이 폴더를 고르세요."));
     d.dirs.forEach(x => {
-      const r = el("div", "dirrow"); r.appendChild(el("span", "dn", "📁 " + x.name));
+      const r = el("button", "dirrow"); r.appendChild(el("span", "dn", "📁 " + x.name));
       if (x.solomon) r.appendChild(el("span", "tag PASSED", "Solomon"));
       if (x.git) r.appendChild(el("span", "tag", "git"));
       if (x.registered) r.appendChild(el("span", "tag LIVE", "등록됨"));
       r.onclick = () => load(x.path); list.appendChild(r);
     });
-    body.appendChild(list);
-    if (d.truncated) body.appendChild(el("div", "hint", "폴더가 많아 일부만 표시했습니다."));
-    body.appendChild(el("div", "hint", "홈 폴더 안의 폴더만 보입니다 (숨김 폴더 제외). 폴더 이름을 누르면 안으로 들어갑니다. 새 폴더를 만들면 그 폴더 안으로 들어가니 '이 폴더 선택'을 누르세요."));
+    folderView.appendChild(list);
+    if (d.truncated) folderView.appendChild(el("div", "hint", "폴더가 많아 일부만 표시했습니다."));
+    folderView.appendChild(el("div", "hint", "홈 폴더 안의 폴더만 보입니다 (숨김 폴더 제외). 폴더 이름을 누르면 안으로 들어갑니다. 새 폴더를 만들면 그 폴더 안으로 들어가니 '이 폴더 선택'을 누르세요."));
   };
   load(start || "");
 }
@@ -2006,10 +2300,13 @@ async function openProject(path, o){
   o = o || {};
   selectedProject = path; $("project").value = path; selectedRun = null; selectedAnalysis = null; selectedVideo = null; lastProject = path;
   if (o.mode) setMode(o.mode);
-  mgKey = o.key || null; mgDetail = null; mgDiff = null; inbox = null;
+  resetInbox();
   setTab(o.tab || "dash");
   await poll();
-  if (o.tab === "mg"){ await loadInbox(true); if (o.key) openKey(o.key); }
+  if (o.tab === "mg" && mgProject() === path){
+    await loadInbox(true);
+    if (o.key && mgProject() === path) openKey(o.key);
+  }
   if (o.scroll) { const t = $(o.scroll); if (t) t.scrollIntoView({behavior: "smooth", block: "center"}); }
 }
 function goNext(c){
@@ -2189,21 +2486,28 @@ function renderStrip(){
   const job = state.job, running = job.state === "running";
   strip.className = "strip" + (running ? " busy" : "");
   if (running){
-    const cur = job.kind === "analyze" ? state.analysis : state.current;
+    const cur = job.project !== state.project ? null : job.kind === "analyze" ? state.analysis : job.kind === "video" ? state.video : job.kind === "run" ? state.current : null;
     const stage = cur && cur.stage ? " · " + cur.stage : "";
     txt.textContent = "🔄 " + (KIND_JOB[job.kind] || job.kind) + " 진행 중 · " + clip(job.goal, 28) + stage + " · " + dur(Date.now() / 1000 - job.started);
-    strip.onclick = () => { setTab(job.kind === "run" ? "work" : "dash"); };
   } else {
     txt.textContent = job.state === "exited" ? "방금 끝난 작업: " + (KIND_JOB[job.kind] || job.kind) + " (종료 코드 " + job.exit_code + ")" : "대기 중";
-    strip.onclick = () => { setTab("dash"); };
   }
   const n = inbox ? inbox.pending : 0;
-  need.textContent = n ? " · 결정 필요 " + n + "건" : "";
-  if (n) need.onclick = (ev) => { ev.stopPropagation(); setTab("mg"); loadInbox(true); };
-  else need.onclick = null;
+  need.textContent = "결정 필요 " + n + "건";
+  need.hidden = !n;
 }
 
 // ------------------------------------------------------------------ actions
+$("stripNeed").onclick = () => { setTab("mg"); loadInbox(true); };
+$("stripJob").onclick = () => {
+  const job = state && state.job;
+  if (!job || job.state === "idle") return setTab("dash");
+  if (job.kind === "tool"){ setTab("pj"); $("toolOut").scrollIntoView({block: "nearest"}); return; }
+  const target = job.kind === "run" ? "work" : job.kind === "tests" ? "mg" : "dash";
+  const jobMode = job.kind === "analyze" ? "analyze" : ["video", "videoprobe"].includes(job.kind) ? "video" : "run";
+  if (job.project) openProject(job.project, {tab: target, mode: jobMode});
+  else setTab(target);
+};
 $("run").onclick = async () => {
   const goal = $("goal").value.trim(), project = $("project").value.trim(), isAn = mode === "analyze", isNew = mode === "new";
   if (mode === "video"){
@@ -2234,11 +2538,11 @@ $("run").onclick = async () => {
   }
   if (!isAn && !goal) return toast("목표를 입력하세요.", true);
   if (!project) return toast("프로젝트 폴더를 입력하세요.", true);
+  const ais = [...$("anais").querySelectorAll("input:checked:not(:disabled)")].map(i => i.value);
+  if (isAn && !ais.length) return toast("분석에 참여할 AI를 하나 이상 고르세요.", true);
   busy = true; $("run").disabled = true;
   try {
     if (isAn){
-      const ais = [...$("anais").querySelectorAll("input")].filter(i => i.checked && !i.disabled).map(i => i.value);
-      if (!ais.length){ busy = false; return toast("분석에 참여할 AI를 하나 이상 고르세요.", true); }
       await api("/api/analyze", {project, focus: goal, ais}); selectedProject = project; selectedAnalysis = null; toast("분석을 시작했습니다.");
     } else {
       const roles = collectRoles();
@@ -2295,16 +2599,15 @@ $("savetest").onclick = async () => {
 };
 ALL_ROLES.forEach(r => $("r-" + r).addEventListener("change", (ev) => { ev.target.dataset.touched = "1"; rolesDirty = true; if (state) render(); }));
 $("project").addEventListener("change", () => { const v = $("project").value.trim(); if (state && state.projects.includes(v)){ selectedProject = v; selectedRun = null; selectedAnalysis = null; selectedVideo = null; poll(); } });
-$("brand").onclick = () => setTab("dash");
+$("brand").onclick = (event) => { event.preventDefault(); setTab("dash"); };
 $("fxDemo").onclick = () => FX.isDemo() ? FX.stop() : FX.demo();
 new ResizeObserver(() => FX.resize()).observe($("stage"));
 $("w-to-dash").onclick = () => setTab("dash");
-$("w-to-pj").onclick = () => { setTab("pj"); loadProjects(); };
+$("w-to-pj").onclick = () => setTab("pj");
 $("w-to-mg").onclick = () => { const c = state && state.current; if (c) openProject(state.project, {tab: "mg", key: "run:" + c.run_id}); else openProject(state.project, {tab: "mg"}); };
 $("mgTest").onclick = () => runTests();
 $("mClose").onclick = closeModal;
 $("modal").addEventListener("click", (ev) => { if (ev.target === $("modal")) closeModal(); });
-document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("modal").hidden) closeModal(); });
 $("browse").onclick = () => openBrowser("프로젝트 폴더 고르기", async (path) => {
   try { await api("/api/project", {path}); selectedProject = path; $("project").value = path; selectedRun = null; selectedAnalysis = null; selectedVideo = null; toast("프로젝트로 등록했습니다."); poll(); loadProjects(); } catch (e) { toast(e.message, true); }
 }, $("project").value.trim() || "");
@@ -2334,15 +2637,18 @@ $("pjNew").onclick = () => { setMode("new"); setTab("dash"); $("np-name").focus(
 $("pjSort").onchange = () => renderProjects();
 $("mgProjectSel").onchange = (ev) => openProject(ev.target.value, {tab: "mg"});
 $("tab-mg").onclick = () => { setTab("mg"); loadInbox(true); };
-$("tab-pj").onclick = () => { setTab("pj"); loadProjects(); loadTools(); };
+$("tab-pj").onclick = () => setTab("pj");
 $("tab-bot").onclick = () => { setTab("bot"); loadBot(); }; setInterval(() => { if (tab === "bot") loadBot(); }, 15000);
 $("tab-dash").onclick = () => setTab("dash"); $("tab-work").onclick = () => setTab("work");
 $("m-run").onclick = () => setMode("run"); $("m-an").onclick = () => setMode("analyze"); $("m-new").onclick = () => setMode("new"); $("m-vid").onclick = () => setMode("video");
 
-setTab(tab); poll(); loadProjects(); setInterval(poll, 1500); setInterval(tick, 1000);
+setTab(tab); poll().then(loadProjects); setInterval(() => { if (!pendingPoll) poll(); }, 1500); setInterval(tick, 1000);
 setInterval(() => { refreshDetail(); if (state && state.project && tab !== "mg") loadInbox(false).then(renderStrip); }, 4000);
 setInterval(() => { if (tab === "pj") loadProjects(); }, 5000);
-$("np-name").addEventListener("input", () => { if (state) renderCommand(); });
+for (const id of ["np-name", "goal"]){
+  $(id).addEventListener("input", () => { if (state && mode === "new") renderCommand(); });
+}
+$("botBody").addEventListener("input", () => { botDirty = true; });
 </script>
 </body>
 </html>

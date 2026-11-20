@@ -120,11 +120,12 @@ def test_the_status_lists_the_pictures_of_a_run(tmp_path):
 
 
 # ---------------------------------------------------------------- the CLIs get the folder and may read it
-def test_claude_and_codex_command_lines_carry_the_pictures():
+def test_claude_and_codex_command_lines_carry_the_pictures(tmp_path):
     c = ClaudeProvider()
-    c._images = ["/home/x/.solomon/attachments/20261120-1/img-1.png"]
+    folder = tmp_path.resolve() / ".solomon" / "attachments" / "20261120-1"
+    c._images = [str(folder / "img-1.png")]
     ro = c.build_argv("claude", False)
-    assert ro[ro.index("--tools") + 1] == "Read" and "--add-dir" in ro and "/home/x/.solomon/attachments/20261120-1" in ro
+    assert ro[ro.index("--tools") + 1] == "Read" and ro[ro.index("--add-dir") + 1] == str(folder)
     wr = c.build_argv("claude", True)
     assert "--add-dir" in wr and "--permission-mode" in wr and "--tools" not in wr  # the builder keeps its normal tools
     c._images = []
