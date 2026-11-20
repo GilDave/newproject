@@ -128,3 +128,16 @@ def visual_note(images: list[str], can_see: bool) -> str:
             + "\nFAIL if: the layout is broken, text overlaps or is cut off, something looks empty or glitched, an error is shown, "
               "or the picture does not look like what the goal asks for. Say in \"issues\" (Korean) what you saw in the pictures. "
               "Do not use PASS unless you actually looked at them.\n")
+
+
+def attachment_note(names: list[str], can_see: bool) -> str:
+    """The user's own screenshots of the problem (an error shown in a browser, a broken layout ...)."""
+    if not names:
+        return ""
+    if not can_see:
+        return ("\n\nATTACHED SCREENSHOTS: the user attached " + str(len(names)) + " screenshot(s) of the problem, but you cannot view images. "
+                "Rely on the written goal and do not guess what the pictures show.\n")
+    return ("\n\nATTACHED SCREENSHOTS: the user attached screenshots of the problem (image files, open and LOOK at each one):\n"
+            + "\n".join(f"- {n}" for n in names)
+            + "\nThey show what the user sees: error messages, wrong values, a broken layout. Treat what you read in them (texts, numbers, "
+              "messages) as FACTS about the problem, together with the written goal. If a picture contradicts the goal text, say so in your answer.\n")

@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analysis as analysis_mod, alerts as alerts_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
+from . import (__version__, analysis as analysis_mod, alerts as alerts_mod, attachments as attach_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
                portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
@@ -39,7 +39,7 @@ RUN_ID = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
 PERSIST_MINUTES = 180  # the dashboard's 'keep trying' stops after this long
 PERSIST_ATTEMPTS = 24  # ... or after this many attempts: a backstop behind the repeated-failure detection
 MAX_GOAL = 20000  # long enough to paste a stack trace
-MAX_BODY = 2 * 1024 * 1024  # a pasted video transcript can be long (the page is local-only and token-protected)
+MAX_BODY = 16 * 1024 * 1024  # a pasted video transcript or up to four screenshots (the page is local-only and token-protected)
 HTML_PATH = Path(__file__).with_name("dashboard.html")
 VENDORS = {"claude": "Anthropic", "codex": "OpenAI", "antigravity": "Google"}
 
@@ -320,6 +320,16 @@ class DashboardApp:
         if not (self._SHOT_RUN.match(run) and attempt.isdigit() and len(attempt) <= 4 and self._SHOT_NAME.match(name)) or ".." in run:
             raise ApiError(400, "잘못된 요청입니다.")
         root = (Path(project) / self.settings.state_dir / "runs" / run / "shots" / f"attempt-{int(attempt)}").resolve()
+        f = (root / name).resolve()
+        if root not in f.parents or not f.is_file():
+            raise ApiError(404, "이미지를 찾지 못했습니다.")
+        return f
+
+    def attachment_path(self, project: str, run: str, name: str) -> Path:
+        project = self._known(project)
+        if not (self._SHOT_RUN.match(run) and re.match(r"^img-\d{1,2}\.(png|jpg|webp|gif)$", name)) or ".." in run:
+            raise ApiError(400, "잘못된 요청입니다.")
+        root = (Path(project) / self.settings.state_dir / "runs" / run / "attachments").resolve()
         f = (root / name).resolve()
         if root not in f.parents or not f.is_file():
             raise ApiError(404, "이미지를 찾지 못했습니다.")
@@ -863,13 +873,18 @@ class DashboardApp:
                 raise ApiError(400, f"구현 보조 {w}가 구현할 차례에는 검수할 다른 AI가 없습니다. 검수 AI를 하나 더 지정하세요.")
         return args
 
-    def start_run(self, goal: str, project: str, roles: Optional[dict] = None, persist: bool = False, fresh: bool = False, shadow: bool = False) -> dict:
+    def start_run(self, goal: str, project: str, roles: Optional[dict] = None, persist: bool = False, fresh: bool = False, shadow: bool = False,
+                  images: Optional[list] = None) -> dict:
         goal = (goal or "").strip()
         if not goal:
             raise ApiError(400, "목표를 입력하세요.")
         if len(goal) > MAX_GOAL:
             raise ApiError(400, f"목표가 너무 깁니다 ({MAX_GOAL}자 이하).")
         role_args = self._role_args(roles)
+        try:
+            pictures = attach_mod.decode(images)  # validated before anything is started
+        except attach_mod.AttachError as exc:
+            raise ApiError(exc.status, exc.message) from exc
         if (project or "") not in self._projects:
             try:
                 project = self.add_project(project or "")
@@ -882,6 +897,8 @@ class DashboardApp:
         if self.config_path:
             args += ["--config", self.config_path]
         args += role_args
+        for pic in attach_mod.store(pictures):
+            args += ["--image", str(pic)]
         if shadow:
             args += ["--shadow"]
         if persist:
@@ -1208,6 +1225,16 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._send(200, f.read_bytes(), "image/png")
                 except ApiError as exc:
                     return self._json(exc.status, {"error": exc.message})
+            if url.path == "/api/attach":
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    q = lambda k: (query.get(k) or [""])[0]
+                    f = app.attachment_path(q("project"), q("run"), q("name"))
+                    ctype = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}[f.suffix.lstrip(".")]
+                    return self._send(200, f.read_bytes(), ctype)
+                except ApiError as exc:
+                    return self._json(exc.status, {"error": exc.message})
             if url.path == "/api/projects/policy":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1270,7 +1297,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
             try:
                 path = urlparse(self.path).path
                 if path == "/api/run":
-                    return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"), bool(body.get("persist")), shadow=bool(body.get("shadow")))})
+                    return self._json(200, {"job": app.start_run(str(body.get("goal", "")), str(body.get("project", "")), body.get("roles"), bool(body.get("persist")), shadow=bool(body.get("shadow")),
+                                                      images=body.get("images"))})
                 if path == "/api/analyze":
                     return self._json(200, {"job": app.start_analysis(str(body.get("project", "")), str(body.get("focus", "")), body.get("ais"))})
                 if path == "/api/video":

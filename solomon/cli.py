@@ -235,7 +235,15 @@ def _run(args: argparse.Namespace) -> int:
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, _stop)
-    result = orch.run(args.goal, project, keep_worktree=args.keep_worktree)
+    from . import attachments
+
+    try:
+        pictures = [str(p) for p in attachments.validate_files(args.image)]
+    except attachments.AttachError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return 2
+    extra = {"images": pictures} if pictures else {}
+    result = orch.run(args.goal, project, keep_worktree=args.keep_worktree, **extra)
     print(f"run:      {result.run_id}")
     print(f"status:   {result.status}")
     print(f"attempts: {result.attempts}")
@@ -444,6 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
     for role in ALL_ROLES:
         run.add_argument(f"--{role}", help=f"which AI takes the {role} role for this run (overrides the config)")
     run.add_argument("--test-command", help="test command for this run, e.g. 'npm test' (overrides the config)")
+    run.add_argument("--image", action="append", default=[], metavar="FILE", help="a screenshot of the problem (repeatable, up to 4): AIs that can look at images see it")
     run.add_argument("--shadow", action="store_true", help="shadow mode: the arbiter judges every attempt but is never obeyed (answers are only recorded and scored)")
     run.add_argument("--persist", action="store_true", help="no attempt limit: keep trying until it passes or a budget runs out")
     run.add_argument("--max-attempts", type=int, help="attempt limit (0 = none)")

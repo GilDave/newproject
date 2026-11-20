@@ -14,7 +14,7 @@ class CodexProvider(CliProvider):
 
     def build_argv(self, exe: str, write: bool) -> list[str]:
         sandbox = "workspace-write" if write else "read-only"
-        imgs = [] if write else list(getattr(self, "_images", []) or [])
+        imgs = list(getattr(self, "_images", []) or [])
         if imgs:  # `--` ends the multi-value --image list so the trailing "-" (prompt from stdin) is not taken as a file
             return [exe, "exec", "--sandbox", sandbox, *self.extra_args, *[a for i in imgs for a in ("-i", i)], "--", "-"]
         return [exe, "exec", "--sandbox", sandbox, *self.extra_args, "-"]

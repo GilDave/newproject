@@ -34,11 +34,13 @@ class ClaudeProvider(CliProvider):
 
     def build_argv(self, exe: str, write: bool) -> list[str]:
         argv = [exe, "--print", "--output-format", "json"]
-        imgs = [] if write else list(getattr(self, "_images", []) or [])
-        if imgs:  # a review that must look at pictures: the Read tool only, and only the folders that hold them
-            dirs = list(dict.fromkeys(str(Path(i).resolve().parent) for i in imgs))
+        imgs = list(getattr(self, "_images", []) or [])
+        dirs = list(dict.fromkeys(str(Path(i).resolve().parent) for i in imgs))
+        if imgs and not write:  # a read-only call that must look at pictures: the Read tool only, and only the folders that hold them
             argv += ["--tools", "Read", "--strict-mcp-config"] + [a for d in dirs for a in ("--add-dir", d)]
             return argv + self.extra_args
+        if imgs and write:  # the builder keeps its normal tools and may also read the folder with the user's screenshots
+            argv += [a for d in dirs for a in ("--add-dir", d)]
         argv += ["--permission-mode", "acceptEdits", *self.write_args] if write else self.readonly_args
         return argv + self.extra_args
 

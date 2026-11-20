@@ -249,7 +249,8 @@ class Orchestrator:
         error: Optional[str] = None
         for _ in range(2):
             prompt = base if error is None else f"{base}\nYour previous answer was invalid: {error}\nReturn only valid JSON."
-            res = self._call("planner", prompt, project, False, log)
+            prompt, imgs = self._with_attachments(self.s.roles["planner"], prompt)
+            res = self._call("planner", prompt, project, False, log, images=imgs)
             try:
                 order = Order.from_dict(extract_json(res.text), goal, self.s.max_files_changed, self.s.max_diff_lines)
             except ValueError as exc:
@@ -268,6 +269,15 @@ class Orchestrator:
         raise PlanError(f"planner did not produce a valid ORDER: {error}")
 
     # ----------------------------------------------------------------- review
+    def _with_attachments(self, name: str, prompt: str) -> tuple[str, Optional[list[str]]]:
+        """The prompt plus a note about the user's screenshots, and the pictures themselves for an AI that has proven it can look at them."""
+        if not self._attach:
+            return prompt, None
+        names = [Path(a).name for a in self._attach]
+        if self._can_see(name):
+            return prompt + prompts.attachment_note(self._attach, True), list(self._attach)
+        return prompt + prompts.attachment_note(names, False), None
+
     def _can_see(self, name: str) -> bool:
         prov = self.providers.get(name)
         return bool(prov is not None and getattr(prov, "image_capable", False) and vision_mod.verified(name, prov))
@@ -282,10 +292,13 @@ class Orchestrator:
         )
         prompt = prompts.reviewer(order, gitops.full_diff(wt), summary, warnings)
         images: Optional[list[str]] = None
+        prompt, mine = self._with_attachments(self.s.roles[role], prompt)  # the user's own screenshots of the problem
+        images = list(mine) if mine else None
         if visual and visual.ok and visual.shots:
             if self._can_see(self.s.roles[role]):
-                images = [str(p.resolve()) for p in visual.shots]
-                prompt += prompts.visual_note(images, can_see=True)
+                shots = [str(p.resolve()) for p in visual.shots]
+                images = (images or []) + shots
+                prompt += prompts.visual_note(shots, can_see=True)
                 self._visual_seers.append(self.s.roles[role])
             else:
                 prompt += prompts.visual_note([], can_see=False)
@@ -346,10 +359,13 @@ class Orchestrator:
         keep_worktree: bool = False,
         base_ref: str = "HEAD",
         on_pass: Optional[Callable[[Path, "RunResult"], Optional[str]]] = None,
+        images: Optional[list[str]] = None,
     ) -> RunResult:
         """base_ref: start from this commit or branch (a batch builds each fix on the previous one).
-        on_pass(worktree, result) runs while the passed worktree still exists and may return a commit id."""
+        on_pass(worktree, result) runs while the passed worktree still exists and may return a commit id.
+        images: screenshots the person attached to the goal; a copy is kept in the run folder (what the AIs were shown)."""
         self._on_pass = on_pass
+        self._attach: list[str] = []
         self._tokens = 0
         project = Path(project).resolve()
         gitops.ensure_repo(project)
@@ -359,6 +375,18 @@ class Orchestrator:
         run_dir.mkdir(parents=True)
         gitops.exclude_from_git(project, self.s.state_dir)
         log = RunLog(run_dir / "events.jsonl")
+        if images:
+            keep = run_dir / "attachments"
+            keep.mkdir(exist_ok=True)
+            for src in images:
+                dst = keep / Path(src).name
+                try:
+                    dst.write_bytes(Path(src).read_bytes())
+                    self._attach.append(str(dst.resolve()))
+                except OSError:
+                    pass
+            if self._attach:
+                log.event("attachments", names=[Path(a).name for a in self._attach])
         result = RunResult(
             run_id=run_id, status="ERROR", summary="", run_dir=str(run_dir), reduced_independence=self.reduced_independence
         )
@@ -586,7 +614,8 @@ class Orchestrator:
             log.event("builder_pick", attempt=attempt, role=brole, provider=bname)
             self._builder_now = bname
             try:
-                self._call(brole, prompts.builder(order, feedback, advice, " ".join(s.test_command) if s.test_command else None), wt, True, log)
+                bprompt, bimgs = self._with_attachments(bname, prompts.builder(order, feedback, advice, " ".join(s.test_command) if s.test_command else None))
+                self._call(brole, bprompt, wt, True, log, images=bimgs)
                 bname = self.s.roles[brole]  # plan B may have put another AI on the job during the call
                 self._builder_now = bname
             except ProviderError as exc:

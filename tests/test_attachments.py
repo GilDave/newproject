@@ -1,0 +1,191 @@
+import base64
+import json
+import os
+from pathlib import Path
+from urllib.parse import quote
+
+import pytest
+
+from solomon import attachments as AT
+from solomon import cli
+from solomon.orchestrator import Orchestrator
+from solomon.providers.claude import ClaudeProvider
+from solomon.providers.codex import CodexProvider
+
+from helpers import ScriptedProvider, make_repo, make_settings, order_json, review_json, write_file
+from test_dashboard import Env, sleeper
+from test_visual_gate import events
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
+JPG = b"\xff\xd8\xff\xe0" + b"\x00" * 40
+b64 = lambda b: base64.b64encode(b).decode()
+
+
+@pytest.fixture(autouse=True)
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
+# ---------------------------------------------------------------- the checks
+def test_only_real_pictures_pass_and_data_urls_are_accepted():
+    assert AT.sniff(PNG) == "png" and AT.sniff(JPG) == "jpg" and AT.sniff(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "webp" and AT.sniff(b"GIF89a....") == "gif"
+    assert AT.sniff(b"<html>not an image</html>") == "" and AT.sniff(b"#!/bin/sh\nrm -rf /") == ""
+    out = AT.decode([{"name": "a.png", "data": "data:image/png;base64," + b64(PNG)}, {"name": "b.jpg", "data": b64(JPG)}])
+    assert [e for e, _ in out] == ["png", "jpg"]
+    assert AT.decode(None) == [] and AT.decode([]) == []
+
+
+@pytest.mark.parametrize("items,needle", [
+    ([{"data": b64(b"hello world, plain text")}], "이미지만"),
+    ([{"data": "###not base64###"}], "손상"),
+    ([{"data": b64(PNG)}] * 5, "4장까지"),
+    ([{"data": b64(PNG + b"x" * (AT.MAX_BYTES + 1))}], "너무 큽니다"),
+    ("not a list", "형식"),
+    ([{"nope": 1}], "손상|이미지만"),
+])
+def test_bad_attachments_are_refused_with_a_reason(items, needle):
+    with pytest.raises(AT.AttachError) as e:
+        AT.decode(items)
+    import re
+    assert e.value.status == 400 and re.search(needle, e.value.message)
+
+
+def test_pictures_are_stored_outside_any_project_with_safe_names_and_old_ones_are_cleaned(tmp_path):
+    root = tmp_path / "att"
+    old = root / "20200101-000000-aaaaaa"
+    old.mkdir(parents=True)
+    os.utime(old, (1, 1))
+    paths = AT.store([("png", PNG), ("jpg", JPG)], root)
+    assert [p.name for p in paths] == ["img-1.png", "img-2.jpg"] and all(p.parent.parent == root for p in paths)
+    assert not old.exists()  # older than a week
+    assert AT.store([], root) == []
+    with pytest.raises(AT.AttachError):
+        AT.validate_files([str(tmp_path / "missing.png")])
+    (tmp_path / "x.png").write_text("not really")
+    with pytest.raises(AT.AttachError):
+        AT.validate_files([str(tmp_path / "x.png")])
+    assert AT.validate_files([str(paths[0])]) == [paths[0].resolve()]
+
+
+# ---------------------------------------------------------------- the pipeline
+class Eyes(ScriptedProvider):
+    image_capable = True
+    vision_verified = True
+
+
+def shots(tmp_path):
+    return [str(p) for p in AT.store([("png", PNG)], tmp_path / "att")]
+
+
+def test_a_picture_goes_to_planner_builder_and_reviewer_that_can_see_and_is_kept_with_the_run(tmp_path):
+    repo = make_repo(tmp_path)
+    eyes = Eyes("claude", [order_json(), review_json()])
+    codex = Eyes("codex", [write_file("src/new.py")])
+    o = Orchestrator(make_settings(), {"claude": eyes, "codex": codex})
+    r = o.run("화면에 이 오류가 나옵니다", repo, images=shots(tmp_path))
+    assert r.status == "PASSED"
+    kept = Path(r.run_dir) / "attachments" / "img-1.png"
+    assert kept.read_bytes() == PNG
+    plan, review = eyes.calls[0], eyes.calls[1]
+    assert plan["images"] == [str(kept.resolve())] and "ATTACHED SCREENSHOTS" in plan["prompt"] and "LOOK at each one" in plan["prompt"]
+    assert codex.calls[0]["images"] == [str(kept.resolve())] and codex.calls[0]["write"] is True  # the builder sees the error it must fix
+    assert review["images"] == [str(kept.resolve())]
+    assert any(e["event"] == "attachments" and e["names"] == ["img-1.png"] for e in events(r))
+
+
+def test_an_ai_that_cannot_see_gets_a_note_not_the_picture(tmp_path):
+    repo = make_repo(tmp_path)
+    blind = ScriptedProvider("claude", [order_json(), review_json()])
+    codex = ScriptedProvider("codex", [write_file("src/new.py")])
+    r = Orchestrator(make_settings(), {"claude": blind, "codex": codex}).run("goal", repo, images=shots(tmp_path))
+    assert r.status == "PASSED"
+    for call in (blind.calls[0], blind.calls[1], codex.calls[0]):
+        assert call["images"] is None and "cannot view images" in call["prompt"] and "do not guess" in call["prompt"]
+
+
+def test_no_attachments_means_nothing_changes(tmp_path):
+    repo = make_repo(tmp_path)
+    p = ScriptedProvider("claude", [order_json(), review_json()])
+    r = Orchestrator(make_settings(), {"claude": p, "codex": ScriptedProvider("codex", [write_file("src/new.py")])}).run("goal", repo)
+    assert r.status == "PASSED" and all(c["images"] is None and "ATTACHED" not in c["prompt"] for c in p.calls)
+    assert not (Path(r.run_dir) / "attachments").exists()
+
+
+def test_the_status_lists_the_pictures_of_a_run(tmp_path):
+    from solomon import status
+    repo = make_repo(tmp_path)
+    r = Orchestrator(make_settings(), {"claude": ScriptedProvider("claude", [order_json(), review_json()]), "codex": ScriptedProvider("codex", [write_file("src/new.py")])}).run("g", repo, images=shots(tmp_path))
+    d = status.summarize_run(r.run_id, events(r)).to_dict()
+    assert d["attachments"] == ["img-1.png"] and any("첨부한 화면 1장" in t for t in d["timeline"])
+
+
+# ---------------------------------------------------------------- the CLIs get the folder and may read it
+def test_claude_and_codex_command_lines_carry_the_pictures():
+    c = ClaudeProvider()
+    c._images = ["/home/x/.solomon/attachments/20261120-1/img-1.png"]
+    ro = c.build_argv("claude", False)
+    assert ro[ro.index("--tools") + 1] == "Read" and "--add-dir" in ro and "/home/x/.solomon/attachments/20261120-1" in ro
+    wr = c.build_argv("claude", True)
+    assert "--add-dir" in wr and "--permission-mode" in wr and "--tools" not in wr  # the builder keeps its normal tools
+    c._images = []
+    assert "--add-dir" not in c.build_argv("claude", True)
+    x = CodexProvider()
+    x._images = ["/a/img-1.png", "/a/img-2.png"]
+    argv = x.build_argv("codex", True)
+    assert argv.count("-i") == 2 and argv[-2:] == ["--", "-"] and "workspace-write" in argv
+
+
+def test_cli_has_the_flag_and_refuses_a_file_that_is_not_a_picture(tmp_path, capsys):
+    parser = cli.build_parser()
+    run = next(a for a in parser._actions if a.dest == "command").choices["run"]
+    assert "--image" in {o for a in run._actions for o in a.option_strings}
+    bad = tmp_path / "x.png"
+    bad.write_text("nope")
+    repo = make_repo(tmp_path / "r")
+    assert cli.main(["run", "goal", "--project", str(repo), "--image", str(bad)]) == 2
+    assert "이미지 파일이 아닙니다" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- the dashboard
+@pytest.fixture
+def env(tmp_path):
+    sleeper.calls.clear()
+    e = Env(tmp_path)
+    yield e
+    e.close()
+
+
+def test_run_request_stores_the_pictures_and_passes_them_to_the_job(env):
+    st, body, _ = env.call("POST", "/api/run", {"goal": "화면의 오류를 고쳐줘", "project": env.project, "images": [{"name": "a.jpg", "data": b64(JPG)}, {"name": "b.png", "data": "data:image/png;base64," + b64(PNG)}]})
+    assert st == 200
+    args = sleeper.calls[-1]
+    imgs = [args[i + 1] for i, a in enumerate(args) if a == "--image"]
+    assert len(imgs) == 2 and all(Path(p).is_file() and ".solomon/attachments" in p for p in imgs)
+    assert Path(imgs[0]).read_bytes() == JPG
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+
+
+def test_a_bad_picture_stops_the_request_before_any_job_starts(env):
+    before = len(sleeper.calls)
+    st, body, _ = env.call("POST", "/api/run", {"goal": "x", "project": env.project, "images": [{"name": "a", "data": b64(b"just text, not a picture")}]})
+    assert st == 400 and "이미지" in body["error"] and len(sleeper.calls) == before and env.app.job is None
+    assert env.call("POST", "/api/run", {"goal": "x", "project": env.project, "images": [{"data": b64(PNG)}] * 5})[0] == 400
+
+
+def test_attached_pictures_are_served_by_validated_name_and_need_the_token(env):
+    d = Path(env.project) / ".solomon" / "runs" / "r1" / "attachments"
+    d.mkdir(parents=True)
+    (d / "img-1.png").write_bytes(PNG)
+    (Path(env.project) / ".solomon" / "secret.png").write_bytes(b"nope")
+    q = lambda **k: "/api/attach?project=" + quote(env.project) + "".join(f"&{a}={quote(str(b))}" for a, b in k.items())
+    st, body, resp = env.call("GET", q(run="r1", name="img-1.png"))
+    assert st == 200 and body == PNG and resp.getheader("Content-Type") == "image/png"
+    assert env.call("GET", q(run="r1", name="img-1.png"), token=None)[0] == 401
+    for bad in (dict(run="r1", name="../../secret.png"), dict(run="..", name="img-1.png"), dict(run="r1", name="other.png"), dict(run="r1/..", name="img-1.png")):
+        assert env.call("GET", q(**bad))[0] in (400, 404), bad
+
+
+def test_the_page_can_paste_drop_pick_and_show_the_pictures():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ('id="attBtn"', 'id="attFile"', 'id="attList"', 'addEventListener("paste"', 'addEventListener("drop"', "createImageBitmap", "/api/attach?t=", "images: att.map", "첨부한 화면"):
+        assert needle in html, needle

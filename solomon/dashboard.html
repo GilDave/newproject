@@ -169,6 +169,7 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 @keyframes recv{0%{transform:scale(1)}30%{transform:scale(1.14)}100%{transform:scale(1)}}
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px)}40%{transform:translateX(7px)}60%{transform:translateX(-5px)}80%{transform:translateX(4px)}}
 .node.shadowarb .orb::before{content:"";position:absolute;inset:-18px;border-radius:50%;border:1.5px dotted #b69cff;opacity:.7;animation:spin 14s linear infinite reverse}
+.attbox{margin:2px 0 6px}.attitem{position:relative;display:inline-block}.attitem button{position:absolute;top:2px;right:2px;padding:0 6px;font-size:12px;line-height:18px;border-radius:50%}.drop{outline:2px dashed #4f86d6}
 .shots{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0}.shots img{height:84px;border-radius:6px;border:1px solid var(--line);cursor:zoom-in;background:#08101a}.shots img:hover{border-color:#4f86d6}
 .modesw{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}.modesw .seg{padding:9px 20px;background:#0b141f;color:var(--dim);border:0;cursor:pointer;font-size:13px}.modesw .seg.on{background:#1c3a6b;color:#fff}.modesw .seg.on.live{background:#7a2a2a}
 .chk-row{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:4px 0}.chk-row b.ok{color:#8be0b3}.chk-row b.no{color:#ff9aa5}
@@ -277,6 +278,11 @@ table.t{width:100%;border-collapse:collapse;font-size:13px}table.t th{color:var(
       <div class="modes"><button id="m-run" class="on">개선 · 코드 수정</button><button id="m-an">분석 · 읽기 전용</button><button id="m-new">신규 프로젝트</button><button id="m-vid">영상 분석</button></div>
       <label for="goal" id="goalLabel">목표 (고칠 에러 로그를 그대로 붙여 넣어도 됩니다)</label>
       <textarea id="goal" placeholder="예: 봇이 시작할 때 아래 에러로 죽는다. 원인을 찾아 고쳐줘&#10;(에러 로그 붙여넣기)"></textarea>
+      <div id="attBlock" class="attbox">
+        <div class="row" style="margin:4px 0"><button id="attBtn" type="button">📎 화면 캡처 붙이기</button><input type="file" id="attFile" accept="image/*" multiple hidden>
+          <span class="hint" id="attHint">목표 칸에서 <b>Cmd+V</b>로 캡처를 붙여넣거나, 이미지를 끌어다 놓아도 됩니다 (최대 4장). 그림을 볼 수 있다고 시험을 통과한 AI에게만 전달됩니다.</span></div>
+        <div id="attList" class="shots"></div>
+      </div>
       <div id="projBlock">
         <label for="project">프로젝트 폴더 (분석은 아무 폴더, 개선은 git 저장소)</label>
         <div class="row" style="margin:0;flex-wrap:nowrap"><input type="text" id="project" list="projects" placeholder="/Users/…/프로젝트" autocomplete="off"><button id="browse" title="폴더 찾아보기" style="white-space:nowrap">찾아보기</button></div>
@@ -835,7 +841,7 @@ function setMode(m){
 
 function renderCommand(){
   const isVid = mode === "video", isAn = mode === "analyze" || isVid, isNew = mode === "new", running = state.job.state === "running";
-  $("roleBlock").hidden = isAn; $("testBlock").hidden = isAn || isNew; $("anBlock").hidden = !isAn; $("vidBlock").hidden = !isVid;
+  $("roleBlock").hidden = isAn; $("attBlock").hidden = isAn || isNew; $("testBlock").hidden = isAn || isNew; $("anBlock").hidden = !isAn; $("vidBlock").hidden = !isVid;
   $("projBlock").hidden = isNew; $("newBlock").hidden = !isNew; $("batchCard").hidden = isVid;
   $("goalLabel").textContent = isVid ? "무엇을 중점으로 볼까요? (비워 두면 요약·핵심·확인할 주장·해볼 것 전체)" : isAn ? "분석 요청 (비워 두면 전체 분석. 예: 에러가 날 만한 곳 위주로)" : isNew ? "무엇을 만들까요? (비워 두면 폴더만 만들고 시작하지 않습니다)" : "목표 (고칠 에러 로그를 그대로 붙여 넣어도 됩니다)";
   $("goal").placeholder = isVid ? "예: 손절·리스크 관리 규칙과, 숫자로 검증해야 할 주장 위주로" : isAn ? "예: 시작할 때 죽을 수 있는 곳과 비밀 값 관리가 괜찮은지 봐줘" : "예: 봇이 시작할 때 아래 에러로 죽는다. 원인을 찾아 고쳐줘\n(에러 로그 붙여넣기)";
@@ -1443,6 +1449,13 @@ function renderWork(){
     h.appendChild(el("span", "badge " + (cur.status === "PASSED" ? "ok" : cur.live ? "run" : cur.status === "FAILED" || cur.status === "ERROR" ? "bad" : "warn"), cur.live ? "진행 중" : cur.interrupted ? "중단" : (STATUS_KO[cur.status] || cur.status)));
     run.appendChild(h);
     run.appendChild(el("div", "goalbox", cur.goal));
+    if (cur.attachments && cur.attachments.length){
+      run.appendChild(el("div", "meta", "첨부한 화면 " + cur.attachments.length + "장 (AI에게 전달한 그림)"));
+      const strip = el("div", "shots");
+      cur.attachments.forEach(n => { const u = "/api/attach?t=" + encodeURIComponent(TOKEN) + "&project=" + encodeURIComponent(cur.paths.project) + "&run=" + encodeURIComponent(cur.run_id) + "&name=" + encodeURIComponent(n);
+        const im = el("img"); im.src = u; im.alt = n; im.loading = "lazy"; im.title = "눌러서 크게 보기"; im.onclick = () => window.open(u, "_blank"); strip.appendChild(im); });
+      run.appendChild(strip);
+    }
     const chips = el("div", "chips");
     cur.attempt_details.forEach(a => {
       const ok = a.review && a.review.verdict === "PASS" && a.verify && a.verify.passed;
@@ -2229,11 +2242,40 @@ $("run").onclick = async () => {
       await api("/api/analyze", {project, focus: goal, ais}); selectedProject = project; selectedAnalysis = null; toast("분석을 시작했습니다.");
     } else {
       const roles = collectRoles();
-      await api("/api/run", {goal, project, roles, persist: $("persist").checked, shadow: $("shadow").checked}); rolesDirty = false; selectedProject = project; selectedRun = null; toast("실행을 시작했습니다.");
+      await api("/api/run", {goal, project, roles, persist: $("persist").checked, shadow: $("shadow").checked, images: att.map(a => ({name: a.name, data: a.data}))}); att.length = 0; renderAtt(); rolesDirty = false; selectedProject = project; selectedRun = null; toast("실행을 시작했습니다.");
     }
   } catch (e) { toast(e.message, true); }
   busy = false; poll();
 };
+
+// ---------------------------------------------------------------- 화면 캡처 첨부 (붙여넣기 · 끌어놓기 · 파일 선택)
+const att = [];  // {name, data (base64 jpeg), url}
+const ATT_MAX = 4, ATT_SIDE = 1800;
+function renderAtt(){
+  const box = $("attList"); clear(box);
+  att.forEach((a, i) => { const w = el("span", "attitem"), im = el("img"); im.src = a.url; im.title = a.name; const x = el("button", "", "×"); x.type = "button"; x.title = "빼기"; x.onclick = () => { att.splice(i, 1); renderAtt(); }; w.appendChild(im); w.appendChild(x); box.appendChild(w); });
+  $("attBtn").textContent = "📎 화면 캡처 붙이기" + (att.length ? " (" + att.length + "/" + ATT_MAX + ")" : "");
+}
+async function addImage(file){
+  if (!file || !/^image\//.test(file.type)) return;
+  if (att.length >= ATT_MAX) return toast("이미지는 " + ATT_MAX + "장까지 붙일 수 있습니다.", true);
+  try {
+    const bmp = await createImageBitmap(file), k = Math.min(1, ATT_SIDE / Math.max(bmp.width, bmp.height));  // shrink so four pictures stay light
+    const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(bmp, 0, 0, c.width, c.height);
+    const url = c.toDataURL("image/jpeg", 0.88);
+    att.push({name: file.name || "capture.png", data: url.split(",")[1], url}); renderAtt();
+  } catch (e) { toast("이미지를 읽지 못했습니다.", true); }
+}
+$("attBtn").onclick = () => $("attFile").click();
+$("attFile").onchange = async () => { for (const f of Array.from($("attFile").files)) await addImage(f); $("attFile").value = ""; };
+$("goal").addEventListener("paste", async (ev) => {
+  const files = Array.from((ev.clipboardData && ev.clipboardData.items) || []).filter(i => i.kind === "file" && /^image\//.test(i.type)).map(i => i.getAsFile());
+  if (files.length) { ev.preventDefault(); for (const f of files) await addImage(f); toast(files.length + "장을 붙였습니다."); }  // text pastes stay as they are
+});
+["dragover", "dragenter"].forEach(n => $("goal").addEventListener(n, (ev) => { if (Array.from(ev.dataTransfer.types || []).includes("Files")) { ev.preventDefault(); $("goal").classList.add("drop"); } }));
+["dragleave", "drop"].forEach(n => $("goal").addEventListener(n, () => $("goal").classList.remove("drop")));
+$("goal").addEventListener("drop", async (ev) => { const files = Array.from(ev.dataTransfer.files || []).filter(f => /^image\//.test(f.type)); if (files.length) { ev.preventDefault(); for (const f of files) await addImage(f); } });
 $("stop").onclick = async () => {
   try { await api("/api/stop", {}); toast("중지 요청을 보냈습니다. 정리하는 중입니다."); } catch (e) { toast(e.message, true); }
   poll();
