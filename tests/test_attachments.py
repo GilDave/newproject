@@ -378,3 +378,24 @@ def test_a_failed_baseline_says_which_tests_failed(tmp_path):
     assert r.status == "ERROR" and not codex.calls and "test_one" in r.summary and "Failing tests" in r.summary
     run = status.summarize_run("x", events(r))
     assert any("실패한 테스트: test_one" in t for t in run.timeline), run.timeline
+
+
+def test_tests_in_a_virtualenv_find_that_environment_first(tmp_path):
+    from solomon.verifier import verify
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    py = venv / "bin" / "python"
+    py.write_text('#!/bin/sh\necho "PATH=$PATH"\necho "VENV=$VIRTUAL_ENV"\n')
+    py.chmod(0o755)
+    s = make_settings()
+    s.test_command = [str(py)]
+    s.approved_commands = ["python"]
+    res = verify(s, tmp_path)
+    assert res.passed and f"PATH={venv / 'bin'}:" in res.output_tail and f"VENV={venv}" in res.output_tail
+
+
+def test_tests_never_read_the_machines_real_solomon_folder():
+    from solomon import quota
+    assert str(Path.home()).startswith("/tmp") or "pytest" in str(Path.home())  # not the real home of whoever runs the tests
+    assert quota.QuotaBoard.persistent().path.parent.parent == Path.home()

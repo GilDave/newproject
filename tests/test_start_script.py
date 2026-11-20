@@ -75,6 +75,12 @@ def test_missing_setup_gives_a_clear_message(tmp_path):
     (fake_root / "scripts" / "start_dashboard.sh").write_text((ROOT / "scripts" / "start_dashboard.sh").read_text())
     env = dict(os.environ, HOME=str(tmp_path), PATH="/usr/bin:/bin")
     env.pop("SOLOMON_PYTHON", None)
+    # the script puts $HOME/.local/bin first: a python3 there that cannot import solomon makes this the same on every machine
+    # (a Mac may have solomon installed in a python3 under /opt/homebrew, which the script would happily start)
+    nopy = tmp_path / ".local" / "bin"
+    nopy.mkdir(parents=True)
+    (nopy / "python3").write_text("#!/bin/sh\nexit 1\n")
+    (nopy / "python3").chmod(0o755)
     res = subprocess.run(["bash", str(fake_root / "scripts" / "start_dashboard.sh")], capture_output=True, text=True, env=env, timeout=30)
     assert res.returncode == 1 and "install.sh" in res.stdout
 

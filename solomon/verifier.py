@@ -89,11 +89,17 @@ def verify(settings: Settings, wt: Path) -> VerifyResult:
     base = os.path.basename(cmd[0])
     if base not in settings.approved_commands:
         return VerifyResult(False, False, " ".join(cmd), None, f"command '{base}' is not in approved_commands")
+    env = sanitized_env()
+    exe = Path(cmd[0])
+    if exe.is_absolute() and (exe.parent.parent / "pyvenv.cfg").is_file():
+        # a virtualenv interpreter: tests that start `python3` or `pytest` themselves must find the same environment, not the system one
+        env["PATH"] = str(exe.parent) + os.pathsep + env.get("PATH", "")
+        env["VIRTUAL_ENV"] = str(exe.parent.parent)
     try:
         res = run_process(
             cmd,
             cwd=str(wt),
-            env=sanitized_env(),
+            env=env,
             timeout=settings.timeouts["verify"],
             no_output_timeout=None,
         )
