@@ -280,3 +280,10 @@ def test_a_run_uses_the_project_venv_and_stops_with_help_when_pytest_is_missing(
     r = Orchestrator(s, {"claude": claude, "codex": codex}).run("goal", repo)
     assert r.status == "ERROR" and not codex.calls  # stopped before the builder
     assert s.test_command[0] == str(py.resolve()) and "'pytest' 모듈이 없습니다" in r.summary and ".venv/bin/pip install pytest" in r.summary
+
+
+def test_the_work_room_has_the_same_stop_button_and_labels_its_scopes():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ('id="w-stop"', '$("w-stop").onclick = () => $("stop").click()', 'state.job.state !== "running" || !!state.job.external', "(보고 있는 실행 1건)",
+                   '$("stop").disabled = !running || !!state.job.external'):
+        assert needle in html, needle

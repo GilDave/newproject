@@ -486,7 +486,7 @@ button{max-width:100%}
   </section>
 
   <section class="col">
-    <div class="card"><h2>AI별 작업량</h2><div id="usage"></div></div>
+    <div class="card"><h2>AI별 작업량 <small class="hint">(보고 있는 실행 1건)</small></h2><div id="usage"></div></div>
     <div class="card"><h2 id="resultTitle">결과</h2>
       <div class="summary" id="summary">아직 결과가 없습니다.</div>
       <div id="warns"></div>
@@ -548,14 +548,14 @@ button{max-width:100%}
 
 <main class="work" id="view-work" hidden>
   <div class="page-head"><h1>작업실<span>(단계별 결과와 AI 호출 기록을 확인합니다)</span></h1></div>
-  <div class="row" style="margin:0 0 4px"><button id="w-to-mg">이 실행의 5W1H · 적용 (관리 탭)</button><button id="w-to-pj">프로젝트 카드</button><button id="w-to-dash">대시보드로</button></div>
+  <div class="row" style="margin:0 0 4px"><button id="w-to-mg">이 실행의 5W1H · 적용 (관리 탭)</button><button id="w-to-pj">프로젝트 카드</button><button id="w-to-dash">대시보드로</button><button id="w-stop" class="danger" disabled title="진행 중인 작업을 중지합니다 (대시보드의 중지 버튼과 같습니다)">■ 중지</button></div>
   <div class="card w-top" id="w-top"></div>
   <div class="w-steps" id="w-steps"></div>
   <details class="card"><summary>현재 실행의 상세 정보 (실행 번호·경로)</summary><div class="kv" id="w-detail" style="margin-top:10px"></div></details>
   <div class="card"><h2>AI 작업 현황 · 1.5초마다 갱신</h2><div id="w-live"></div></div>
   <div class="w-two">
     <div class="card" id="w-run"></div>
-    <div class="card"><h2>AI별 작업량</h2><div id="w-usage"></div></div>
+    <div class="card"><h2>AI별 작업량 <small class="hint">(보고 있는 실행 1건)</small></h2><div id="w-usage"></div></div>
   </div>
   <details class="card"><summary>최근 AI 호출</summary><div class="calls" id="w-calls" style="margin-top:8px"></div></details>
   <details class="card"><summary>최근 진행 기록 (단계 전환)</summary><div class="log" id="w-log" style="margin-top:8px"></div></details>
@@ -1052,7 +1052,7 @@ function renderCommand(){
   if (document.activeElement !== pi && (pi.value === "" || state.project !== lastProject)) pi.value = state.project || pi.value;
   lastProject = state.project;
   $("testnow").textContent = state.test_command ? "현재: " + state.test_command.text + " (" + state.test_command.source + ")" : "";
-  $("run").disabled = running || busy; $("stop").disabled = !running;
+  $("run").disabled = running || busy; $("stop").disabled = !running || !!state.job.external;  // a job started elsewhere cannot be stopped from here
 }
 
 function renderBatches(){
@@ -1608,6 +1608,7 @@ function renderWork(){
   const cur = state.current, job = state.job, roles = (cur && cur.roles && Object.keys(cur.roles).length) ? cur.roles : state.roles;
   const running = job.state === "running";
   $("w-to-mg").disabled = !state.project;
+  $("w-stop").disabled = state.job.state !== "running" || !!state.job.external;  // the same job as the dashboard's stop button
   const top = $("w-top"); clear(top);
   const item = (k, v) => { const s = el("span"); s.appendChild(document.createTextNode(k + " ")); s.appendChild(el("b", "", v)); top.appendChild(s); };
   item("프로젝트", state.project || "—");
@@ -2604,6 +2605,7 @@ $("fxDemo").onclick = () => FX.isDemo() ? FX.stop() : FX.demo();
 new ResizeObserver(() => FX.resize()).observe($("stage"));
 $("w-to-dash").onclick = () => setTab("dash");
 $("w-to-pj").onclick = () => setTab("pj");
+$("w-stop").onclick = () => $("stop").click();
 $("w-to-mg").onclick = () => { const c = state && state.current; if (c) openProject(state.project, {tab: "mg", key: "run:" + c.run_id}); else openProject(state.project, {tab: "mg"}); };
 $("mgTest").onclick = () => runTests();
 $("mClose").onclick = closeModal;
