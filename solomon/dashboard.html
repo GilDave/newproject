@@ -530,6 +530,13 @@ function isProtected(file){  // mirrors scope_guard.path_matches: a glob, a file
     const b = p.replace(/\/+$/, ""); return f === b || f.startsWith(b + "/");
   });
 }
+const openState = {};  // which collapsible sections a person opened or closed (the page redraws every few seconds and must not undo that)
+function keepOpen(d, id, dflt){
+  d.open = id in openState ? openState[id] : !!dflt;
+  const sm = d.querySelector("summary");
+  if (sm) sm.addEventListener("click", () => setTimeout(() => { openState[id] = d.open; }, 0));  // only a real click counts, not the redraw
+  return d;
+}
 function warnKo(x){
   if (x.indexOf("SNAPSHOT:") >= 0) return "작업 폴더의 커밋 안 된 변경까지 포함해서 작업했습니다 (비밀 파일 제외). 따로 커밋할 필요가 없습니다.";
   if (x.indexOf("uncommitted changes") >= 0) return "작업 폴더에 커밋되지 않은 변경이 있습니다. 격리된 복사본에는 커밋된 내용만 들어가므로 그 변경은 이번 작업에 반영되지 않습니다. 필요하면 먼저 커밋하세요.";
@@ -1315,14 +1322,14 @@ function renderReport(cur){
   });
   Object.keys(cur.ais).forEach(n => {
     const a = cur.ais[n]; if (!a.summary) return;
-    const d = el("details"); d.appendChild(el("summary", "", pname(n) + "의 프로젝트 개요"));
+    const d = el("details"); d.appendChild(el("summary", "", pname(n) + "의 프로젝트 개요")); keepOpen(d, "an:" + n + ":overview", false);
     d.appendChild(el("div", "summary", a.summary));
     (a.architecture || []).forEach(x => d.appendChild(el("div", "meta", "• " + x)));
     (a.questions || []).forEach(x => d.appendChild(el("div", "meta", "? " + x)));
     box.appendChild(d);
   });
   if (cov.excluded_list && cov.excluded_list.length){
-    const d = el("details"); d.appendChild(el("summary", "", "분석에서 제외된 파일 " + cov.excluded + "개"));
+    const d = el("details"); d.appendChild(el("summary", "", "분석에서 제외된 파일 " + cov.excluded + "개")); keepOpen(d, "an:excluded", false);
     cov.excluded_list.forEach(x => d.appendChild(el("div", "meta", x[0] + " — " + x[1])));
     box.appendChild(d);
   }
@@ -1424,7 +1431,7 @@ function renderWork(){
     });
     run.appendChild(chips);
     run.appendChild(el("div", "meta", cur.attempts + "번 시도 · " + (cur.finished ? (STATUS_KO[cur.status] || cur.status) : "진행 중") + " · 경과 " + fmt(cur.elapsed_sec)));
-    const d1 = el("details"); d1.open = true; d1.appendChild(el("summary", "", "시도별 결과"));
+    const d1 = el("details"); d1.appendChild(el("summary", "", "시도별 결과")); keepOpen(d1, "w:" + cur.run_id + ":attempts", true);
     cur.attempt_details.forEach(a => {
       const box = el("div", "att"); box.appendChild(el("h5", "", "시도 " + a.attempt));
       box.appendChild(el("div", "", "구현: " + (a.builder ? pname(a.builder.provider) + " · " + a.builder.sec + "초" + (a.builder.tokens ? " · " + num(a.builder.tokens) + " 토큰" : "") : "응답 없음")));
@@ -1442,7 +1449,7 @@ function renderWork(){
     });
     if (!cur.attempt_details.length) d1.appendChild(el("div", "hint", "시도 기록이 없습니다 (계획 단계이거나 이전 버전의 기록입니다)."));
     run.appendChild(d1);
-    const d2 = el("details"); d2.appendChild(el("summary", "", "검수 요약")); d2.appendChild(el("div", "summary", cur.summary || "아직 없습니다.")); run.appendChild(d2);
+    const d2 = el("details"); d2.appendChild(el("summary", "", "검수 요약")); keepOpen(d2, "w:" + cur.run_id + ":review", false); d2.appendChild(el("div", "summary", cur.summary || "아직 없습니다.")); run.appendChild(d2);
     (cur.failovers || []).forEach(f => run.appendChild(el("div", "warnbox", "⚡ " + pname(f.from) + " 사용 한도 소진 → " + pname(f.to) + "(이)가 " + (ROLE_KO[f.role] || f.role) + "을(를) 자동으로 이어받았습니다 (플랜 B)")));
     cur.warnings.forEach(x => run.appendChild(el("div", "warnbox", "⚠ " + warnKo(x))));
     run.appendChild(el("div", "meta", "결과물 위치: " + (cur.paths.patch || "없음") + (state.apply.applied ? " (원본에 적용됨)" : "")));
@@ -1656,7 +1663,7 @@ function renderManage(){
   const done = inbox.entries.filter(e => !(e.state === "pending" || e.state === "applied"));
   if (!inbox.entries.length) box.appendChild(el("div", "hint", "아직 적용할 결과가 없습니다. 개선 실행이 통과하거나 밤샘 수정이 끝나면 여기에 나타납니다."));
   open.forEach(e => renderEntry(e, box));
-  if (done.length){ const d = el("details"); d.appendChild(el("summary", "", "처리 완료 " + done.length + "건 (커밋됨·폐기함 — 복원/취소 가능)")); done.forEach(e => renderEntry(e, d)); box.appendChild(d); }
+  if (done.length){ const d = el("details"); d.appendChild(el("summary", "", "처리 완료 " + done.length + "건 (커밋됨·폐기함 — 복원/취소 가능)")); keepOpen(d, "mg:done", false); done.forEach(e => renderEntry(e, d)); box.appendChild(d); }
   const hist = $("mgHistory"); clear(hist);
   (inbox.history || []).forEach(h => { const b = el("button", mgKey === h.key ? "sel" : ""); b.appendChild(el("span", "tag " + (h.status === "PASSED" || h.status === "DONE" ? "PASSED" : h.status), h.status_ko || h.status)); b.appendChild(document.createTextNode((KIND_KO[h.kind] || h.kind) + " · " + clip(h.title, 50) + " ")); b.appendChild(el("small", "", h.when)); b.onclick = () => openKey(h.key); hist.appendChild(b); });
   renderDetail();
@@ -1695,8 +1702,8 @@ function renderDetail(){
       parent.appendChild(r);
       st.lines.filter(Boolean).forEach(l => { const d = el("div", "st"); d.appendChild(el("span")); d.appendChild(el("span")); d.appendChild(el("div", "l", String(l))); d.lastChild.style.gridColumn = "3"; parent.appendChild(d); });
     });
-    if (mgDetail.process.prelude.length){ const d = el("details"); d.open = true; d.appendChild(el("summary", "", "준비 — 계획과 작업 지시서")); drawSteps(d, mgDetail.process.prelude); pc.appendChild(d); }
-    mgDetail.process.attempts.forEach((at, i, arr) => { const d = el("details"); d.open = i === arr.length - 1; d.appendChild(el("summary", "", "시도 " + at.n + " — " + at.result)); drawSteps(d, at.steps); pc.appendChild(d); });
+    if (mgDetail.process.prelude.length){ const d = el("details"); d.appendChild(el("summary", "", "준비 — 계획과 작업 지시서")); keepOpen(d, "mg:" + mgKey + ":prelude", true); drawSteps(d, mgDetail.process.prelude); pc.appendChild(d); }
+    mgDetail.process.attempts.forEach((at, i, arr) => { const d = el("details"); d.appendChild(el("summary", "", "시도 " + at.n + " — " + at.result)); keepOpen(d, "mg:" + mgKey + ":attempt:" + at.n, i === arr.length - 1); drawSteps(d, at.steps); pc.appendChild(d); });
     box.appendChild(pc);
   }
   const grid = el("div", "w5");
@@ -1781,7 +1788,7 @@ function renderVideoReport(cur){
     box.appendChild(el("div", "hint", "자막을 자동으로 가져오지 못했다면: 영상 아래 ⋯ → '스크립트 표시'에서 복사해 '자막을 직접 붙여넣기'에 넣고 다시 시작하세요. 맥에서 `brew install yt-dlp` 를 하면 자동 수집 성공률이 올라갑니다."));
     return;
   }
-  Object.keys(cur.ais).forEach((n, i) => { const a = cur.ais[n]; if (!a.summary) return; const d = el("details"); d.open = i === 0; d.appendChild(el("summary", "", pname(n) + "의 요약")); d.appendChild(el("div", "summary", a.summary)); (a.architecture || []).forEach(x => d.appendChild(el("div", "meta", "• " + x))); box.appendChild(d); });
+  Object.keys(cur.ais).forEach((n, i) => { const a = cur.ais[n]; if (!a.summary) return; const d = el("details"); d.appendChild(el("summary", "", pname(n) + "의 요약")); keepOpen(d, "an:" + n + ":summary", i === 0); d.appendChild(el("div", "summary", a.summary)); (a.architecture || []).forEach(x => d.appendChild(el("div", "meta", "• " + x))); box.appendChild(d); });
   const total = Object.keys(cur.ais).length, KIND = {key_point: "핵심", claim: "확인할 주장", action: "해볼 것"};
   ["key_point", "claim", "action"].forEach(kind => {
     const cs = cur.clusters.filter(c => c.kind === kind); if (!cs.length) return;
@@ -1814,7 +1821,7 @@ function renderVideoReport(cur){
     });
   }
   const cav = [...new Set(Object.values(cur.ais).flatMap(a => a.caveats || a.questions || []))];
-  if (cav.length){ const d = el("details"); d.appendChild(el("summary", "", "분석의 한계")); cav.forEach(x => d.appendChild(el("div", "meta", "• " + x))); box.appendChild(d); }
+  if (cav.length){ const d = el("details"); d.appendChild(el("summary", "", "분석의 한계")); keepOpen(d, "an:caveats", false); cav.forEach(x => d.appendChild(el("div", "meta", "• " + x))); box.appendChild(d); }
   box.appendChild(el("div", "hint", "이 분석은 자막(말한 내용)만 읽은 것입니다. 화면의 차트나 자막이 없는 부분은 반영되지 않았고, '확인할 주장'은 사실로 믿지 마세요."));
   const row = el("div", "row"), b = el("button", "", "5W1H 보기 (관리 탭)"); b.onclick = () => openProject(state.project, {tab: "mg", key: "video:" + cur.analysis_id}); row.appendChild(b); box.appendChild(row);
   if (cur.report_path) box.appendChild(el("div", "meta", "보고서 파일: " + cur.report_path));

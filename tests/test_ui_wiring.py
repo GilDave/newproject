@@ -99,3 +99,14 @@ def test_stage_has_the_effects_layer_gates_and_a_preview_without_ai_calls():
         assert needle in HTML, needle
     assert ".node .st{display:block" in HTML  # the log-line grid rule must not squeeze the node's status text into a 20px column
     assert "document.hidden" in HTML  # nothing is animated while the page is hidden
+
+
+def test_sections_a_person_opened_or_closed_stay_that_way_across_the_automatic_redraws():
+    assert "function keepOpen(d, id, dflt)" in HTML and "openState" in HTML
+    for needle in ('keepOpen(d, "mg:" + mgKey + ":attempt:" + at.n, i === arr.length - 1)', 'keepOpen(d, "mg:" + mgKey + ":prelude", true)',
+                   'keepOpen(d1, "w:" + cur.run_id + ":attempts", true)', 'keepOpen(d, "mg:done", false)'):
+        assert needle in HTML, needle
+    # the old way (forcing the last attempt open on every redraw) must not come back
+    assert "d.open = i === arr.length - 1" not in HTML and "d1.open = true" not in HTML
+    # only a real click on the summary counts as the person's choice, so the redraw itself can never overwrite it
+    assert 'sm.addEventListener("click"' in HTML
