@@ -378,9 +378,12 @@ def _runtests(args: argparse.Namespace) -> int:
     if args.test_command:
         settings.test_command = shlex.split(args.test_command)
     project = Path(args.project or settings.project_path or ".").expanduser()
+    from .verifier import environment_hint, resolve_python
+
+    settings.test_command = resolve_python(settings.test_command, project)
     res = verify(settings, project)
     print(f"명령: {res.command or '(없음)'}")
-    print(res.output_tail)
+    print(res.output_tail + (environment_hint(res.command, res.output_tail) if not res.passed else ""))
     print("결과: " + ("통과" if res.passed and not res.skipped else "테스트 없음" if res.skipped else f"실패 (종료 코드 {res.exit_code})"))
     return 0 if res.passed else 1
 

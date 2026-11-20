@@ -249,3 +249,33 @@ def test_ai_cards_count_calls_by_their_own_day_and_include_analyses(env):
     cards = {c["name"]: c for c in env.app._provider_cards(__import__("solomon.status", fromlist=["x"]).load_runs(Path(env.project)), env.app.providers_info(), env.project)}
     assert cards["codex"]["calls_today"] == 2 and cards["codex"]["last_call"]["role"] == "reviewer"
     assert cards["claude"]["calls_today"] == 1 and cards["claude"]["last_call"]["role"] == "analysis"
+
+
+# ---------------------------------------------------------------- the test environment
+def test_the_projects_own_virtualenv_is_used_and_a_missing_module_gets_plain_help(tmp_path):
+    from solomon.verifier import environment_hint, resolve_python
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    py = tmp_path / ".venv" / "bin" / "python"
+    py.write_text("")
+    assert resolve_python(["python3", "-m", "pytest", "-q"], tmp_path) == [str(py), "-m", "pytest", "-q"]
+    assert resolve_python(["pytest"], tmp_path) == ["pytest"] and resolve_python(["/x/python3", "-m", "pytest"], tmp_path)[0] == "/x/python3"
+    assert resolve_python(["python3", "-m", "pytest"], tmp_path / "nowhere") == ["python3", "-m", "pytest"] and resolve_python(None, tmp_path) is None
+    msg = environment_hint("/opt/homebrew/opt/python@3.15/bin/python3.15 -m pytest -q", "/opt/homebrew/opt/python@3.15/bin/python3.15: No module named pytest")
+    assert "'pytest' 모듈이 없습니다" in msg and "python3 -m venv .venv" in msg and "pip install pytest" in msg
+    assert environment_hint("python3 -m pytest", "1 failed, 3 passed") == ""
+
+
+def test_a_run_uses_the_project_venv_and_stops_with_help_when_pytest_is_missing(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / ".venv" / "bin").mkdir(parents=True)
+    py = repo / ".venv" / "bin" / "python"
+    py.write_text("#!/bin/sh\necho 'fake: No module named pytest' >&2\nexit 1\n")
+    py.chmod(0o755)
+    s = make_settings()
+    s.test_command = ["python3", "-m", "pytest", "-q"]
+    s.approved_commands = ["python", "python3", "pytest"]
+    s.baseline_check = True
+    claude, codex = ScriptedProvider("claude", [order_json()]), ScriptedProvider("codex", [])
+    r = Orchestrator(s, {"claude": claude, "codex": codex}).run("goal", repo)
+    assert r.status == "ERROR" and not codex.calls  # stopped before the builder
+    assert s.test_command[0] == str(py.resolve()) and "'pytest' 모듈이 없습니다" in r.summary and ".venv/bin/pip install pytest" in r.summary

@@ -22,6 +22,7 @@ from .runlog import RunLog
 from .schemas import Order, ReviewResult
 from .tokens import estimate_tokens
 from .settings import ROLES, ConfigError, Settings
+from . import verifier as verifier_mod
 from .verifier import failure_digest, VerifyResult, verify
 
 
@@ -368,6 +369,7 @@ class Orchestrator:
         self._attach: list[str] = []
         self._tokens = 0
         project = Path(project).resolve()
+        self.s.test_command = verifier_mod.resolve_python(self.s.test_command, project)  # the project's own virtualenv, when it has one
         gitops.ensure_repo(project)
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
         state = project / self.s.state_dir
@@ -556,7 +558,7 @@ class Orchestrator:
             if not base.passed:
                 result.status = "ERROR"
                 result.summary = ("수정하기 전의 코드에서도 테스트가 실패합니다. 테스트 환경 문제일 수 있어 AI를 호출하지 않고 "
-                                  f"멈췄습니다 (토큰 절약). 명령: {base.command}\n{base.output_tail[-600:]}")
+                                  f"멈췄습니다 (토큰 절약). 명령: {base.command}\n{base.output_tail[-600:]}" + verifier_mod.environment_hint(base.command, base.output_tail))
                 return
 
         attempt = 0

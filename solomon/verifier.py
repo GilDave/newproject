@@ -22,6 +22,31 @@ class VerifyResult:
     output_tail: str
 
 
+PYTHONS = ("python", "python3")
+
+
+def resolve_python(cmd: list[str] | None, project: Path) -> list[str] | None:
+    """`python3 -m pytest` runs whatever python3 comes first on the PATH, which usually has no pytest.
+    A project that has its own virtualenv is tested with that interpreter (the worktree has no .venv: it is not in git)."""
+    if not cmd or os.sep in cmd[0] or os.path.basename(cmd[0]) not in PYTHONS:
+        return cmd
+    for rel in (".venv/bin/python", "venv/bin/python", ".venv/bin/python3", "venv/bin/python3"):
+        cand = Path(project) / rel
+        if cand.is_file():
+            return [str(cand), *cmd[1:]]
+    return cmd
+
+
+def environment_hint(command: str, output: str) -> str:
+    """Plain-language help when a test run fails for a reason that is the machine's, not the code's."""
+    m = __import__("re").search(r"No module named '?(\w+)", output or "")
+    if not m:
+        return ""
+    mod, exe = m.group(1), (command.split() or ["python3"])[0]
+    return (f"\n→ 이 파이썬({exe})에 '{mod}' 모듈이 없습니다 (코드 문제가 아니라 테스트 환경 문제). 해결: 프로젝트 폴더에서 "
+            f"`python3 -m venv .venv && .venv/bin/pip install {mod}` 를 실행하면 솔로몬이 그 .venv를 자동으로 씁니다.")
+
+
 def verify(settings: Settings, wt: Path) -> VerifyResult:
     cmd = settings.test_command
     if not cmd:
