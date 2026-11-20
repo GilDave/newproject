@@ -650,7 +650,7 @@ class DashboardApp:
                "default_protect": botlab_mod.DEFAULT_PROTECT, "latest": hist[-1] if hist else None, "series": lab.series(hist),
                "services": lab.services(), "health": lab.health(proj) if proj else None, "policy": None, "arbiter_shadow": None,
                "ollama": next((p for p in self.providers_info() if p["name"] == "ollama"), None), "recommended_protect": botlab_mod.PAPER_PROTECT,
-               "trading": None, "keys": None, "keys_check": self._keys_check()}
+               "trading": None, "keys": None, "keys_check": self._keys_check(), "monitor": self.botlab.monitor() if proj else None}
         if proj:
             out["keys"] = keys_mod.status(proj)
             out["trading"] = mode_mod.state(proj, out["health"], out["keys_check"], time.time())

@@ -228,3 +228,27 @@ def test_a_busy_dashboard_postpones_the_analysis_without_marking_it_done(env, tm
 def test_the_tab_exists_and_page_script_is_valid():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     assert 'id="tab-bot"' in html and 'id="view-bot"' in html and "renderBot" in html and "/api/botlab/policy" in html
+
+
+def test_the_bots_own_monitor_page_is_probed_with_a_short_timeout_and_cached(tmp_path):
+    import http.server, threading
+    hits = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            hits.append(1)
+            self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    now = [1000.0]
+    lab = botlab.BotLab(tmp_path / "lab", clock=lambda: now[0])
+    r = lab.monitor(port)
+    assert r == {"url": f"http://127.0.0.1:{port}/", "up": True}
+    lab.monitor(port)
+    assert len(hits) == 1  # cached
+    srv.shutdown(); srv.server_close()
+    now[0] += 11
+    assert lab.monitor(port)["up"] is False  # nothing listening any more

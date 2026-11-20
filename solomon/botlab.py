@@ -140,6 +140,24 @@ class BotLab:
                 "errors_24h": errs, "last_cycle_age_hours": round(age_h, 1) if age_h is not None else None,
                 "alive": age_h is not None and age_h <= ALIVE_WITHIN_HOURS}
 
+    _monitor: tuple = (0.0, False)
+
+    def monitor(self, port: int = 8787) -> dict:
+        """Is the bot's OWN read-only monitor page up? (A one-second look at 127.0.0.1; cached for 10 seconds.)"""
+        import urllib.request
+
+        now = self._clock()
+        url = f"http://127.0.0.1:{port}/"
+        if now - self._monitor[0] < 10:
+            return {"url": url, "up": self._monitor[1]}
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as r:
+                up = 200 <= r.status < 500
+        except Exception:
+            up = False
+        self._monitor = (now, up)
+        return {"url": url, "up": up}
+
     # ------------------------------------------------------------------ evaluation
     def _fetch(self, bot_dir: Path, days: float, csv_path: Path) -> str:
         """Fresh prices into OUR folder via the bot's own Python. Returns '' on success, else the reason. The old file is kept on failure."""
