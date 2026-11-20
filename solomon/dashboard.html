@@ -790,9 +790,15 @@ function renderBot(){
     const ce = mk("오류 알림", al.error), cz = mk("봇 응답 없음 알림", al.stale);
     const ge = num("ge", al.error_gap_min, 1, 1440, 1), sh = num("sh", al.stale_hours, 1, 72, 1), sr = num("sr", al.stale_repeat_hours, 1, 72, 1), st = num("st", al.signal_step, 0.01, 1, 0.01);
     line(ab, "오류 알림 간격(분):", ge, " 응답 없음 기준(시간):", sh, " 반복 간격(시간):", sr, " 신호 노출 변화 기준:", st);
+    ab.appendChild(el("b", "", "알림에 넣을 항목"));
+    const shP = mk("신호 가격 (신호가 나온 시점의 가격)", al.show_price), shE = mk("보유 포지션의 평균 진입가 (8787 화면의 '평단')", al.show_entry), shL = mk("진입가 대비 손익(%) — 숏은 가격이 내리면 +", al.show_pnl), shQ = mk("포지션 수량", al.show_qty), shA = mk("가상 계좌 잔고", al.show_equity);
+    const pos = al.position;
+    ab.appendChild(el("div", "hint", pos ? (pos.flat ? "보유 포지션: 없음(진입가는 포지션이 생기면 알림에 붙습니다)" : `보유 포지션 읽음: ${pos.side} · 평균 진입가 ${pos.entry} · 수량 ${Math.abs(pos.qty).toLocaleString("ko-KR")} (출처: bot.db kv '${pos.key}' 의 ${pos.entry_field}) — 8787 화면의 평단과 같은 값인지 확인하세요.${pos.others && pos.others.length ? " 다른 후보: " + pos.others.join(", ") : ""}`)
+      : "보유 포지션을 bot.db에서 찾지 못했습니다(포지션이 없거나 저장 방식이 달라서일 수 있습니다). 이 경우 진입가는 알림에서 빠지고 신호 가격만 갑니다."));
     const row = el("div", "row");
     const sv = el("button", "primary", "저장"); sv.onclick = async () => { const body = {action: "save", signal: cs.checked, signal_mode: cm.value, error: ce.checked, stale: cz.checked, report: cs2.checked, report_minutes: rm.value, quiet: qz.checked, quiet_from: qf.value, quiet_to: qt.value,
-        error_gap_min: ge.value, stale_hours: sh.value, stale_repeat_hours: sr.value, signal_step: st.value}; if (dk.value.trim()) body.device_key = dk.value; if (ek.value.trim()) body.enc_key = ek.value; dk.value = ""; ek.value = ""; await botPost("/api/botlab/alerts", body, "저장했습니다."); };
+        error_gap_min: ge.value, stale_hours: sh.value, stale_repeat_hours: sr.value, signal_step: st.value,
+        show_price: shP.checked, show_entry: shE.checked, show_pnl: shL.checked, show_qty: shQ.checked, show_equity: shA.checked}; if (dk.value.trim()) body.device_key = dk.value; if (ek.value.trim()) body.enc_key = ek.value; dk.value = ""; ek.value = ""; await botPost("/api/botlab/alerts", body, "저장했습니다."); };
     const ts = el("button", "", "테스트 알림 보내기"); ts.disabled = !al.key_set; ts.onclick = () => botPost("/api/botlab/alerts", {action: "test"}, "테스트 알림을 보냈습니다.");
     const on = el("button", al.enabled ? "danger" : "good", al.enabled ? "알림 끄기" : "알림 켜기"); on.disabled = !al.key_set && !al.enabled;
     on.onclick = () => botPost("/api/botlab/alerts", {action: "save", enabled: !al.enabled}, al.enabled ? "알림을 껐습니다." : "알림을 켰습니다. 지금까지 쌓인 신호는 보내지 않고 이후 것부터 보냅니다.");

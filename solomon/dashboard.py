@@ -654,6 +654,7 @@ class DashboardApp:
                "trading": None, "keys": None, "keys_check": self._keys_check(), "monitor": self.botlab.monitor() if proj else None,
                "alerts": self.alerts.public()}
         if proj:
+            out["alerts"]["position"] = alerts_mod.read_position(Path(proj) / "data" / "bot.db")
             out["keys"] = keys_mod.status(proj)
             out["trading"] = mode_mod.state(proj, out["health"], out["keys_check"], time.time())
         if proj and proj in self._projects:

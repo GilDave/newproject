@@ -304,3 +304,69 @@ def test_an_exchange_rate_limit_error_is_explained_in_korean():
     text = A._error_text(json.dumps({"error": "Bybit error 10006: Too many visits. Exceeded the API Rate Limit. (/v5/market/kline)"}))
     assert text.startswith("거래소 호출 한도 초과") and "일시적" in text and "10006" in text
     assert A._error_text(json.dumps({"error": "something else"})) == "something else"
+
+
+# ---------------------------------------------------------------- entry price in the message, switchable (v1.12.6)
+def put_kv(bot, key, value):
+    con = sqlite3.connect(bot / "data" / "bot.db")
+    con.execute("create table if not exists kv (key text primary key, value text)")
+    con.execute("insert or replace into kv(key, value) values (?,?)", (key, json.dumps(value)))
+    con.commit()
+    con.close()
+
+
+def test_the_open_position_is_found_in_the_saved_state_and_says_where(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    assert A.read_position(bot / "data" / "bot.db") is None  # no kv table at all
+    put_kv(bot, "risk_state", {"day": "2026-11-20", "peak_equity": 1000.0})  # numbers, but no position
+    put_kv(bot, "trend_shadow_btc", {"qty": -2979.0, "entry": 0.10964})  # a shadow account: never the answer
+    put_kv(bot, "trend_paper", {"equity": 1064.12, "pos": {"qty": -6082.0, "avg_entry": 0.11445}})
+    pos = A.read_position(bot / "data" / "bot.db")
+    assert pos["key"] == "trend_paper" and pos["entry"] == 0.11445 and pos["qty"] == -6082.0 and pos["side"] == "숏"
+    assert pos["entry_field"] == "pos.avg_entry" and "trend_shadow_btc" in pos["others"] and not pos["flat"]
+    put_kv(bot, "trend_paper", {"qty": 0.0, "entry": 0.11})
+    assert A.read_position(bot / "data" / "bot.db")["flat"] is True
+
+
+def test_the_message_follows_the_switches_and_signs_the_profit_by_side():
+    base = dict(A.DEFAULTS)
+    short = {"key": "k", "qty": -6082.0, "entry": 0.11445, "flat": False, "side": "숏"}
+    raw = json.dumps({"price": 0.10402, "equity": 1064.12})
+    title, body = A._signal_text(0.4, -0.58, raw, base, short)
+    assert "신호 가격 0.10402" in body and "숏 평균 진입가 0.11445" in body and "진입가 대비 +9.11%" in body and "가상 계좌 1064.1 USDT" in body
+    assert "수량" not in body  # off by default
+    long = {"key": "k", "qty": 100.0, "entry": 0.10, "flat": False, "side": "롱"}
+    assert "진입가 대비 +4.02%" in A._signal_text(-0.2, 0.3, raw, base, long)[1]
+    assert "진입가 대비 -" in A._signal_text(-0.2, 0.3, json.dumps({"price": 0.09}), base, long)[1]
+    off = dict(base, show_price=False, show_entry=False, show_pnl=False, show_equity=False, show_qty=True)
+    body2 = A._signal_text(0.4, -0.58, raw, off, short)[1]
+    assert "신호 가격" not in body2 and "평균 진입가" not in body2 and "진입가 대비" not in body2 and "가상 계좌" not in body2 and "수량 6,082" in body2
+    none = A._signal_text(0.4, -0.58, raw, base, None)[1]  # no position found: the rest of the message still goes out
+    assert "신호 가격 0.10402" in none and "평균 진입가" not in none
+    assert "평균 진입가" not in A._signal_text(0.4, -0.58, raw, base, dict(short, flat=True))[1]
+
+
+def test_entry_price_reaches_the_phone_and_the_status_report_and_the_settings_persist(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    (bot / "config.json").write_text(json.dumps({"symbol": "ENAUSDT"}))
+    put_kv(bot, "trend_paper", {"qty": -6082.0, "entry": 0.11445})
+    put(bot, "trend_cycle", cycle(0.3))
+    now = [time.mktime((2026, 11, 20, 12, 0, 0, 0, 0, -1))]
+    sent = []
+    a = A.Alerts(tmp_path / "lab", clock=lambda: now[0], http=lambda u, p: (sent.append(p) or (200, {"code": 200})), price=lambda s: 0.1040)
+    a.update({"device_key": DEVICE, "enabled": True, "report": True, "report_minutes": 10, "stale": False})
+    a.tick(bot)
+    put(bot, "trend_cycle", cycle(-0.5, price=0.104))
+    a.tick(bot)
+    by = {p["title"]: p["body"] for p in sent}
+    assert "숏 평균 진입가 0.11445" in by["🔄 ENA 추세 방향 전환"] and "신호 가격 0.104" in by["🔄 ENA 추세 방향 전환"]
+    assert "숏 평균 진입가 0.11445" in by["🕒 ENA 상태"] and "진입가 대비 +9.13%" in by["🕒 ENA 상태"]
+    pub = a.update({"show_entry": False, "show_qty": True})
+    assert pub["show_entry"] is False and pub["show_qty"] is True and pub["show_price"] is True
+    assert A.Alerts(tmp_path / "lab").public()["show_qty"] is True  # kept on disk
+
+
+def test_the_card_offers_the_item_switches_and_names_the_source_of_the_position():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ("알림에 넣을 항목", "show_entry", "show_pnl", "show_qty", "8787 화면의 평단과 같은 값인지 확인하세요", "pos.entry_field"):
+        assert needle in html, needle

@@ -139,6 +139,8 @@ DEFAULTS = {"enabled": False, "server": DEFAULT_SERVER, "signal": True, "signal_
             # every period is the user's to set (ranges in LIMITS)
             "signal_step": 0.10,  # "change" mode: a message when the direction flips or the target exposure moves by at least this much
             "error_gap_min": 30.0, "stale_hours": 9.0, "stale_repeat_hours": 6.0,
+            # what a message may contain (all the user's choice)
+            "show_price": True, "show_entry": True, "show_pnl": True, "show_qty": False, "show_equity": True,
             "report": False, "report_minutes": 10.0, "quiet": False, "quiet_from": "23:00", "quiet_to": "07:00",
             "last_event_id": 0, "last_exposure": None, "last_error_alert": 0.0, "last_stale_alert": 0.0, "last_report": 0.0, "last_sent": 0.0, "last_failure": ""}
 LIMITS = {"signal_step": (0.01, 1.0), "error_gap_min": (1, 1440), "stale_hours": (1, 72), "stale_repeat_hours": (1, 72), "report_minutes": (1, 1440)}
@@ -226,7 +228,8 @@ class Alerts:
         c, s = self.config(), self._secrets()
         dk = s.get("device_key", "")
         return {**{k: c[k] for k in ("enabled", "server", "signal", "signal_mode", "error", "stale", "last_sent", "last_failure", "signal_step", "error_gap_min",
-                                     "stale_hours", "stale_repeat_hours", "report", "report_minutes", "quiet", "quiet_from", "quiet_to", "last_report")},
+                                     "stale_hours", "stale_repeat_hours", "report", "report_minutes", "quiet", "quiet_from", "quiet_to", "last_report",
+                                     "show_price", "show_entry", "show_pnl", "show_qty", "show_equity")},
                 "key_set": bool(dk), "key_tail": dk[-4:] if len(dk) >= 8 else "", "enc_set": bool(s.get("enc_key"))}
 
     def update(self, body: dict) -> dict:
@@ -251,7 +254,7 @@ class Alerts:
             if not sv.startswith("https://"):
                 raise AlertError(400, "서버 주소는 https:// 로 시작해야 합니다.")
             c["server"] = sv
-        for k in ("signal", "error", "stale", "report", "quiet"):
+        for k in ("signal", "error", "stale", "report", "quiet", "show_price", "show_entry", "show_pnl", "show_qty", "show_equity"):
             if k in body:
                 c[k] = bool(body[k])
         for k, (lo, hi) in LIMITS.items():
@@ -315,8 +318,12 @@ class Alerts:
         parts = []
         if px is not None:
             prev = self._last_price
-            parts.append(f"{symbol} {px:g}" + (f" ({(px / prev - 1) * 100:+.2f}%)" if prev else ""))
+            if c["show_price"]:
+                parts.append(f"{symbol} {px:g}" + (f" ({(px / prev - 1) * 100:+.2f}%)" if prev else ""))
             self._last_price = px
+        note = _price_note(c, read_position(Path(bot_dir) / "data" / "bot.db"), px)
+        if note:
+            parts.append(note[3:])
         if exposure is not None:
             parts.append(f"목표 노출 {exposure:+.2f} ({_side(exposure)})")
         if last_cycle:
@@ -357,7 +364,7 @@ class Alerts:
                 if cur is None:
                     continue
                 if _worth_telling(exposure, cur, c["signal_mode"], c["signal_step"]):
-                    msgs.append(_signal_text(exposure, cur, raw))
+                    msgs.append(_signal_text(exposure, cur, raw, c, read_position(db)))
                 exposure = cur
             elif kind == "error" and c["error"] and now - c["last_error_alert"] >= c["error_gap_min"] * 60:
                 msgs.append(("⚠ ENA 봇 오류", _error_text(raw)))
@@ -393,6 +400,76 @@ def _exposure(raw: str) -> Optional[float]:
         return None
 
 
+_QTY = ("qty", "position", "pos", "size", "units", "quantity")
+_ENTRY = ("avg_entry", "entry_price", "entry", "avg_price", "average_entry", "avg_px", "entry_px", "avg")
+
+
+def _flat(d: dict, depth: int = 2, prefix: str = "") -> dict:
+    out: dict = {}
+    for k, v in d.items():
+        path = f"{prefix}{k}"
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            out[path] = float(v)
+        elif isinstance(v, dict) and depth > 0:
+            out.update(_flat(v, depth - 1, path + "."))
+    return out
+
+
+def read_position(db: str | Path) -> Optional[dict]:
+    """The paper account's open position (quantity, average entry price), found in the bot's saved state (the `kv` table, read-only).
+
+    The bot's field names are not known here, so every saved JSON state is looked at for a quantity-like and an entry-price-like number;
+    states of shadow accounts are skipped. The result says WHERE it was found so a person can check it against the bot's own page."""
+    try:
+        con = shadow._open_ro(Path(db))
+    except Exception:
+        return None
+    try:
+        rows = con.execute("select key, value from kv").fetchall()
+    except Exception:
+        return None
+    finally:
+        con.close()
+    found = []
+    for key, val in rows:
+        try:
+            d = json.loads(val)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        flat = _flat(d)
+        last = lambda path: path.rsplit(".", 1)[-1].lower()
+        q = next((p for p in flat if last(p) in _QTY), None)
+        e = next((p for p in flat if last(p) in _ENTRY and flat[p] > 0), None)
+        if q and e:
+            found.append({"key": key, "qty": flat[q], "entry": flat[e], "qty_field": q, "entry_field": e})
+    if not found:
+        return None
+    rank = lambda f: (any(w in f["key"].lower() for w in ("shadow", "btc", "ml")), not any(w in f["key"].lower() for w in ("paper", "trend", "account")), f["key"])
+    found.sort(key=rank)
+    best = found[0]
+    return {**best, "flat": best["qty"] == 0, "side": "롱" if best["qty"] > 0 else "숏" if best["qty"] < 0 else "없음", "others": [f["key"] for f in found[1:4]]}
+
+
+def _price_note(c: dict, pos: Optional[dict], px: Optional[float]) -> str:
+    """The position part of a message, following the user's switches: ' · 숏 평균 진입가 0.11445 (+1.2%) · 수량 6,082'."""
+    if not pos or pos["flat"] or not (c["show_entry"] or c["show_pnl"] or c["show_qty"]):
+        return ""
+    parts = []
+    entry, q = pos["entry"], pos["qty"]
+    if c["show_entry"]:
+        parts.append(f"{pos['side']} 평균 진입가 {entry:g}")
+    if c["show_pnl"] and px:
+        pnl = (px - entry) / entry * (1 if q > 0 else -1) * 100  # a short gains when the price falls
+        parts.append(f"진입가 대비 {pnl:+.2f}%")
+    if c["show_qty"]:
+        parts.append(f"수량 {abs(q):,.0f}")
+    return " · " + " · ".join(parts) if parts else ""
+
+
 def _worth_telling(prev: Optional[float], cur: float, mode: str, step: float = 0.10) -> bool:
     if mode == "every" or prev is None:
         return True
@@ -403,7 +480,8 @@ def _side(x: float) -> str:
     return "롱" if x > 0.02 else "숏" if x < -0.02 else "중립"
 
 
-def _signal_text(prev: Optional[float], cur: float, raw: str) -> tuple[str, str]:
+def _signal_text(prev: Optional[float], cur: float, raw: str, c: Optional[dict] = None, pos: Optional[dict] = None) -> tuple[str, str]:
+    c = c or DEFAULTS
     try:
         d = json.loads(raw)
     except ValueError:
@@ -411,7 +489,10 @@ def _signal_text(prev: Optional[float], cur: float, raw: str) -> tuple[str, str]
     price, eq = d.get("price"), d.get("equity")
     head = f"목표 노출 {prev:+.2f} → {cur:+.2f}" if prev is not None else f"목표 노출 {cur:+.2f}"
     flip = prev is not None and _side(prev) != _side(cur)
-    body = (f"{_side(prev)} → {_side(cur)} 전환 · " if flip else "") + f"{head} ({_side(cur)})" + (f" · 가격 {price}" if price is not None else "") + (f" · 가상 계좌 {float(eq):.1f} USDT" if isinstance(eq, (int, float)) else "")
+    body = ((f"{_side(prev)} → {_side(cur)} 전환 · " if flip else "") + f"{head} ({_side(cur)})"
+            + (f" · 신호 가격 {price}" if price is not None and c["show_price"] else "")
+            + _price_note(c, pos, float(price) if isinstance(price, (int, float)) else None)
+            + (f" · 가상 계좌 {float(eq):.1f} USDT" if isinstance(eq, (int, float)) and c["show_equity"] else ""))
     return ("🔄 ENA 추세 방향 전환" if flip else "📈 ENA 추세 신호"), body
 
 
