@@ -170,6 +170,9 @@ pre.tail{white-space:pre-wrap;word-break:break-word;background:#08101a;border:1p
 @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-7px)}40%{transform:translateX(7px)}60%{transform:translateX(-5px)}80%{transform:translateX(4px)}}
 .node.shadowarb .orb::before{content:"";position:absolute;inset:-18px;border-radius:50%;border:1.5px dotted #b69cff;opacity:.7;animation:spin 14s linear infinite reverse}
 .shots{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0}.shots img{height:84px;border-radius:6px;border:1px solid var(--line);cursor:zoom-in;background:#08101a}.shots img:hover{border-color:#4f86d6}
+.modesw{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}.modesw .seg{padding:9px 20px;background:#0b141f;color:var(--dim);border:0;cursor:pointer;font-size:13px}.modesw .seg.on{background:#1c3a6b;color:#fff}.modesw .seg.on.live{background:#7a2a2a}
+.chk-row{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;margin:4px 0}.chk-row b.ok{color:#8be0b3}.chk-row b.no{color:#ff9aa5}
+.keybox .row label.chk{white-space:nowrap;margin:0}.keybox{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0;background:#0a121c}.keybox input{width:100%;margin:4px 0}
 .gates{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);width:max-content;max-width:96%;white-space:nowrap;z-index:3;display:flex;align-items:center;gap:0;background:rgba(8,16,26,.72);border:1px solid var(--line);border-radius:999px;padding:5px 8px;backdrop-filter:blur(3px)}
 .gate{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);padding:3px 10px;border-radius:999px;transition:all .3s}
 .gate i{font-style:normal;width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;border:1px solid #2a3f5c;color:var(--faint);transition:all .3s}
@@ -593,11 +596,30 @@ function setTab(t){
 let bot = null, botBusy = false;
 const fmtTs = ts => ts ? new Date(ts * 1000).toLocaleString("ko-KR", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "아직 없음";
 const pct = v => v === null || v === undefined ? "-" : Math.round(v * 1000) / 10 + "%";
-async function loadBot(){ if (botBusy) return; try { bot = await api("/api/botlab"); } catch (e) { return; } renderBot(); }
+async function loadBot(){
+  if (botBusy) return;
+  try { bot = await api("/api/botlab"); } catch (e) { return; }
+  const root = $("botBody"), a = document.activeElement;
+  const typing = (a && root.contains(a) && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) || Array.from(root.querySelectorAll('input[type="password"]')).some(i => i.value);
+  if (!typing) renderBot();  // a refresh must never erase a key someone is in the middle of typing
+}
 async function botPost(path, body, okMsg){ botBusy = true; try { bot = await api(path, body || {}); if (okMsg) toast(okMsg); } catch (e) { toast(e.message || String(e), true); } finally { botBusy = false; } if (bot && bot.config) renderBot(); else loadBot(); }
 function bcard(title, ...kids){ const c = el("section", "card"); c.appendChild(el("h2", "", title)); kids.forEach(k => k && c.appendChild(k)); return c; }
 function btable(head, rows){ const t = el("table", "bot-tbl"), h = el("tr"); head.forEach(x => h.appendChild(el("th", "", x))); t.appendChild(h); rows.forEach(r => { const tr = el("tr"); r.forEach(x => tr.appendChild(el("td", "", String(x)))); t.appendChild(tr); }); return t; }
 function bprog(n, goal){ const w = el("div", "pbar" + (n >= goal ? " full" : "")), i = el("i"); i.style.width = Math.min(100, n / goal * 100) + "%"; w.appendChild(i); return w; }
+
+function openLiveDialog(tr){
+  const body = openModal("실거래 전환");
+  body.appendChild(el("div", "hint", "실거래는 되돌릴 수 있지만 그 사이의 손실은 되돌릴 수 없습니다. 아래 점검을 모두 통과해야 전환할 수 있습니다."));
+  tr.checks.forEach(c => { const r = el("div", "chk-row"); r.appendChild(el("b", c.ok ? "ok" : "no", c.ok ? "✓" : "✗")); r.appendChild(el("span", "", c.label + " — " + c.detail)); body.appendChild(r); });
+  if (!tr.can_go_live) { body.appendChild(el("div", "banner", "아직 전환할 수 없습니다: " + tr.blockers.join(" / "))); return; }
+  body.appendChild(el("h3", "", "직접 확인하세요"));
+  const boxes = tr.manual.map(m => { const l = el("label", "chk"), i = el("input"); i.type = "checkbox"; i.value = m.id; l.appendChild(i); l.appendChild(document.createTextNode(" " + m.label)); body.appendChild(l); return i; });
+  const inp = el("input"); inp.type = "text"; inp.placeholder = "확인 문구 입력: " + tr.phrase; body.appendChild(inp);
+  const go = el("button", "danger", "실거래로 전환"); go.style.marginTop = "8px";
+  go.onclick = async () => { closeModal(); await botPost("/api/botlab/mode", {mode: "live", confirm: inp.value, checks: boxes.filter(b => b.checked).map(b => b.value)}, "config.json을 실거래로 바꿨습니다. 봇 서비스 재시작 시 적용됩니다."); };
+  body.appendChild(go);
+}
 function renderBot(){
   const root = $("botBody"), kp = $("botKpi"); clear(root); clear(kp);
   if (!bot) return;
@@ -666,6 +688,51 @@ function renderBot(){
       el("div", "hint", "권한 사다리: 표본이 충분하고 위험한 오판이 적다고 숫자로 확인될 때만 사람이 한 단계씩 올립니다.")));
   }
 
+
+  // 거래 모드 스위치
+  const tr = bot.trading;
+  if (tr) {
+    const live = tr.is_live, sw = el("div", "modesw");
+    const bp = el("button", "seg" + (!live ? " on" : ""), "페이퍼 (가상 계좌)"), bl = el("button", "seg" + (live ? " on live" : ""), "실거래");
+    bp.onclick = () => { if (!live) return; if (confirm("config.json을 페이퍼(가상 계좌)로 되돌립니다. 이전 파일은 백업됩니다. 봇 서비스를 재시작해야 적용됩니다. 계속할까요?")) botPost("/api/botlab/mode", {mode: "paper"}, "페이퍼로 설정했습니다."); };
+    bl.onclick = () => openLiveDialog(tr);
+    sw.appendChild(bp); sw.appendChild(bl);
+    const cb = el("div"); cb.appendChild(sw);
+    cb.appendChild(el("div", "hint", `현재 config.json: mode = ${tr.mode} · live_enabled = ${tr.live_enabled}. 바꾼 뒤에는 봇 서비스를 재시작해야 적용되며, 자동으로 재시작하지 않습니다. 설정 파일은 바꿀 때마다 날짜 붙은 백업이 남습니다.`));
+    tr.checks.forEach(c => { const r = el("div", "chk-row"); r.appendChild(el("b", c.ok ? "ok" : "no", c.ok ? "✓" : "✗")); r.appendChild(el("span", "", c.label + " — " + c.detail)); cb.appendChild(r); });
+    cb.appendChild(el("div", "banner" + (tr.can_go_live ? " ok" : ""), tr.can_go_live ? "자동 점검을 모두 통과했습니다. 실거래 버튼을 누르면 직접 확인할 항목과 확인 문구를 요구합니다." : "실거래는 잠겨 있습니다 (위 ✗ 항목이 해결되면 열립니다). 페이퍼로 되돌리는 것은 언제든 한 번에 됩니다."));
+    root.appendChild(bcard("🔀 거래 모드 — 페이퍼 ↔ 실거래", cb));
+  }
+
+  // 거래소 API 키
+  if (bot.keys) {
+    const kb = el("div");
+    kb.appendChild(el("div", "hint", "키는 이 컴퓨터의 봇 폴더 .env에만 저장됩니다(파일 권한 600, 이전 파일은 백업). AI에게 보내지 않고, 저장 뒤에는 화면에도 다시 보이지 않습니다. 거래소에서 키를 만들 때는 읽기+거래 권한만 켜고 **출금 권한은 끄고**, 가능하면 이 컴퓨터의 IP만 허용하세요."));
+    Object.entries(bot.keys).forEach(([ex, k]) => {
+      const box = el("div", "keybox");
+      box.appendChild(el("b", "", k.label));
+      const chk = (bot.keys_check || {})[ex];
+      box.appendChild(el("div", "hint", k.key_set && k.secret_set ? `키 설정됨 (…${k.key_tail}) · 변수 ${k.key_name} / ${k.secret_name}` : `설정 안 됨 · 저장하면 .env에 ${k.key_name} / ${k.secret_name}로 기록됩니다`));
+      if (k.others && k.others.length) box.appendChild(el("div", "hint", "⚠ .env에 다른 이름의 변수가 있습니다: " + k.others.join(", ") + " — 봇이 읽는 이름과 같은지 확인하세요."));
+      if (!k.bot_supported) box.appendChild(el("div", "hint", "ℹ 지금 ena-bot은 이 거래소를 지원하지 않습니다 (키 저장만 됩니다. 연동하려면 봇에 이 거래소 클라이언트를 개발해야 합니다)."));
+      if (chk) box.appendChild(el("div", chk.ok ? (chk.withdraw ? "banner" : "hint") : "banner", chk.ok ? ("검증됨 " + fmtTs(chk.checked_at) + " · " + (chk.read_only ? "읽기 전용 키" : chk.can_trade ? "거래 가능 키" : "권한 확인") + " · IP 제한 " + (chk.ip_restricted ? "있음" : "없음 (권장: 설정)") + (chk.withdraw ? " · ⚠ 출금 권한이 켜져 있습니다 — 위험합니다. 새 키로 바꾸세요" : " · 출금 권한 없음 ✓")) : "검증 실패: " + chk.error));
+      const ik = el("input"); ik.type = "password"; ik.placeholder = "API Key"; ik.autocomplete = "off"; ik.spellcheck = false;
+      const is = el("input"); is.type = "password"; is.placeholder = "API Secret"; is.autocomplete = "off"; is.spellcheck = false;
+      box.appendChild(ik); box.appendChild(is);
+      const row = el("div", "row");
+      const sv = el("button", "primary", "저장"); sv.onclick = async () => { const key = ik.value, secret = is.value; ik.value = ""; is.value = ""; await botPost("/api/botlab/keys", {action: "save", exchange: ex, key, secret}, "저장했습니다. 이제 '검증'을 눌러 권한을 확인하세요."); };
+      const vf = el("button", "", "검증 (읽기 전용 조회 1번)"); vf.disabled = !(k.key_set && k.secret_set);
+      let tn = null;
+      vf.onclick = () => botPost("/api/botlab/keys", {action: "verify", exchange: ex, testnet: tn ? tn.checked : false}, "검증 요청을 보냈습니다.");
+      const rm = el("button", "danger", "삭제"); rm.disabled = !(k.key_set || k.secret_set); rm.onclick = () => { if (confirm(k.label + " 키를 .env에서 지웁니다. 계속할까요?")) botPost("/api/botlab/keys", {action: "remove", exchange: ex}, "지웠습니다."); };
+      row.appendChild(sv); row.appendChild(vf); row.appendChild(rm);
+      if (ex === "bybit") { const l = el("label", "chk"); tn = el("input"); tn.type = "checkbox"; l.appendChild(tn); l.appendChild(document.createTextNode(" 테스트넷 키")); row.appendChild(l); }
+      box.appendChild(row);
+      kb.appendChild(box);
+    });
+    root.appendChild(bcard("🔑 거래소 API 키 — 바이비트 · 바이낸스", kb));
+  }
+
   // 서비스
   const sv2 = bot.services;
   root.appendChild(bcard("🛰 봇 서비스 상태 (읽기 전용)", sv2.available && sv2.items.length ? btable(["서비스", "상태", "마지막 종료 코드"], sv2.items.map(x => [x.label, x.running ? "● 실행 중" : "○ 중지", x.last_exit])) :
@@ -676,7 +743,8 @@ function renderBot(){
   const sh = tg("bl-shadow", "그림자 모드 — 결정권자(Ollama)가 모든 시도를 판정하되 따르지 않고 기록만", bot.policy ? bot.policy.shadow : true);
   const sp = el("button", "primary", "보호 구역 저장"); sp.onclick = () => botPost("/api/botlab/policy", {protect: ta.value.split("\n").map(x => x.trim()).filter(Boolean), shadow: bf["bl-shadow"].checked}, "저장했습니다. 이후 모든 실행에 적용됩니다.");
   const rs = el("button", "", "기본값으로"); rs.onclick = () => { ta.value = bot.default_protect.join("\n"); };
-  const pr = el("div", "row"); pr.appendChild(sp); pr.appendChild(rs);
+  const pz = el("button", "", "페이퍼 전용 프리셋 (추세 엔진 수정 허용)"); pz.title = "실거래 경로·설정·키·데이터·서비스 파일은 계속 보호하고, trend_engine.py만 AI가 고칠 수 있게 합니다. 저장을 눌러야 적용됩니다."; pz.onclick = () => { ta.value = bot.recommended_protect.join("\n"); toast("목록을 바꿨습니다. '보호 구역 저장'을 눌러야 적용됩니다."); };
+  const pr = el("div", "row"); pr.appendChild(sp); pr.appendChild(rs); pr.appendChild(pz);
   root.appendChild(bcard("🛡 보호 구역 — AI가 절대 바꿀 수 없는 파일 (한 줄에 하나)", ta, sh, pr, el("div", "hint", "계획 AI가 빼려 해도 빠지지 않으며, 어떤 경로로 실행해도 적용됩니다. 주문·리스크·실행 루프·키·데이터·서비스 정의가 기본 보호 대상입니다. 이 파일들의 변경은 사람이 직접 합니다.")));
 
   // 개선 작업

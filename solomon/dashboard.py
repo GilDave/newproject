@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analysis as analysis_mod, autofix as autofix_mod, botlab as botlab_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
+from . import (__version__, analysis as analysis_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
                portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
@@ -649,13 +649,82 @@ class DashboardApp:
                "next_analyze": (cfg["last_analyze"] + cfg["analyze_hours"] * 3600) if cfg["auto_analyze"] and cfg["last_analyze"] else None,
                "default_protect": botlab_mod.DEFAULT_PROTECT, "latest": hist[-1] if hist else None, "series": lab.series(hist),
                "services": lab.services(), "health": lab.health(proj) if proj else None, "policy": None, "arbiter_shadow": None,
-               "ollama": next((p for p in self.providers_info() if p["name"] == "ollama"), None)}
+               "ollama": next((p for p in self.providers_info() if p["name"] == "ollama"), None), "recommended_protect": botlab_mod.PAPER_PROTECT,
+               "trading": None, "keys": None, "keys_check": self._keys_check()}
+        if proj:
+            out["keys"] = keys_mod.status(proj)
+            out["trading"] = mode_mod.state(proj, out["health"], out["keys_check"], time.time())
         if proj and proj in self._projects:
             out["policy"] = policy_mod.load(Path(proj), self.settings.state_dir)
             try:
                 out["arbiter_shadow"] = shadow_mod.evaluate(Path(proj), self.settings.state_dir)
             except Exception:
                 out["arbiter_shadow"] = None
+        return out
+
+    # ---- exchange keys and the paper/live switch (secrets are written to the bot's .env and never come back)
+    def _keys_check(self) -> dict:
+        try:
+            return json.loads((self.botlab.dir / "keys_check.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def _save_keys_check(self, ex: str, res: dict) -> None:
+        data = self._keys_check()
+        data[ex] = {k: v for k, v in res.items() if k not in ("key", "secret")}
+        self.botlab.dir.mkdir(parents=True, exist_ok=True)
+        (self.botlab.dir / "keys_check.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def _bot_dir(self) -> str:
+        d = self.botlab.config()["bot_dir"]
+        if not d:
+            raise ApiError(400, "먼저 봇 폴더를 지정하세요.")
+        return d
+
+    def botlab_keys(self, body: dict) -> dict:
+        d, ex, action = self._bot_dir(), str(body.get("exchange", "")), str(body.get("action", ""))
+        try:
+            if action == "save":
+                st = keys_mod.save(d, ex, str(body.get("key", "")), str(body.get("secret", "")))
+                data = self._keys_check()
+                data.pop(ex, None)  # a new key has not been checked yet
+                (self.botlab.dir).mkdir(parents=True, exist_ok=True)
+                (self.botlab.dir / "keys_check.json").write_text(json.dumps(data), encoding="utf-8")
+                msg = f"{st['label']} 키를 봇 폴더의 .env에 저장했습니다 (이전 .env는 백업). 화면에는 다시 표시되지 않습니다. 이제 '검증'을 눌러 권한을 확인하세요."
+            elif action == "verify":
+                pair = keys_mod.load(d, ex)
+                if not pair:
+                    raise ApiError(400, "저장된 키가 없습니다. 먼저 저장하세요.")
+                res = keys_mod.verify(ex, pair[0], pair[1], bool(body.get("testnet")))
+                self._save_keys_check(ex, res)
+                msg = ("검증했습니다." if res["ok"] else res["error"]) + (" ⚠ 이 키는 출금 권한이 켜져 있습니다. 새 키를 출금 권한 없이 만들어 바꾸세요." if res.get("withdraw") else "")
+            elif action == "remove":
+                keys_mod.remove(d, ex)
+                data = self._keys_check()
+                data.pop(ex, None)
+                (self.botlab.dir / "keys_check.json").write_text(json.dumps(data), encoding="utf-8")
+                msg = "키를 .env에서 지웠습니다."
+            else:
+                raise ApiError(400, "알 수 없는 동작입니다.")
+        except keys_mod.KeyError_ as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        out = self.botlab_state()
+        out["message"] = msg
+        return out
+
+    def botlab_mode(self, body: dict) -> dict:
+        d = self._bot_dir()
+        try:
+            if str(body.get("mode")) == "paper":
+                res = mode_mod.set_paper(d)
+            elif str(body.get("mode")) == "live":
+                res = mode_mod.set_live(d, str(body.get("confirm", "")), list(body.get("checks") or []), self.botlab.health(d), self._keys_check(), time.time())
+            else:
+                raise ApiError(400, "알 수 없는 모드입니다.")
+        except mode_mod.ModeError as exc:
+            raise ApiError(exc.status, exc.message + ((" — " + " / ".join(exc.blockers)) if exc.blockers else "")) from exc
+        out = self.botlab_state()
+        out["message"] = res["message"]
         return out
 
     def botlab_config(self, body: dict) -> dict:
@@ -1174,6 +1243,10 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_video_probe(str(body.get("project", "")), body)})
                 if path == "/api/botlab/config":
                     return self._json(200, app.botlab_config(body))
+                if path == "/api/botlab/keys":
+                    return self._json(200, app.botlab_keys(body))
+                if path == "/api/botlab/mode":
+                    return self._json(200, app.botlab_mode(body))
                 if path == "/api/botlab/policy":
                     return self._json(200, app.botlab_policy(body))
                 if path == "/api/botlab/run":

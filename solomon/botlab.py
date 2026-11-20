@@ -22,6 +22,10 @@ DEFAULT_PROTECT = [".env", "*.env", "config.json", "data/", ".venv/", "*.plist",
                    "ena_bot/exchange.py", "ena_bot/risk.py", "ena_bot/config.py", "ena_bot/engine.py",
                    "ena_bot/trend_engine.py", "ena_bot/main.py", "ena_bot/store.py", "ena_bot/notify.py"]
 
+# For a PAPER-only bot: the live path, credentials, settings, data and service files stay protected; the strategy engine can be worked on.
+PAPER_PROTECT = [".env", "*.env", "config.json", "data/", ".venv/", "*.plist",
+                 "ena_bot/exchange.py", "ena_bot/risk.py", "ena_bot/config.py", "ena_bot/engine.py", "ena_bot/main.py", "ena_bot/store.py", "ena_bot/notify.py"]
+
 DEFAULTS = {"bot_dir": "", "enabled": True, "interval_hours": 6.0, "fetch_days": 30,
             "auto_analyze": True, "analyze_hours": 24.0, "last_eval": 0.0, "last_analyze": 0.0, "last_analyze_error": ""}
 ALIVE_WITHIN_HOURS = 9.0  # the trend loop wakes about every 4 hours
@@ -120,17 +124,19 @@ class BotLab:
         try:
             con = shadow._open_ro(db)
             try:
-                kinds = con.execute("select kind, count(*), max(ts_ms) from events group by kind").fetchall()
+                kinds = con.execute("select kind, count(*), max(ts_ms), min(ts_ms) from events group by kind").fetchall()
                 now_ms = int(self._clock() * 1000)
                 errs = con.execute("select count(*) from events where kind='error' and ts_ms > ?", (now_ms - 86_400_000,)).fetchone()[0]
             finally:
                 con.close()
         except Exception as exc:  # a locked or odd database must never break the page
             return {"ok": False, "error": str(exc)[:200]}
-        last = {k: int(t) for k, _, t in kinds if t}
+        last = {k: int(t) for k, _, t, _f in kinds if t}
+        first = {k: int(f) for k, _, _t, f in kinds if f}
         cyc = last.get("trend_cycle", 0)
         age_h = (self._clock() * 1000 - cyc) / 3_600_000 if cyc else None
-        return {"ok": True, "kinds": [{"kind": k, "count": c, "last_ms": t} for k, c, t in sorted(kinds, key=lambda x: -x[1])],
+        return {"ok": True, "kinds": [{"kind": k, "count": c, "last_ms": t, "first_ms": f} for k, c, t, f in sorted(kinds, key=lambda x: -x[1])],
+                "paper_days": round((self._clock() * 1000 - first["trend_cycle"]) / 86_400_000, 1) if first.get("trend_cycle") else 0.0,
                 "errors_24h": errs, "last_cycle_age_hours": round(age_h, 1) if age_h is not None else None,
                 "alive": age_h is not None and age_h <= ALIVE_WITHIN_HOURS}
 
