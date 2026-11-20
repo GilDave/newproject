@@ -10,14 +10,7 @@ from pathlib import Path
 from helpers import make_repo
 
 
-def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    # a zombie that nobody reaped still answers kill(0); treat it as dead
-    stat = Path(f"/proc/{pid}/stat")
-    return not (stat.exists() and stat.read_text().split(")")[-1].split()[0] == "Z")
+from helpers import pid_alive as alive  # works on Linux and macOS (no /proc on a Mac)
 
 
 def wait_for(cond, seconds=15):

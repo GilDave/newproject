@@ -361,3 +361,20 @@ def test_baseline_cache_expires_and_ignores_garbage(tmp_path):
     assert not baseline_known_good(f, "k", 1000.0)
     baseline_remember(f, "k", 1000.0)
     assert baseline_known_good(f, "k", 1000.0 + 60) and not baseline_known_good(f, "k", 1000.0 + BASELINE_TTL_SEC + 1) and not baseline_known_good(f, "other", 1001.0)
+
+
+def test_a_failed_baseline_says_which_tests_failed(tmp_path):
+    from solomon import status
+    from solomon.verifier import failing_tests
+    out = "..F\n=== short test summary info ===\nFAILED tests/test_a.py::test_one - assert 1 == 2\nFAILED tests/test_a.py::test_one - again\nERROR tests/test_b.py::test_two\n2 failed, 5 passed"
+    assert failing_tests(out) == ["tests/test_a.py::test_one", "tests/test_b.py::test_two"] and failing_tests("all fine") == []
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.test_command = ["python3", "-c", "import sys; print('FAILED tests/test_a.py::test_one - boom'); print('1 failed, 3 passed'); sys.exit(1)"]
+    s.approved_commands = ["python3"]
+    s.baseline_check = True
+    codex = ScriptedProvider("codex", [])
+    r = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json()]), "codex": codex}).run("goal", repo)
+    assert r.status == "ERROR" and not codex.calls and "test_one" in r.summary and "Failing tests" in r.summary
+    run = status.summarize_run("x", events(r))
+    assert any("실패한 테스트: test_one" in t for t in run.timeline), run.timeline

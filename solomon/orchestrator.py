@@ -565,13 +565,13 @@ class Orchestrator:
             base = verify(s, wt)
             gitops.clean_untracked(wt)
             log.event("baseline", passed=base.passed, exit_code=base.exit_code, command=base.command, seconds=round(self._clock() - t0, 1),
-                      output_tail=base.output_tail[-1500:])
+                      output_tail=base.output_tail[-1500:], failing=verifier_mod.failing_tests(base.output_tail)[:40])
             if base.passed and not base.skipped and bkey:
                 verifier_mod.baseline_remember(bfile, bkey, self._clock())
             if not base.passed:
                 result.status = "ERROR"
                 result.summary = ("수정하기 전의 코드에서도 테스트가 실패합니다. 테스트 환경 문제일 수 있어 AI를 호출하지 않고 "
-                                  f"멈췄습니다 (토큰 절약). 명령: {base.command}\n{base.output_tail[-600:]}" + verifier_mod.environment_hint(base.command, base.output_tail))
+                                  f"멈췄습니다 (토큰 절약). 명령: {base.command}\n{failure_digest(base.output_tail, 1800)}" + verifier_mod.environment_hint(base.command, base.output_tail))
                 return
 
         attempt = 0

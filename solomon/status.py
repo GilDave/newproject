@@ -226,7 +226,12 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
         elif kind == "baseline":
             run.stage_key = "build"
             run.stage = "구현 준비"
-            run.timeline.append(f"{clock}  시작 전 점검 {'통과' if ev.get('passed') else '실패'}" + (f" · {ev.get('seconds')}초" if ev.get("seconds") is not None else ""))
+            failing = [str(x) for x in ev.get("failing", [])]
+            why = ""
+            if not ev.get("passed"):
+                why = (" · 실패한 테스트: " + ", ".join(n.split("::")[-1] for n in failing[:4]) + (f" 외 {len(failing) - 4}개" if len(failing) > 4 else "")) if failing \
+                    else (" · " + str(ev.get("output_tail") or "").strip().splitlines()[-1][:100] if str(ev.get("output_tail") or "").strip() else "")
+            run.timeline.append(f"{clock}  시작 전 점검 {'통과' if ev.get('passed') else '실패'}" + (f" · {ev.get('seconds')}초" if ev.get("seconds") is not None else "") + why)
         elif kind == "order":
             run.stage_key = "plan"
             run.stage = _STAGE_BY_EVENT[kind]

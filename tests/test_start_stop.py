@@ -35,13 +35,7 @@ def box(tmp_path):
     run("stop.sh")  # never leave a dashboard behind
 
 
-def alive(pid):
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    stat = Path(f"/proc/{pid}/stat")
-    return not (stat.exists() and stat.read_text().split(")")[-1].split()[0] == "Z")
+from helpers import pid_alive as alive  # works on Linux and macOS (no /proc on a Mac)
 
 
 def get(url, token=True):

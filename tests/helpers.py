@@ -85,3 +85,24 @@ def make_settings(**overrides) -> Settings:
         setattr(s, key, value)
     s.validate()
     return s
+
+
+def pid_alive(pid: int) -> bool:
+    """A process that is running; a zombie nobody reaped yet counts as gone. Works on Linux (/proc) and macOS (ps)."""
+    import os
+    import subprocess
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    proc = Path(f"/proc/{pid}/stat")
+    if proc.exists():
+        return proc.read_text().split(")")[-1].split()[0] != "Z"
+    try:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return bool(state) and not state.startswith("Z")

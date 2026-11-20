@@ -105,6 +105,14 @@ def verify(settings: Settings, wt: Path) -> VerifyResult:
     return VerifyResult(res.exit_code == 0, False, " ".join(cmd), res.exit_code, output[-_TAIL:])
 
 
+def failing_tests(output: str) -> list[str]:
+    """Names of the failing tests in a pytest run (the `FAILED path::name` lines of its short summary), without duplicates."""
+    import re
+
+    names = [re.sub(r"\s+-\s.*$", "", l.strip()) for l in (output or "").splitlines() if re.match(r"\s*(FAILED|ERROR)\s+\S+", l)]
+    return list(dict.fromkeys(n.split(" ", 1)[1] if " " in n else n for n in names))
+
+
 def failure_digest(output: str, limit: int = 3500) -> str:
     """The part of a test run a builder needs to fix the failure: the failing test names plus the first tracebacks.
 
