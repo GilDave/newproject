@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import quota as quota_mod, gitops
+from . import policy as policy_mod, scope_guard, quota as quota_mod, gitops
 from .analysis import SEVERITY_RANK
 from .orchestrator import Orchestrator
 from .settings import ConfigError, Settings
@@ -174,6 +174,11 @@ def run_autofix(
                            "테스트 명령을 설정하거나 --allow-untested 를 주세요.")
     analysis = load_analysis(project, settings.state_dir, analysis_id)
     chosen = select_findings(analysis, min_severity, min_agreement, verified_only, 0 if group else max_fixes, ids)
+    # findings that sit in a PROTECTED file cannot be fixed by an AI at all: every attempt would end in "protected path was modified".
+    # They are listed as skipped (a person fixes them) instead of burning an hour of attempts that can never pass.
+    protect = policy_mod.load(project, settings.state_dir)["protect"]
+    blocked = [c for c in chosen if any(scope_guard.path_matches(c["file"], p) for p in protect)]
+    chosen = [c for c in chosen if c not in blocked]
     units = group_by_file(chosen) if group else [[c] for c in chosen]
     if group and max_fixes:
         units = units[:max_fixes]
@@ -187,6 +192,9 @@ def run_autofix(
                          [Item(u[0]["id"], u[0]["members"][0]["title"] if len(u) == 1 else f"{len(u)}건 묶음: {u[0]['members'][0]['title']} 외",
                                u[0]["file"], max((c["severity"] for c in u), key=lambda v: SEVERITY_RANK[v]), [c["id"] for c in u])
                           for u in units])
+    for c in blocked:
+        result.items.append(Item(c["id"], c["members"][0]["title"], c["file"], c["severity"], [c["id"]], status="SKIPPED",
+                                 summary="보호 경로의 파일이라 AI가 고치지 않습니다 — 사람이 직접 고치거나 보호 경로에서 뺀 뒤 다시 실행하세요"))
     events = bdir / "events.jsonl"
 
     def log(kind: str, **fields) -> None:
@@ -196,7 +204,8 @@ def run_autofix(
     log("batch_start", analysis=analysis.get("analysis_id"), items=[dataclasses.asdict(i) for i in result.items],
         branch=branch, budget_minutes=budget_minutes)
     if not units:
-        result.summary = "조건에 맞는 고칠 항목이 없습니다 (심각도·근거 확인·AI 동의 기준)."
+        result.summary = (f"선택한 {len(blocked)}건이 모두 보호 경로의 파일이라 AI가 고치지 않았습니다 (사람이 직접 고치거나 보호 경로에서 뺀 뒤 다시 실행하세요)."
+                          if blocked else "조건에 맞는 고칠 항목이 없습니다 (심각도·근거 확인·AI 동의 기준).")
         return _finish(result, project, bdir, "HEAD", log)
 
     base = gitops.resolve(project, "HEAD")

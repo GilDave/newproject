@@ -549,6 +549,7 @@ class DashboardApp:
         self._add_video_state(state, Path(project), project, video_id, job)
         state["project_git"] = self.is_git(project)
         state["batches"] = autofix_mod.list_batches(Path(project), self.settings.state_dir)
+        state["protect"] = policy_mod.load(Path(project), self.settings.state_dir)["protect"]  # files no AI may change (auto-fix skips them)
         cmd, source = self.effective_test_command(project)
         state["test_command"] = {"text": " ".join(cmd) if cmd else "없음", "source": source}
         runs = load_runs(Path(project), self.settings.state_dir)

@@ -9,10 +9,10 @@
 | 표시 | 뜻 |
 |---|---|
 | **확인됨** | Solomon 코드를 직접 읽고 테스트로 확인한 내용 (이 문서의 1~12장) |
-| **일부 확인** | 사용자가 보여주신 파일·출력에서 확인된 내용 (ena-bot 13장) |
-| **확인 필요** | 아직 코드를 보지 못해 추정인 내용. 13장의 명령으로 구조를 뽑아 주시면 채웁니다 |
+| **구조 확인** | 사용자가 뽑아 주신 구조 덤프로 확인된 내용 (ena-bot 13장) |
+| **확인 필요** | 함수 안의 계산·설정 값처럼 아직 보지 못한 내용 |
 
-> 중요: ena-bot 코드는 제 쪽에서 직접 읽을 방법이 없습니다(맥미니 폴더는 클라우드 세션에 열리지 않습니다). 그래서 13장은 일부만 확인된 상태입니다.
+> ena-bot 코드는 제 쪽에서 직접 읽을 수 없어서(맥미니 폴더는 클라우드 세션에 열리지 않습니다), 13장은 사용자가 뽑아 주신 **구조 덤프**(파일·함수 이름·연결 관계)로 작성했습니다. 함수 안의 계산과 설정 값은 아직 보지 못했습니다.
 
 ## 1. 전체 구성
 
@@ -173,61 +173,67 @@
 | `~/.solomon/vision.json` | 이미지를 볼 수 있는 AI 시험 결과 |
 | `~/.solomon/botlab/` | 봇 연구실 설정 · 가격 · 평가 기록 |
 
-## 13. ena-bot 구조 (일부만 확인)
+## 13. ena-bot 구조 (구조 덤프로 확인됨)
 
 @@FIG:8@@
 
-**확인된 사실**
-- 실행 명령(`ena_bot/main.py`): `synth` · `fetch` · `backtest` · `walkforward` · `trend` · `trend-run` · `report` · `trend-compare` · `dashboard` · `learn-train` · `run` · `resume`.
-- 서비스(launchd): `com.ena.trend`(추세 엔진) · `com.ena.dashboard` · `com.ena.report` · `com.ena.ollama`(모델 서버). 모두 `.venv/bin/python`으로 실행됩니다.
-- 이벤트 종류: `trend_cycle` · `trend_shadow` · `ml_shadow` · `ml2_pred` · `news_score` · `funding` · `learn_seed` · `trend_startup` · `error`(Bybit 호출 한도 오류 3건). **`llm` 이벤트는 없음** → 옛 3분 엔진의 LLM 필터는 지금 쓰이지 않습니다.
-- 추세 엔진은 4시간 주기로 목표 노출(`target_exposure`)을 계산하고, BTC 200일선과 뉴스 위험 점수로 배수(`mult`)를 곱합니다.
-- 학습기(`learn.py`·`learn2.py`)는 **그림자 모드**입니다. 예측을 기록하고 정답이 확정되면 채점해서 학습하며, 매매에는 쓰지 않는다고 파일 머리글에 적혀 있습니다.
-- 백테스트·체결 시뮬레이터(`backtest.py`·`sim.py`)는 같은 체결 논리를 공유하고, 같은 캔들에서 손절과 이익이 모두 가능하면 손절 우선으로 가정합니다.
+**신뢰 수준**: 모듈 이름 · 함수/클래스 이름 · 모듈 간 호출 · 설명(docstring) · 설정 키 이름 · DB 구조는 **확인됨**입니다. 함수 안의 계산과 설정 값은 아직 보지 못해 **확인 필요**입니다.
 
-**확인 필요 (코드를 읽어야 알 수 있는 것)**
-1. 추세 엔진 한 사이클의 정확한 함수 호출 순서와 주문이 나가는 조건
-2. 청산·손절 규칙과 리스크 게이트가 막는 조건
-3. 학습기 출력이 실제 결정에 쓰이는 곳이 있는지
-4. 뉴스 점수가 어느 모델·어떤 입력으로 만들어지는지
-5. 테스트 구성(`pytest`가 무엇을 검사하는지, `data/` 의존 여부)
+### 13-1. 이 봇은 무엇인가
 
-**구조 뽑기 명령** (읽기 전용 · 코드 본문과 비밀 값은 담지 않습니다: 파일별 줄 수 · 함수/클래스 이름 · 다른 모듈과의 연결 · 설정 키 이름만)
+- 프로젝트 설명: "Bybit ENAUSDT 선물 자동매매 봇 (**페이퍼/테스트넷 우선**)".
+- 지금 서비스로 도는 `trend-run`은 "추세추종 **페이퍼** 엔진: 4시간 봉이 닫힐 때마다 목표 포지션을 계산해 **가상 계좌**를 리밸런싱한다"고 되어 있습니다. 주문이 거래소로 나가지 않는 연구·검증용 실행입니다. (이전에 제가 "실계좌"라고 부른 것은 틀렸습니다.)
+- 실거래 경로는 별도로 있습니다: `LiveBroker`, `config.json`의 `live_enabled`, `run --i-understand-live-trading`. 이 경로는 AI가 건드리면 안 됩니다.
 
-```
-mkdir -p /Users/dave_gil/00.Claud/00.Solomon/eval && cd /Users/dave_gil/00.Claud/01.ena-bot && .venv/bin/python - <<'PY' > /Users/dave_gil/00.Claud/00.Solomon/eval/ena-bot-structure.txt
-import ast, json, pathlib, sqlite3
-root = pathlib.Path("ena_bot")
-for f in sorted(root.glob("*.py")):
-    src = f.read_text(encoding="utf-8"); tree = ast.parse(src)
-    d = (ast.get_docstring(tree) or "").splitlines()
-    print(f"\n=== {f.name} ({len(src.splitlines())}줄) {d[0][:110] if d else ''}")
-    internal = sorted({n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.level >= 1 and n.module})
-    if internal: print("  부르는 모듈:", ", ".join(internal))
-    for n in tree.body:
-        if isinstance(n, ast.ClassDef):
-            print(f"  class {n.name}: " + ", ".join(m.name for m in n.body if isinstance(m, ast.FunctionDef)))
-        elif isinstance(n, ast.FunctionDef):
-            doc = (ast.get_docstring(n) or "").splitlines()
-            print(f"  def {n.name}({', '.join(a.arg for a in n.args.args)})" + (f"  # {doc[0][:80]}" if doc else ""))
-print("\n=== config.json 키 (값 제외)")
-try:
-    def keys(o, p=""):
-        if isinstance(o, dict):
-            for k, v in o.items(): keys(v, p + k + ".")
-        else: print("  ", p.rstrip("."), type(o).__name__)
-    keys(json.loads(pathlib.Path("config.json").read_text()))
-except Exception as e: print("  (없음/읽기 실패)", e)
-print("\n=== bot.db 테이블")
-con = sqlite3.connect("file:data/bot.db?mode=ro", uri=True)
-for (name, sql) in con.execute("select name, sql from sqlite_master where type='table'"): print(" ", sql)
-print("\n=== tests 폴더")
-for t in sorted(pathlib.Path("tests").glob("*.py")): print(" ", t.name, len(t.read_text().splitlines()), "줄")
-PY
-wc -l /Users/dave_gil/00.Claud/00.Solomon/eval/ena-bot-structure.txt
-```
+### 13-2. 추세 엔진 한 사이클 (4시간마다)
 
-끝나면 `eval/ena-bot-structure.txt`의 내용을 붙여 넣어 주세요(길면 나눠서). 그러면 13장을 확정하고 순서도를 실제 구조로 다시 그립니다.
+| 순서 | 함수 | 하는 일 |
+|---|---|---|
+| 1 | `_closed_4h` | 닫힌 4시간 봉 확보(1시간 봉을 4시간으로 합침, 덜 찬 마지막 묶음은 버림) |
+| 2 | `trend.target_positions` | 앙상블 시계열 모멘텀 + 변동성 타겟으로 **목표 포지션**(자본 대비 배수, 음수=숏) 계산 |
+| 3 | `_btc_multiplier` | BTC 200일선 필터 배수 (`btc_shadow` 설정이면 그림자 계좌에서만) |
+| 4 | `_news` → `news.news_multiplier` | RSS 헤드라인을 Ollama가 0~1 위험 점수로 → 노출 배수(≤1). `news.apply`가 꺼져 있으면 1.0 |
+| 5 | `events.exposure_gate` | FOMC·CPI·고용보고서 전후 노출 감축 |
+| 6 | `_accrue_all` | 펀딩비 반영(실제 정산 또는 추정) |
+| 7 | `PaperTrendBroker.rebalance` | 가상 계좌를 목표 포지션으로 조정(목표와 현재 차이가 임계 이하면 거래 안 함) |
+| 8 | `_run_shadow` · `_run_ml2` | 그림자 계좌(BTC 필터)와 학습기 예측(`ml2_pred`) 기록 |
+| 9 | `store.log` | `events`에 기록(`trend_cycle`, `trend_shadow`, `ml_shadow`, `news_score`, `funding` …) |
+
+### 13-3. 학습기는 매매에 쓰이지 않는다
+
+- `learn.py`: 온라인 로지스틱 회귀. 추세 방향이 24시간 뒤에 맞을 확률을 예측하고 정답이 확정되면 채점해서 학습("예측 후 학습").
+- `learn2.py`: 18개 코인을 모아 학습(3년 이상), 확장 특징(`featx.py`: 가격·BTC·펀딩·미결제약정·롱숏비율·프리미엄·캘린더), 워크포워드 검증, `verdict`("사전 고정 기준 판정. 모두 통과해야 eligible"). `train_and_report`는 매매에 영향이 없습니다.
+- 즉 이 봇은 **사전 고정 기준으로 엄격하게 검증한 뒤에만** 학습기를 쓰려는 설계입니다. 그래서 AI가 이 부분(통계 설계)을 건드리는 것은 버그 수정이 아니라 **연구 설계 변경**입니다.
+
+### 13-4. 옛 3분 엔진
+
+`engine.py`(신호 → LLM 필터 → 리스크 게이트 → 주문)와 `llm_filter.py`는 `main.py`의 `run` 명령으로만 쓰이고, 서비스 목록(launchd)에는 연결되어 있지 않습니다. `events`에 `llm` 종류가 없는 것과 일치합니다. **현재 운영과 무관한 코드**입니다.
+
+### 13-5. 지난밤 실패를 이 구조에 맞춰 본 결과
+
+| 실패 항목 | 위치 | 구조상 원인 |
+|---|---|---|
+| "저장 상태를 거래 모드와 심볼 간에 공유" 묶음 (시도 9번, 같은 실패 3×3) | `engine.py`(옛 엔진) · `store.py` | `engine.py`, `store.py`는 **보호 경로**입니다. AI가 고치려 할 때마다 "보호 경로 수정" 위반으로 되돌려져 매번 같은 실패가 됩니다. 게다가 옛 엔진이라 운영과 무관합니다. |
+| "텔레그램 폴링 에러 핸들링 …" 묶음 | `notify.py` | 이것도 보호 경로(`notify.py`)입니다. |
+| "라벨 겹침 → CI 과대평가" | `learn2._edge_ci` | 통계 설계 변경입니다. 연구 기준(사전 고정 판정)에 닿아서 자동 수정이 아니라 사람이 정해야 합니다. |
+| "동적 속성 주입 누락 AttributeError" | (파일 확인 필요) | 한 곳 수정으로 보이므로 개별로 다시 시도할 가치가 있습니다. |
+
+**핵심 발견 (v1.10.4에서 고침)**: 보호 경로의 파일에 있는 문제를 자동 수정에 넣으면 **절대 통과할 수 없는데도 시간을 다 쓰고 실패**합니다. 이제 이런 항목은 시작 전에 **"보호 경로 — 사람이 직접 고침"으로 건너뛰고**, 분석 보고서에서도 체크할 수 없게 표시합니다.
+
+### 13-6. 개선 대상으로 삼을 만한 것과 아닌 것
+
+| 구분 | 모듈 | 이유 |
+|---|---|---|
+| 개선 대상 (자동 수정 가능) | `featx.py`, `trend.py`, `news.py`, `scores.py`, `report.py`, `translate.py`, `indicators.py`, `learn_data.py` | 계산·수집 로직. 테스트와 워크포워드로 검증 가능 |
+| 사람이 설계 (제안만) | `learn2.py`의 검증·판정(`walk_forward`, `_edge_ci`, `verdict`) | 연구 기준 자체 |
+| 보호 (AI 수정 금지) | `exchange.py`, `risk.py`, `config.py`, `trend_engine.py`, `main.py`, `store.py`, `notify.py`, `engine.py`, `.env`, `config.json`, `data/`, `*.plist` | 실행 루프 · 거래소 · 설정 · 서비스 정의 |
+| 폐기 후보 | `engine.py`, `llm_filter.py` | 서비스와 연결 안 된 옛 코드 |
+
+### 13-7. 아직 확인이 필요한 것
+
+1. `news.apply`와 `mode` 값 (config.json의 값은 키 이름만 확인됨)
+2. `target_positions`의 구체 파라미터와 `learn2.verdict` 기준
+3. `trend_engine`·`learn2`의 테스트가 무엇을 검사하는지 (`tests/test_trend_engine.py` 373줄)
 
 ## 14. 문제를 정확히 짚는 방법 — 실패한 작업 읽기
 
@@ -249,7 +255,7 @@ wc -l /Users/dave_gil/00.Claud/00.Solomon/eval/ena-bot-structure.txt
 | 실패하는 테스트가 **AI가 새로 만든 테스트** | AI가 만든 테스트가 잘못됨 | 지시서에 "새 테스트는 기존 방식으로" 추가 |
 | 실패 이름이 시도마다 바뀜 | 구현이 점점 불안정 | 목표를 더 작게 쪼개기 |
 | 검수 FAIL만 반복, 테스트는 통과 | 검수 기준과 구현의 괴리 | 지적문이 blocker인지 확인(v1.10.1은 minor를 걸러냄) |
-| 범위 위반 반복 | 목표가 보호 경로나 한도를 건드림 | 보호 경로 목록·묶음 크기 확인 |
+| 범위 위반 반복 | 목표가 보호 경로나 한도를 건드림 | **고칠 파일이 보호 경로인지** 먼저 확인 (v1.10.4부터 자동으로 건너뜀) |
 
 **③ 터미널을 써야 할 때** (붙여넣기용): 해당 항목의 기록 폴더(관리 탭 5W1H "어디서")에서
 
@@ -268,4 +274,4 @@ grep -h '"event": "verify"' events.jsonl | tail -n 3
 | 구현 AI 3칸이 같은 AI | 교대·독립 검토의 효과 없음 | 서로 다른 AI 배정 권장 |
 | 결정권자(Ollama) 정확도 | 아직 표본 부족 | 그림자 모드로 성적 수집 중 |
 | 대시보드가 꺼지면 | 봇 연구실 스케줄러(평가·분석)가 멈춤 | 대시보드를 켜 둘 것 |
-| ena-bot 코드 | 직접 읽지 못해 13장은 일부 추정 | 13장의 명령 결과로 확정 |
+| ena-bot 코드 | 구조(이름·연결)만 확인, 함수 안 계산과 설정 값은 미확인 | 필요한 파일만 따로 보여주시면 확인 |

@@ -344,3 +344,22 @@ def test_conflict_reason_lists_every_conflicting_file(tmp_path):
     pf.write_text(patch)
     ok, why = manage._check(repo, pf)
     assert not ok and "2개" in why and "src/app.py" in why and "src/b.py" in why
+
+
+def test_findings_in_protected_files_are_skipped_not_attempted(tmp_path):
+    from solomon import policy
+    repo = make_repo(tmp_path)
+    (repo / "src" / "engine.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "e"], cwd=repo, check=True)
+    policy.save(repo, ".solomon", ["src/engine.py"], False)
+    put_analysis(repo, [cluster(1, file="src/engine.py"), cluster(2, file="src/app.py")])
+    s = make_settings()
+    o = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json()]), "codex": ScriptedProvider("codex", [write_file("src/new.py")])})
+    r = autofix.run_autofix(s, repo, orchestrator=o, ids=[1, 2])
+    by = {i.cluster: i for i in r.items}
+    assert by[2].status == "PASSED" and by[1].status == "SKIPPED" and "보호 경로" in by[1].summary
+    assert len(o.providers["claude"].calls) == 2  # only the unprotected finding cost any AI calls
+    # when everything chosen is protected nothing is run at all
+    r2 = autofix.run_autofix(s, repo, orchestrator=o, ids=[1])
+    assert "보호 경로" in r2.summary and r2.items[0].status == "SKIPPED"
