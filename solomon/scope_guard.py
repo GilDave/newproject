@@ -35,6 +35,14 @@ def path_matches(path: str, pattern: str) -> bool:
     return path == base or path.startswith(base + "/")
 
 
+def is_protected(path: str, patterns: list[str]) -> bool:
+    """Protected = matches a protection pattern and no exception. A pattern starting with '!' is an exception:
+    ['data/', '!data/research/'] protects the data folder but leaves its research notes open."""
+    prot = [p for p in patterns if not p.startswith("!")]
+    allow = [p[1:] for p in patterns if p.startswith("!")]
+    return any(path_matches(path, p) for p in prot) and not any(path_matches(path, a) for a in allow)
+
+
 def check(order: Order, changes: list[Change]) -> list[str]:
     violations: list[str] = []
     if len(changes) > order.max_files_changed:
@@ -47,7 +55,7 @@ def check(order: Order, changes: list[Change]) -> list[str]:
     if test_lines > order.max_diff_lines:
         violations.append(f"{test_lines} diff lines in test files, limit is {order.max_diff_lines}")
     for c in changes:
-        if any(path_matches(c.path, p) for p in order.protected_paths):
+        if is_protected(c.path, order.protected_paths):
             violations.append(f"{c.path}: protected path was modified")
             continue
         if not any(path_matches(c.path, p) for p in order.allowed_paths):

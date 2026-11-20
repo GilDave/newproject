@@ -522,13 +522,15 @@ async function poll(){
   }
 }
 
-function isProtected(file){  // mirrors scope_guard.path_matches: a glob, a file, or a folder prefix
+function isProtected(file){  // mirrors scope_guard.is_protected: a glob, a file or a folder prefix; "!x" is an exception
   const f = String(file || "").replace(/\\/g, "/");
-  return (state && state.protect || []).some(p => {
+  const hit = (p) => {
     p = String(p).replace(/\\/g, "/");
     if (/[*?\[]/.test(p)) { const re = new RegExp("^" + p.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"); return re.test(f) || re.test(f.split("/").pop()); }
     const b = p.replace(/\/+$/, ""); return f === b || f.startsWith(b + "/");
-  });
+  };
+  const list = (state && state.protect) || [];
+  return list.filter(p => !p.startsWith("!")).some(hit) && !list.filter(p => p.startsWith("!")).map(p => p.slice(1)).some(hit);
 }
 const openState = {};  // which collapsible sections a person opened or closed (the page redraws every few seconds and must not undo that)
 function keepOpen(d, id, dflt){

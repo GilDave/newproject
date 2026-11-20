@@ -244,6 +244,7 @@ class Orchestrator:
         base = prompts.planner(
             goal, every[:300], self.s.max_files_changed, self.s.max_diff_lines,
             referenced=context.referenced_files(goal, every, project),
+            protected=policy_mod.load(project, self.s.state_dir)["protect"],
         )
         error: Optional[str] = None
         for _ in range(2):

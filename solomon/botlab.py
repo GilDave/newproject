@@ -23,7 +23,7 @@ DEFAULT_PROTECT = [".env", "*.env", "config.json", "data/", ".venv/", "*.plist",
                    "ena_bot/trend_engine.py", "ena_bot/main.py", "ena_bot/store.py", "ena_bot/notify.py"]
 
 # For a PAPER-only bot: the live path, credentials, settings, data and service files stay protected; the strategy engine can be worked on.
-PAPER_PROTECT = [".env", "*.env", "config.json", "data/", ".venv/", "*.plist",
+PAPER_PROTECT = [".env", "*.env", "config.json", "data/", "!data/research/", ".venv/", "*.plist",
                  "ena_bot/exchange.py", "ena_bot/risk.py", "ena_bot/config.py", "ena_bot/engine.py", "ena_bot/main.py", "ena_bot/store.py", "ena_bot/notify.py"]
 
 DEFAULTS = {"bot_dir": "", "enabled": True, "interval_hours": 6.0, "fetch_days": 30,

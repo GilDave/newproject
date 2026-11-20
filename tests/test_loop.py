@@ -563,3 +563,36 @@ def test_tests_are_not_counted_against_the_code_size_limit():
     v = check(o, [Change("tests/test_a.py", "A", 450, 0)])
     assert v and "test files" in v[0]
     assert is_test_path("tests/x.py") and is_test_path("pkg/test_x.py") and is_test_path("a/b_test.py") and not is_test_path("src/testing_tools.py")
+
+
+# ---------------------------------------------------------------- protected paths: the planner knows them, and a folder can have an open corner
+def test_exception_patterns_open_a_corner_of_a_protected_folder():
+    from solomon.scope_guard import is_protected
+    pol = ["data/", "!data/research/", ".env"]
+    assert is_protected("data/bot.db", pol) and is_protected(".env", pol) and is_protected("data/learn_cache/x.json", pol)
+    assert not is_protected("data/research/vol.md", pol) and not is_protected("src/a.py", pol)
+    assert not is_protected("data/research/deep/x.json", pol)
+
+
+def test_the_planner_is_told_what_is_protected_and_where_new_notes_may_go(tmp_path):
+    from solomon import policy
+    repo = make_repo(tmp_path)
+    policy.save(Path(repo), ".solomon", ["data/", "!data/research/"], False)
+    orch, p = three(make_settings(max_attempts=1), [order_json(), review_json()], [write_file("src/new.py")])
+    orch.run("goal", repo)
+    prompt = p["claude"].calls[0]["prompt"]
+    assert "PROTECTED PATHS" in prompt and "- data/" in prompt and "NEVER plan to create or edit a file there" in prompt
+    assert "Exceptions that ARE open" in prompt and "- data/research/" in prompt
+
+
+def test_a_change_inside_the_open_corner_passes_the_scope_check_and_one_outside_does_not(tmp_path):
+    from solomon import policy
+    repo = make_repo(tmp_path)
+    policy.save(Path(repo), ".solomon", ["notes/", "!notes/open/"], False)
+    s = make_settings(max_attempts=1)
+    orch, p = three(s, [order_json(allowed=("src/", "notes/")), review_json()], [lambda pr, cwd: (write_file("src/new.py")(pr, cwd), write_file("notes/open/a.md", "x\n")(pr, cwd))[0]])
+    r = orch.run("goal", repo)
+    assert r.status == "PASSED"
+    orch2, _ = three(make_settings(max_attempts=1), [order_json(allowed=("src/", "notes/"))], [lambda pr, cwd: (write_file("src/new.py")(pr, cwd), write_file("notes/closed/a.md", "x\n")(pr, cwd))[0]])
+    r2 = orch2.run("goal", repo)
+    assert r2.status == "FAILED" and any("protected path" in json.dumps(e) for e in events(r2) if e["event"] == "scope_violation")

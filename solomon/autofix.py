@@ -177,7 +177,7 @@ def run_autofix(
     # findings that sit in a PROTECTED file cannot be fixed by an AI at all: every attempt would end in "protected path was modified".
     # They are listed as skipped (a person fixes them) instead of burning an hour of attempts that can never pass.
     protect = policy_mod.load(project, settings.state_dir)["protect"]
-    blocked = [c for c in chosen if any(scope_guard.path_matches(c["file"], p) for p in protect)]
+    blocked = [c for c in chosen if scope_guard.is_protected(c["file"], protect)]
     chosen = [c for c in chosen if c not in blocked]
     units = group_by_file(chosen) if group else [[c] for c in chosen]
     if group and max_fixes:
