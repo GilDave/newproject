@@ -22,10 +22,11 @@ from .runlog import RunLog
 from .schemas import Order, ReviewResult
 from .tokens import estimate_tokens
 from .settings import ROLES, ConfigError, Settings
-from .verifier import VerifyResult, verify
+from .verifier import failure_digest, VerifyResult, verify
 
 
 REVIEW_RETRIES = 2  # extra asks when the reviewer gives no verdict at all
+SHADOW_FAILURES_PER_RUN = 2  # in shadow mode only this many FAILED attempts per run are judged (every attempt that passed all gates is)
 
 
 class BlockedByQuota(Exception):
@@ -67,6 +68,7 @@ class Orchestrator:
         self.board = quota_board if quota_board is not None else quota_mod.QuotaBoard()
         self._base_roles = dict(settings.roles)
         self._builder_now: Optional[str] = None
+        self._shadow_fail_judged = 0
         self.providers = providers if providers is not None else build_providers(settings)
         self._sleep = sleep
         self._clock = clock
@@ -371,6 +373,7 @@ class Orchestrator:
             else:
                 result.warnings.append("project has uncommitted changes; they are NOT part of the isolated worktree")
         self._apply_board(log)
+        self._shadow_fail_judged = 0
         log.event("run_start", goal=goal, roles=self.s.roles, warnings=result.warnings)
 
         wt = state / "worktrees" / run_id
@@ -582,7 +585,7 @@ class Orchestrator:
             log.event("builder_pick", attempt=attempt, role=brole, provider=bname)
             self._builder_now = bname
             try:
-                self._call(brole, prompts.builder(order, feedback, advice), wt, True, log)
+                self._call(brole, prompts.builder(order, feedback, advice, " ".join(s.test_command) if s.test_command else None), wt, True, log)
                 bname = self.s.roles[brole]  # plan B may have put another AI on the job during the call
                 self._builder_now = bname
             except ProviderError as exc:
@@ -643,7 +646,10 @@ class Orchestrator:
 
             decision = None
             if s.arbiter_shadow:
-                self._shadow_judge(order, wt, changes, verification, double_passed, history, attempt, bname, log)
+                green = verification.passed and review.verdict == "PASS" and not double_failed
+                if green or self._shadow_fail_judged < SHADOW_FAILURES_PER_RUN:  # failed attempts teach little and cost a call each
+                    self._shadow_fail_judged += 0 if green else 1
+                    self._shadow_judge(order, wt, changes, verification, double_passed, history, attempt, bname, log)
             elif verification.passed and review.verdict == "PASS" and not double_failed:
                 # every gate is green: only now is the arbiter asked, and it can only be stricter
                 decision = self._arbitrate(order, wt, changes, verification, double_passed, history, attempt, bname, arb_rejects, log)
@@ -681,7 +687,7 @@ class Orchestrator:
             if double_failed:
                 problems.append("The tests passed once and FAILED when run again (flaky or order-dependent). Make them deterministic.")
             if not verification.passed:
-                problems.append(f"Tests failed (exit {verification.exit_code}):\n{verification.output_tail[-1500:]}")
+                problems.append(f"Tests failed (exit {verification.exit_code}):\n{failure_digest(verification.output_tail)}")
             if review.verdict != "PASS" and not review.skipped:
                 problems.append("Reviewer issues:\n- " + "\n- ".join(review.issues or ["(none given)"]))
             if decision and decision.final == "REJECT":

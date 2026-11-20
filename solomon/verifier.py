@@ -43,3 +43,37 @@ def verify(settings: Settings, wt: Path) -> VerifyResult:
     if res.timed_out:
         return VerifyResult(False, False, " ".join(cmd), res.exit_code, f"{res.timeout_reason}\n{output[-_TAIL:]}")
     return VerifyResult(res.exit_code == 0, False, " ".join(cmd), res.exit_code, output[-_TAIL:])
+
+
+def failure_digest(output: str, limit: int = 3500) -> str:
+    """The part of a test run a builder needs to fix the failure: the failing test names plus the first tracebacks.
+
+    A plain tail of the output often holds only the last traceback or the final summary line; this keeps the names of EVERY
+    failing test and the first two failure blocks (their assertion text), within `limit` characters."""
+    import re
+
+    lines = output.splitlines()
+    names = [l.strip() for l in lines if re.match(r"\s*(FAILED|ERROR)\s+\S+", l)]
+    blocks: list[str] = []
+    cur: list[str] | None = None
+    for l in lines:
+        if re.match(r"^_{3,}\s.+\s_{3,}$", l):  # "____ test_name ____"
+            if cur:
+                blocks.append("\n".join(cur[:45]))
+            cur = [l]
+        elif cur is not None and (re.match(r"^={3,}\s", l) and not l.startswith("=== FAILURES")):
+            blocks.append("\n".join(cur[:45]))
+            cur = None
+        elif cur is not None:
+            cur.append(l)
+    if cur:
+        blocks.append("\n".join(cur[:45]))
+    summary = [l for l in lines[-6:] if l.strip()]
+    parts = []
+    if names:
+        parts.append("Failing tests:\n" + "\n".join(dict.fromkeys(names[:30])))
+    if blocks:
+        parts.append("First failures in detail:\n" + "\n\n".join(blocks[:2]))
+    parts.append("End of output:\n" + "\n".join(summary))
+    text = "\n\n".join(parts)
+    return text[:limit] if len(text) > limit else text

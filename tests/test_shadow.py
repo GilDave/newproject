@@ -150,3 +150,17 @@ def test_bot_signals_scored_only_when_price_covers_the_horizon(tmp_path):
     assert out["ml2"]["overall"]["n"] == 2 and out["ml2"]["overall"]["hits"] == 1 and out["ml2"]["overall"]["enough"] is False
     assert out["news"]["high_risk"]["n"] == 1 and out["news"]["low_risk"]["n"] == 1 and out["news"]["enough"] is False
     assert db.read_bytes() == before
+
+
+def test_shadow_mode_does_not_spend_a_call_on_every_failed_attempt(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.roles["arbiter"] = "agy"
+    s.arbiter_shadow = True
+    s.max_attempts = 6
+    agy = ScriptedProvider("agy", [verdict("ADOPT", 0.9)] * 6)
+    agy.supports_write = False
+    ps = {"claude": ScriptedProvider("claude", [order_json()]), "codex": ScriptedProvider("codex", [write_file("src/other.py", f"x = {i}\n") for i in range(6)]), "agy": agy}
+    r = Orchestrator(s, ps, sleep=lambda x: None).run("add module", repo)
+    assert r.status == "FAILED" and r.attempts == 6
+    assert len([e for e in events(r) if e["event"] == "arbiter_shadow"]) == 2  # two samples of failures, not six

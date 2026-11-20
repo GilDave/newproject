@@ -502,3 +502,64 @@ def test_the_reviewer_prompt_asks_for_severity():
     from solomon.schemas import Order
     text = prompts.reviewer(Order("g", ["src/"]), "diff", "ok", [])
     assert '"severity": "blocker" | "minor"' in text and "must NOT cause FAIL" in text
+
+
+# ---------------------------------------------------------------- what the builder is told (v1.10.2)
+PYTEST_OUT = """============ test session starts ============
+collected 4 items
+
+tests/test_a.py .F.F                                                     [100%]
+
+================= FAILURES =================
+_______________ test_one _______________
+
+    def test_one():
+>       assert add(1, 1) == 3
+E       assert 2 == 3
+
+tests/test_a.py:5: AssertionError
+_______________ test_two _______________
+
+    def test_two():
+>       assert parse("x") == {"k": 1}
+E       KeyError: 'k'
+
+tests/test_a.py:9: KeyError
+=========== short test summary info ===========
+FAILED tests/test_a.py::test_one - assert 2 == 3
+FAILED tests/test_a.py::test_two - KeyError: 'k'
+========== 2 failed, 2 passed in 0.12s ==========
+"""
+
+
+def test_failure_digest_keeps_every_failing_test_name_and_the_assertion_text():
+    from solomon.verifier import failure_digest
+    d = failure_digest(PYTEST_OUT)
+    assert "tests/test_a.py::test_one" in d and "tests/test_a.py::test_two" in d
+    assert "assert add(1, 1) == 3" in d and "KeyError: 'k'" in d and "2 failed, 2 passed" in d
+    big = "x" * 9000 + "\n" + PYTEST_OUT
+    assert len(failure_digest(big)) <= 3500 and "test_two" in failure_digest(big)
+    assert "boom" in failure_digest("no pytest format here\nboom")  # unknown formats still end with the output's last lines
+
+
+def test_builder_is_told_how_its_work_is_checked_and_gets_the_digest_on_retry(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings(max_attempts=2)
+    s.test_command = ["python3", "-c", "import sys; print('FAILED tests/test_x.py::test_zz - boom'); sys.exit(1)"]
+    orch, p = three(s, [order_json()], [write_file("src/new.py", "x = 1\n"), write_file("src/new.py", "x = 2\n")])
+    orch.run("goal", repo)
+    first, second = p["codex"].calls[0]["prompt"], p["codex"].calls[1]["prompt"]
+    assert "HOW YOUR WORK IS CHECKED" in first and "python3 -c" in first
+    assert "Failing tests:" in second and "tests/test_x.py::test_zz" in second
+
+
+def test_tests_are_not_counted_against_the_code_size_limit():
+    from solomon.schemas import Order
+    from solomon.scope_guard import Change, check, is_test_path
+    o = Order("g", ["src/", "tests/"], max_diff_lines=400)
+    assert not check(o, [Change("src/a.py", "M", 80, 10), Change("tests/test_a.py", "A", 300, 0)])  # 90 code + 300 test lines
+    v = check(o, [Change("src/a.py", "M", 450, 10)])
+    assert v and "diff lines" in v[0]
+    v = check(o, [Change("tests/test_a.py", "A", 450, 0)])
+    assert v and "test files" in v[0]
+    assert is_test_path("tests/x.py") and is_test_path("pkg/test_x.py") and is_test_path("a/b_test.py") and not is_test_path("src/testing_tools.py")

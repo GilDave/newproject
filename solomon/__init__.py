@@ -1,3 +1,3 @@
 """Solomon: GPT x Claude cross-verified development pipeline."""
 
-__version__ = "1.10.1"
+__version__ = "1.10.2"
