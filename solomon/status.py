@@ -113,6 +113,8 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.timeline.append(f"{clock}  시도 {run.attempts}")
         elif kind == "call_start":
             role = str(ev.get("role"))
+            if ev.get("side"):  # a shadow judgment on a side thread: the run goes on, so it must not look like the current step
+                continue
             last_start[role] = ev
             pending[role] = ev
             run.active = {"role": role, "provider": str(ev.get("provider")), "since": str(ev.get("ts"))}
@@ -140,11 +142,14 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                     st.tokens += int((int(start.get("prompt_chars") or 0) + int(ev.get("output_chars") or 0)) / 3)
                 st.estimated_calls += 1
                 call_tokens = " · 토큰 추정"
-            run.stage = _STAGE_BY_ROLE_END.get(_base(role), run.stage)
-            run.timeline.append(f"{clock}  {role} · {provider} · {float(ev.get('duration_sec') or 0):.0f}초{call_tokens}")
-            pending.pop(role, None)
-            run.active = None
-            if _base(role) == "builder" and (last_start.get(role) or {}).get("write"):  # a read-only builder slot is an advisor
+            side = bool(ev.get("side"))
+            if not side:
+                run.stage = _STAGE_BY_ROLE_END.get(_base(role), run.stage)
+            run.timeline.append(f"{clock}  {role} · {provider} · {float(ev.get('duration_sec') or 0):.0f}초{call_tokens}" + (" (그림자 판정, 기다리지 않음)" if side else ""))
+            if not side:
+                pending.pop(role, None)
+                run.active = None
+            if not side and _base(role) == "builder" and (last_start.get(role) or {}).get("write"):  # a read-only builder slot is an advisor
                 run.stage_key = "test"
                 if attempt is not None:
                     attempt["builder"] = {"provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),
@@ -153,11 +158,12 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                 "at": clock, "day": ts.strftime("%Y-%m-%d") if ts else "", "role": role, "provider": provider, "sec": round(float(ev.get("duration_sec") or 0), 1),
                 "tokens": int(exact["total"]) if isinstance(exact, dict) and exact.get("total") else None,
                 "turns": int(exact["turns"]) if isinstance(exact, dict) and exact.get("turns") else None,
-                "estimated": not (isinstance(exact, dict) and exact.get("total")), "ok": True,
+                "estimated": not (isinstance(exact, dict) and exact.get("total")), "ok": True, **({"side": True} if side else {}),
             })
         elif kind == "call_error":
-            pending.pop(str(ev.get("role")), None)
-            run.active = None
+            if not ev.get("side"):
+                pending.pop(str(ev.get("role")), None)
+                run.active = None
             run.calls.append({"at": clock, "day": ts.strftime("%Y-%m-%d") if ts else "", "role": str(ev.get("role")), "provider": str(ev.get("provider")), "sec": 0,
                               "tokens": None, "turns": None, "estimated": False, "ok": False,
                               "error": str(ev.get("error", ""))[:140]})

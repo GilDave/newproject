@@ -399,3 +399,11 @@ def test_tests_never_read_the_machines_real_solomon_folder():
     from solomon import quota
     assert str(Path.home()).startswith("/tmp") or "pytest" in str(Path.home())  # not the real home of whoever runs the tests
     assert quota.QuotaBoard.persistent().path.parent.parent == Path.home()
+
+
+def test_the_cli_diagram_keeps_its_animation_and_shows_when_solomon_itself_is_working():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ("if (svg.dataset.key === key) return;",  # a refresh must not restart a running animation
+                   'path.style.animation = "flow 1s linear infinite"', 'attributeName: "r"', '"직접 작업 중 · "',
+                   "animation-iteration-count:1 !important"):  # reduced motion: no flicker from a 0.01ms infinite loop
+        assert needle in html, needle

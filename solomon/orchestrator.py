@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -27,6 +28,8 @@ from .verifier import failure_digest, VerifyResult, verify
 
 
 REVIEW_RETRIES = 2  # extra asks when the reviewer gives no verdict at all
+SHADOW_CALL_SECONDS = 90.0  # a judgment nobody obeys is not worth waiting minutes for
+SHADOW_COLLECT_SECONDS = 30.0  # at the end of a run, how long the side judgments may still finish
 SHADOW_FAILURES_PER_RUN = 2  # in shadow mode only this many FAILED attempts per run are judged (every attempt that passed all gates is)
 
 
@@ -70,6 +73,8 @@ class Orchestrator:
         self._base_roles = dict(settings.roles)
         self._builder_now: Optional[str] = None
         self._shadow_fail_judged = 0
+        self._shadow_futures: list = []
+        self._shadow_lock = threading.Lock()
         self.providers = providers if providers is not None else build_providers(settings)
         self._sleep = sleep
         self._clock = clock
@@ -151,21 +156,22 @@ class Orchestrator:
             if self.board.exhausted(name, self._clock()):
                 self._switch(role, name, log, "limit already known")
 
-    def _call(self, role: str, prompt: str, cwd: Path, write: bool, log: RunLog, images: Optional[list[str]] = None) -> ProviderResult:
+    def _call(self, role: str, prompt: str, cwd: Path, write: bool, log: RunLog, images: Optional[list[str]] = None,
+              timeout_cap: Optional[float] = None) -> ProviderResult:
         waits = 0
         while True:
             name = self.s.roles[role]
             if self.s.auto_failover and self.board.exhausted(name, self._clock()) and self._switch(role, name, log, "limit already known"):
                 continue
             provider = self.providers[self.s.roles[role]]
-            log.event("call_start", role=role, provider=provider.name, write=write, prompt_chars=len(prompt))
+            log.event("call_start", role=role, provider=provider.name, write=write, prompt_chars=len(prompt), **({"side": True} if timeout_cap else {}))
             try:
                 extra = {"images": images} if images else {}
                 res = provider.run(
                     prompt,
                     cwd=str(cwd),
                     write=write,
-                    timeout=self.s.timeouts.get(role, self.s.timeouts["reviewer"]),
+                    timeout=min(self.s.timeouts.get(role, self.s.timeouts["reviewer"]), timeout_cap or 1e9),
                     no_output_timeout=self.s.timeouts["no_output"],
                     **extra,
                 )
@@ -188,11 +194,12 @@ class Orchestrator:
                     continue
                 raise BlockedByQuota(provider.name, str(exc)) from exc
             except ProviderError as exc:
-                log.event("call_error", role=role, provider=provider.name, error=str(exc))
+                log.event("call_error", role=role, provider=provider.name, error=str(exc), **({"side": True} if timeout_cap else {}))
                 raise
             self._tokens += int((res.tokens or {}).get("total") or (estimate_tokens(prompt) + estimate_tokens(res.text)))
             log.event(
                 "call_end",
+                **({"side": True} if timeout_cap else {}),
                 role=role,
                 provider=provider.name,
                 duration_sec=res.duration_sec,
@@ -421,6 +428,7 @@ class Orchestrator:
         except (PlanError, ProviderError, gitops.GitError) as exc:
             result.status, result.summary = "ERROR", str(exc)
         finally:
+            self._collect_shadow(log)
             if created and not keep_worktree:
                 gitops.remove_worktree(project, wt)
         log.event("run_end", status=result.status, summary=result.summary, attempts=result.attempts)
@@ -472,34 +480,67 @@ class Orchestrator:
         log.event("visual", attempt=attempt, ok=res.ok, broken=res.broken, infra=res.infra, shots=[p.name for p in res.shots])
         return res
 
-    def _shadow_judge(self, order: Order, wt: Path, changes: list, verification: VerifyResult, double_passed: Optional[bool],
+    def _shadow_judge(self, order: Order, wt: Path, run_dir: Path, changes: list, verification: VerifyResult, double_passed: Optional[bool],
                       history: list[str], attempt: int, builder_name: str, log: RunLog) -> None:
         """Shadow mode: the arbiter judges EVERY attempt (green or not) but nothing it says is obeyed.
-        The answer is recorded next to the measured facts, so it can be scored against what really happened."""
+        The answer is recorded next to the measured facts, so it can be scored against what really happened.
+        Because nobody obeys it, the run does not wait for it: the slow model call runs on a side thread and is collected when the run ends."""
         name = self.s.roles.get("arbiter")
         if not name or (name == builder_name and not self.s.allow_same_provider):
             return
         risky = arbiter_mod.risk_paths([c.path for c in changes])
         evidence = arbiter_mod.build_evidence(order, attempt, changes, verification, double_passed, getattr(self, "_last_reviews", []),
                                               history, gitops.full_diff(wt), self.s.arbiter_diff_chars, shadow=True)
-        dec, err = None, ""
-        for retry in range(1 + REVIEW_RETRIES):
-            try:
-                res = self._call("arbiter", arbiter_mod.prompt(evidence, shadow=True), wt, False, log)
-            except (BlockedByQuota, ProviderError) as exc:
-                err = str(exc)
-                break
-            try:
-                dec = arbiter_mod.parse(res.text)
-                break
-            except ValueError as exc:
-                err = f"형식 오류: {exc}"
-        votes = [{"provider": r["provider"], "verdict": r["verdict"]} for r in getattr(self, "_last_reviews", [])]
-        log.event("arbiter_shadow", attempt=attempt, provider=name, decision=dec.decision if dec else "NONE",
-                  confidence=dec.confidence if dec else 0.0, reason=(dec.reason if dec else err)[:300],
-                  tests="skipped" if verification.skipped else "pass" if verification.passed else "fail",
-                  double=double_passed, votes=votes, risky=risky, files=len(changes),
-                  lines=sum(c.added + c.removed for c in changes), error=err[:200] if not dec else "")
+        prompt = arbiter_mod.prompt(evidence, shadow=True)
+        votes = [{"provider": r["provider"], "verdict": r["verdict"]} for r in getattr(self, "_last_reviews", [])]  # as they are NOW, not when the thread gets to it
+        facts = dict(tests="skipped" if verification.skipped else "pass" if verification.passed else "fail",
+                     double=double_passed, votes=votes, risky=risky, files=len(changes), lines=sum(c.added + c.removed for c in changes))
+
+        side_cwd = run_dir  # the run folder outlives the run (the worktree does not); a local model ignores the folder anyway
+
+        def judge() -> None:
+            dec, err = None, ""
+            for retry in range(1 + REVIEW_RETRIES):
+                try:
+                    res = self._call("arbiter", prompt, side_cwd, False, log, timeout_cap=SHADOW_CALL_SECONDS)
+                except (BlockedByQuota, ProviderError) as exc:
+                    err = str(exc)
+                    break
+                try:
+                    dec = arbiter_mod.parse(res.text)
+                    break
+                except ValueError as exc:
+                    err = f"형식 오류: {exc}"
+            log.event("arbiter_shadow", attempt=attempt, provider=name, decision=dec.decision if dec else "NONE",
+                      confidence=dec.confidence if dec else 0.0, reason=(dec.reason if dec else err)[:300],
+                      error=err[:200] if not dec else "", **facts)
+
+        def locked() -> None:
+            with self._shadow_lock:  # one at a time: a local model has one GPU
+                self._guarded(judge, log)
+
+        t = threading.Thread(target=locked, name="shadow-judge", daemon=True)  # daemon: a slow model never keeps the process alive
+        self._shadow_futures.append(t)
+        t.start()
+
+    @staticmethod
+    def _guarded(fn: Callable[[], None], log: RunLog) -> None:
+        try:
+            fn()
+        except Exception as exc:  # a side task must never take the run down
+            log.event("arbiter_shadow", attempt=0, provider="", decision="NONE", confidence=0.0, reason="", error=f"내부 오류: {exc}"[:200])
+
+    def _collect_shadow(self, log: RunLog) -> None:
+        """At the end of a run give the side judgments a short while to finish; whatever is still thinking is dropped and logged."""
+        threads, self._shadow_futures = self._shadow_futures, []
+        if not threads:
+            return
+        deadline = time.time() + SHADOW_COLLECT_SECONDS
+        for t in threads:
+            t.join(timeout=max(0.1, deadline - time.time()))
+        pending = sum(1 for t in threads if t.is_alive())
+        if pending:
+            log.event("shadow_pending_dropped", count=pending)
 
     def _budget_stop(self, attempt: int, started: float) -> Optional[str]:
         s = self.s
@@ -694,7 +735,7 @@ class Orchestrator:
                 green = verification.passed and review.verdict == "PASS" and not double_failed
                 if green or self._shadow_fail_judged < SHADOW_FAILURES_PER_RUN:  # failed attempts teach little and cost a call each
                     self._shadow_fail_judged += 0 if green else 1
-                    self._shadow_judge(order, wt, changes, verification, double_passed, history, attempt, bname, log)
+                    self._shadow_judge(order, wt, run_dir, changes, verification, double_passed, history, attempt, bname, log)
             elif verification.passed and review.verdict == "PASS" and not double_failed:
                 # every gate is green: only now is the arbiter asked, and it can only be stricter
                 decision = self._arbitrate(order, wt, changes, verification, double_passed, history, attempt, bname, arb_rejects, log)

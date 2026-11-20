@@ -359,7 +359,7 @@ button{max-width:100%}
   .rgrid select{min-width:0}
 }
 @media(prefers-reduced-motion:reduce){
-  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
 }
 </style>
 </head>
@@ -1733,22 +1733,30 @@ function renderWork(){
   drawCli();
 }
 function drawCli(){
-  const svg = $("w-cli"); while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const svg = $("w-cli"), cur = state.current, live = !!(cur && cur.live);
+  const act = live && cur.active ? cur.active.provider : null, working = live && !act;  // working: Solomon itself is busy (scope check, tests), no AI is called
+  const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const key = JSON.stringify([state.providers.map(p => [p.name, p.installed]), act, working, working ? cur.stage : "", reduce]);
+  if (svg.dataset.key === key) return;  // unchanged: keep the same elements so a running animation is not restarted by every refresh
+  svg.dataset.key = key;
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
   const NS = "http://www.w3.org/2000/svg", n = state.providers.length, h = 40 + n * 56;
   svg.setAttribute("viewBox", "0 0 560 " + h);
-  const mk = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); Object.keys(attrs).forEach(k => e.setAttribute(k, attrs[k])); if (text !== undefined) e.textContent = text; svg.appendChild(e); return e; };
-  const cx = 470, cy = h / 2, act = state.current && state.current.live && state.current.active ? state.current.active.provider : null;
+  const mk = (tag, attrs, text, parent) => { const e = document.createElementNS(NS, tag); Object.keys(attrs).forEach(k => e.setAttribute(k, attrs[k])); if (text !== undefined) e.textContent = text; (parent || svg).appendChild(e); return e; };
+  const cx = 470, cy = h / 2;
   const label = {claude: "CLAUDE CODE CLI", codex: "CODEX CLI", antigravity: "ANTIGRAVITY CLI"};
   state.providers.forEach((p, i) => {
     const y = 20 + i * 56, color = p.installed ? pcolor(p.name).replace("var(--claude)", "#e8825f").replace("var(--codex)", "#43d9a0").replace("var(--gemini)", "#6ea8ff") : "#52627a";
-    mk("rect", {x: 20, y: y, width: 250, height: 44, rx: 10, fill: "#0b141f", stroke: color, "stroke-width": 1.2});
+    mk("rect", {x: 20, y: y, width: 250, height: 44, rx: 10, fill: "#0b141f", stroke: color, "stroke-width": act === p.name ? 2 : 1.2});
     mk("text", {x: 36, y: y + 27, fill: color, "font-size": 15, "font-weight": 800}, label[p.name] || (p.name.toUpperCase() + " CLI"));
-    mk("text", {x: 258, y: y + 27, fill: "#8696ab", "font-size": 12, "text-anchor": "end"}, p.installed ? (act === p.name ? "작업 중" : "연결 가능") : "설치 안 됨");
-    const path = mk("path", {d: "M270 " + (y + 22) + " C 370 " + (y + 22) + ", 400 " + cy + ", " + cx + " " + cy, fill: "none", stroke: color, "stroke-width": act === p.name ? 2.2 : 1.2, "stroke-dasharray": "6 6"});
-    if (act === p.name) path.style.animation = "flow 1s linear infinite";
+    mk("text", {x: 258, y: y + 27, fill: act === p.name ? color : "#8696ab", "font-size": 12, "text-anchor": "end", "font-weight": act === p.name ? 700 : 400}, p.installed ? (act === p.name ? "작업 중" : "연결 가능") : "설치 안 됨");
+    const path = mk("path", {d: "M270 " + (y + 22) + " C 370 " + (y + 22) + ", 400 " + cy + ", " + cx + " " + cy, fill: "none", stroke: color, "stroke-width": act === p.name ? 2.4 : 1.2, "stroke-dasharray": "6 6"});
+    if (act === p.name && !reduce) path.style.animation = "flow 1s linear infinite";  // the AI that is being called right now: dashes run towards Solomon
   });
-  mk("circle", {cx: cx, cy: cy, r: 10, fill: "#123469", stroke: "#2f74e6"});
-  mk("text", {x: cx, y: cy + 30, fill: "#8696ab", "font-size": 12, "text-anchor": "middle"}, "SOLOMON");
+  const dot = mk("circle", {cx: cx, cy: cy, r: 10, fill: working ? "#1b4a94" : "#123469", stroke: "#2f74e6", "stroke-width": working ? 2.2 : 1});
+  if (working && !reduce) mk("animate", {attributeName: "r", values: "10;14;10", dur: "1.4s", repeatCount: "indefinite"}, undefined, dot);  // Solomon itself is working
+  mk("text", {x: cx, y: cy + 30, fill: working ? "#9cc2ff" : "#8696ab", "font-size": 12, "text-anchor": "middle"}, "SOLOMON");
+  if (working) mk("text", {x: cx, y: cy + 48, fill: "#9cc2ff", "font-size": 11, "text-anchor": "middle"}, "직접 작업 중 · " + (cur.stage || "테스트"));
 }
 
 function tick(){

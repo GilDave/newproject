@@ -200,3 +200,61 @@ def test_news_score_is_judged_on_all_scored_events_not_only_the_rare_high_ones(t
     c = out["news"]["corr"]
     assert c["n"] == 40 and c["enough"] is True and c["rho"] is not None and c["ci"] is not None
     assert out["news"]["enough"] is True and out["news"]["high_risk"]["n"] == 0  # no score reached 0.5, yet the judgement is possible
+
+
+# ---------------------------------------------------------------- a slow local model must not hold the run back
+class SlowAgy(ScriptedProvider):
+    supports_write = False
+
+    def __init__(self, name, steps, seconds):
+        super().__init__(name, steps)
+        self.seconds = seconds
+
+    def run(self, prompt, cwd, write, timeout, no_output_timeout=None, images=None):
+        import time
+        time.sleep(self.seconds)
+        return super().run(prompt, cwd, write, timeout, no_output_timeout, images)
+
+
+def _slow_run(tmp_path, seconds, monkeypatch, collect=0.6):
+    from solomon import orchestrator as orch
+    monkeypatch.setattr(orch, "SHADOW_COLLECT_SECONDS", collect)
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.roles["arbiter"] = "agy"
+    s.arbiter_shadow = True
+    agy = SlowAgy("agy", [verdict("ADOPT", 0.9)], seconds)
+    o = Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json()]), "codex": ScriptedProvider("codex", [write_file("src/new.py")]), "agy": agy})
+    import time
+    t0 = time.time()
+    r = o.run("add module", repo)
+    return r, time.time() - t0
+
+
+def test_a_slow_shadow_judgment_is_dropped_instead_of_holding_the_run(tmp_path, monkeypatch):
+    r, took = _slow_run(tmp_path, 8, monkeypatch)
+    assert r.status == "PASSED" and took < 6  # not the 8 seconds of the model
+    names = [e["event"] for e in events(r)]
+    assert "shadow_pending_dropped" in names and "arbiter_shadow" not in names and names[-1] == "run_end"
+
+
+def test_a_quick_shadow_judgment_is_still_recorded_before_the_run_ends(tmp_path, monkeypatch):
+    r, _ = _slow_run(tmp_path, 0.1, monkeypatch, collect=5)
+    evs = events(r)
+    names = [e["event"] for e in evs]
+    sh = next(e for e in evs if e["event"] == "arbiter_shadow")
+    assert sh["decision"] == "ADOPT" and sh["tests"] == "pass" and names.index("arbiter_shadow") < names.index("run_end")
+    side = [e for e in evs if e["event"] in ("call_start", "call_end") and e.get("role") == "arbiter"]
+    assert side and all(e.get("side") for e in side)
+
+
+def test_a_side_judgment_never_looks_like_the_current_step(tmp_path, monkeypatch):
+    from solomon import status
+    r, _ = _slow_run(tmp_path, 0.1, monkeypatch, collect=5)
+    evs = events(r)
+    start = next(i for i, e in enumerate(evs) if e["event"] == "call_start" and e.get("role") == "arbiter")
+    before, mid = status.summarize_run("x", evs[:start]), status.summarize_run("x", evs[:start + 1])
+    assert (mid.stage, mid.stage_key, mid.active) == (before.stage, before.stage_key, before.active)  # the side call changed nothing on screen
+    assert not (mid.active and mid.active["role"] == "arbiter")
+    full = status.summarize_run("x", evs)
+    assert any(c.get("side") for c in full.calls) and any("그림자 판정, 기다리지 않음" in t for t in full.timeline)
