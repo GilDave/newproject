@@ -323,3 +323,36 @@ def test_capability_is_remembered(tmp_path, monkeypatch):
     V.save_capability({"video_id": VID, "at": "2026-01-02 00:00:00", "ais": {"codex": {"status": "guessed"}}})
     cap = V.load_capability()
     assert cap["antigravity"]["status"] == "confirmed" and cap["codex"]["status"] == "guessed" and cap["codex"]["at"].startswith("2026-01-02")
+
+
+# ------------------------------------------------------------------ why there are no captions
+def smart_ytdlp(tmp_path, listing, writes):
+    """A fake yt-dlp: `--list-subs` prints `listing`; a download writes the files in `writes` only when --sub-langs names that language."""
+    exe = tmp_path / "yt-dlp"
+    exe.write_text("#!/usr/bin/env python3\nimport sys, pathlib\na = sys.argv[1:]\n"
+                   f"if '--list-subs' in a:\n    print({listing!r}); sys.exit(0)\n"
+                   f"out = a[a.index('-o') + 1]\nlangs = a[a.index('--sub-langs') + 1]\nd = pathlib.Path(out).parent\n"
+                   f"for lang in {list(writes)!r}:\n    if lang in langs:\n        (d / f'{VID}.{{lang}}.vtt').write_text({VTT!r})\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    return str(exe)
+
+
+def test_a_video_in_another_language_gets_its_original_language_track(tmp_path):
+    listing = f"[info] Available automatic captions for {VID}:\nLanguage Name Formats\nja-orig  Japanese (Original) vtt\nja  Japanese vtt\nko  Korean vtt\n"
+    t = V.fetch_via_ytdlp(VID, ("ko", "en"), smart_ytdlp(tmp_path, "[info] Available automatic captions for x:\nLanguage Name Formats\nja-orig  Japanese (Original) vtt, ttml\n", ["ja-orig"]),
+                          run=V.run_process)
+    assert t.source == "yt-dlp" and t.lang == "ja-orig"
+
+
+def test_no_captions_at_all_is_said_plainly(tmp_path):
+    exe = smart_ytdlp(tmp_path, f"{VID} has no automatic captions\n{VID} has no subtitles", [])
+    with pytest.raises(V.TranscriptUnavailable) as e:
+        V.fetch_via_ytdlp(VID, ("ko", "en"), exe, run=V.run_process)
+    assert "자막이 하나도 없습니다" in str(e.value) and "새 영상·라이브" in str(e.value)
+
+
+def test_listed_languages_that_could_not_be_downloaded_are_named(tmp_path):
+    exe = smart_ytdlp(tmp_path, "[info] Available subtitles for x:\nLanguage Name Formats\nfr  French vtt\n", [])
+    with pytest.raises(V.TranscriptUnavailable) as e:
+        V.fetch_via_ytdlp(VID, ("ko", "en"), exe, run=V.run_process)
+    assert "자막 언어: fr" in str(e.value)

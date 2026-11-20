@@ -289,15 +289,53 @@ def _pick_lang(options: list[tuple[str, bool]], prefer: tuple[str, ...]) -> Opti
     return best
 
 
+def _ytdlp_args(exe: str, tmp: str, video_id: str, sub_langs: str) -> list[str]:
+    return [exe, "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", sub_langs, "--sub-format", "vtt/srt/best",
+            "--no-playlist", "--no-warnings", "--socket-timeout", "20", "-o", str(Path(tmp) / "%(id)s.%(ext)s"), watch_url(video_id)]
+
+
+def _list_subtitle_languages(exe: str, video_id: str, tmp: str, run, timeout: float = 60.0) -> tuple[list[str], list[str]]:
+    """(human-written languages, automatic languages) that yt-dlp says the video has: the answer to 'why no captions?'"""
+    try:
+        res = run([exe, "--skip-download", "--list-subs", "--no-playlist", "--no-warnings", "--socket-timeout", "20", watch_url(video_id)],
+                  cwd=tmp, env=sanitized_env(), timeout=timeout)
+    except Exception:
+        return [], []
+    subs: list[str] = []
+    autos: list[str] = []
+    bucket: Optional[list[str]] = None
+    for line in (res.stdout or "").splitlines():
+        low = line.lower()
+        if "available automatic captions" in low:
+            bucket = autos
+        elif "available subtitles" in low:
+            bucket = subs
+        elif "has no automatic captions" in low or "has no subtitles" in low:
+            bucket = None
+        elif bucket is not None and line.strip() and not line.startswith("[") and not low.startswith("language"):
+            code = line.split()[0]
+            if re.fullmatch(r"[A-Za-z]{2,3}(-[\w-]+)?", code):
+                bucket.append(code)
+    return subs, autos
+
+
 def fetch_via_ytdlp(video_id: str, langs: tuple[str, ...], exe: str, run=run_process, timeout: float = 120.0) -> Transcript:
     with tempfile.TemporaryDirectory(prefix="solomon-video-") as tmp:
-        pat = ",".join([f"{l}.*,{l}" for l in langs])
-        argv = [exe, "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", pat, "--sub-format", "vtt/srt/best",
-                "--no-playlist", "--no-warnings", "--socket-timeout", "20", "-o", str(Path(tmp) / "%(id)s.%(ext)s"), watch_url(video_id)]
-        res = run(argv, cwd=tmp, env=sanitized_env(), timeout=timeout)
+        pat = ",".join([f"{l}.*,{l}" for l in langs] + [".*-orig"])  # a video in another language still has its own original-language track
+        res = run(_ytdlp_args(exe, tmp, video_id, pat), cwd=tmp, env=sanitized_env(), timeout=timeout)
         files = sorted(Path(tmp).glob(f"{video_id}*.vtt")) + sorted(Path(tmp).glob(f"{video_id}*.srt"))
         if not files:
-            raise TranscriptUnavailable("yt-dlp가 자막을 찾지 못했습니다" + (f": {(res.stderr or res.stdout).strip()[-200:]}" if res.exit_code else " (이 영상에 자막이 없을 수 있습니다)"))
+            subs, autos = _list_subtitle_languages(exe, video_id, tmp, run)
+            pick = next((c for c in autos if c.endswith("-orig")), None) or (subs[0] if subs else None)  # the spoken language, whatever it is
+            if pick:
+                run(_ytdlp_args(exe, tmp, video_id, pick), cwd=tmp, env=sanitized_env(), timeout=timeout)
+                files = sorted(Path(tmp).glob(f"{video_id}*.vtt")) + sorted(Path(tmp).glob(f"{video_id}*.srt"))
+            if not files:
+                if res.exit_code:
+                    raise TranscriptUnavailable("yt-dlp가 자막을 찾지 못했습니다: " + (res.stderr or res.stdout).strip()[-200:])
+                if subs or autos:
+                    raise TranscriptUnavailable("yt-dlp가 자막을 받지 못했습니다 (영상의 자막 언어: " + ", ".join((subs + autos)[:8]) + ")")
+                raise TranscriptUnavailable("이 영상에는 자막이 하나도 없습니다 — 업로더가 자막을 끄었거나, 새 영상·라이브라 자동 자막이 아직 안 만들어졌을 수 있습니다 (몇 시간 뒤 다시 시도)")
         opts = []
         for f in files:
             m = re.search(rf"{re.escape(video_id)}\.([\w-]+)\.", f.name)
