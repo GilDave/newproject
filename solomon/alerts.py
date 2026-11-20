@@ -136,17 +136,53 @@ def send(server: str, device_key: str, title: str, body: str, enc_key: str = "",
 
 # ---------------------------------------------------------------- config + secrets (kept apart, the secrets never leave)
 DEFAULTS = {"enabled": False, "server": DEFAULT_SERVER, "signal": True, "signal_mode": "change", "error": True, "stale": True,
-            "last_event_id": 0, "last_exposure": None, "last_error_alert": 0.0, "last_stale_alert": 0.0, "last_sent": 0.0, "last_failure": ""}
-SIGNAL_STEP = 0.10  # in "change" mode a message goes out when the direction flips or the target exposure moves by at least this much
-ERROR_GAP_SEC = 1800
-STALE_GAP_SEC = 6 * 3600
-STALE_AFTER_H = 9.0
+            # every period is the user's to set (ranges in LIMITS)
+            "signal_step": 0.10,  # "change" mode: a message when the direction flips or the target exposure moves by at least this much
+            "error_gap_min": 30.0, "stale_hours": 9.0, "stale_repeat_hours": 6.0,
+            "report": False, "report_minutes": 10.0, "quiet": False, "quiet_from": "23:00", "quiet_to": "07:00",
+            "last_event_id": 0, "last_exposure": None, "last_error_alert": 0.0, "last_stale_alert": 0.0, "last_report": 0.0, "last_sent": 0.0, "last_failure": ""}
+LIMITS = {"signal_step": (0.01, 1.0), "error_gap_min": (1, 1440), "stale_hours": (1, 72), "stale_repeat_hours": (1, 72), "report_minutes": (1, 1440)}
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+BAR_SEC = 4 * 3600  # the trend engine decides when a 4-hour bar closes (UTC)
+
+
+_LABEL = {"signal_step": "신호 알림 노출 변화 기준", "error_gap_min": "오류 알림 간격(분)", "stale_hours": "응답 없음 기준(시간)",
+          "stale_repeat_hours": "응답 없음 반복 간격(시간)", "report_minutes": "상태 알림 주기(분)"}
+
+
+def in_quiet(now: float, start: str, end: str) -> bool:
+    """Is the local clock inside [start, end)? A window that crosses midnight (23:00 -> 07:00) works too."""
+    t = time.localtime(now)
+    cur = t.tm_hour * 60 + t.tm_min
+    sh, sm = (int(x) for x in start.split(":"))
+    eh, em = (int(x) for x in end.split(":"))
+    a, b = sh * 60 + sm, eh * 60 + em
+    if a == b:
+        return False
+    return a <= cur < b if a < b else (cur >= a or cur < b)
+
+
+def _http_get_json(url: str, timeout: float = 6.0) -> dict:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "solomon"}), timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", errors="replace") or "{}")
+
+
+def fetch_price(symbol: str, get: Callable = _http_get_json) -> Optional[float]:
+    """The last traded price from Bybit's PUBLIC ticker (no key, no account). None when it cannot be had."""
+    if not re.match(r"^[A-Z0-9]{3,20}$", symbol or ""):
+        return None
+    try:
+        d = get(f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}")
+        return float(d["result"]["list"][0]["lastPrice"])
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return None
 
 
 class Alerts:
-    def __init__(self, directory: Path, clock: Callable[[], float] = time.time, http: Callable = _http_post):
+    def __init__(self, directory: Path, clock: Callable[[], float] = time.time, http: Callable = _http_post, price: Callable = fetch_price):
         self.dir = Path(directory)
-        self._clock, self._http = clock, http
+        self._clock, self._http, self._price = clock, http, price
+        self._last_price: Optional[float] = None
 
     @property
     def cfg_path(self) -> Path:
@@ -189,7 +225,8 @@ class Alerts:
         """What the page may see: switches and whether secrets exist (the last 4 characters of the device key), never the secrets."""
         c, s = self.config(), self._secrets()
         dk = s.get("device_key", "")
-        return {**{k: c[k] for k in ("enabled", "server", "signal", "signal_mode", "error", "stale", "last_sent", "last_failure")},
+        return {**{k: c[k] for k in ("enabled", "server", "signal", "signal_mode", "error", "stale", "last_sent", "last_failure", "signal_step", "error_gap_min",
+                                     "stale_hours", "stale_repeat_hours", "report", "report_minutes", "quiet", "quiet_from", "quiet_to", "last_report")},
                 "key_set": bool(dk), "key_tail": dk[-4:] if len(dk) >= 8 else "", "enc_set": bool(s.get("enc_key"))}
 
     def update(self, body: dict) -> dict:
@@ -214,9 +251,23 @@ class Alerts:
             if not sv.startswith("https://"):
                 raise AlertError(400, "서버 주소는 https:// 로 시작해야 합니다.")
             c["server"] = sv
-        for k in ("signal", "error", "stale"):
+        for k in ("signal", "error", "stale", "report", "quiet"):
             if k in body:
                 c[k] = bool(body[k])
+        for k, (lo, hi) in LIMITS.items():
+            if k in body:
+                try:
+                    v = float(body[k])
+                except (TypeError, ValueError):
+                    raise AlertError(400, f"{k} 값이 숫자가 아닙니다.") from None
+                if not lo <= v <= hi:
+                    raise AlertError(400, f"{_LABEL[k]}은(는) {lo:g}~{hi:g} 사이여야 합니다.")
+                c[k] = v
+        for k in ("quiet_from", "quiet_to"):
+            if k in body:
+                if not TIME_RE.match(str(body[k])):
+                    raise AlertError(400, "조용한 시간은 HH:MM 형식(예: 23:00)이어야 합니다.")
+                c[k] = str(body[k])
         if body.get("signal_mode") in ("change", "every"):
             c["signal_mode"] = body["signal_mode"]
         if "enabled" in body:
@@ -253,6 +304,27 @@ class Alerts:
             raise AlertError(502, why)
         return self.public()
 
+    def _report(self, bot_dir: str | Path, c: dict, now: float, exposure: Optional[float], last_cycle: Optional[int]) -> tuple[str, str]:
+        """The periodic status line: price now, what the engine last decided, when it decides next. (The signal only moves with the
+        4-hour bars; a short period therefore mostly reports the price.)"""
+        try:
+            symbol = str(json.loads((Path(bot_dir) / "config.json").read_text(encoding="utf-8")).get("symbol") or "")
+        except (OSError, ValueError):
+            symbol = ""
+        px = self._price(symbol)
+        parts = []
+        if px is not None:
+            prev = self._last_price
+            parts.append(f"{symbol} {px:g}" + (f" ({(px / prev - 1) * 100:+.2f}%)" if prev else ""))
+            self._last_price = px
+        if exposure is not None:
+            parts.append(f"목표 노출 {exposure:+.2f} ({_side(exposure)})")
+        if last_cycle:
+            parts.append(f"마지막 판단 {(now * 1000 - last_cycle) / 3_600_000:.1f}시간 전")
+        nxt = (int(now // BAR_SEC) + 1) * BAR_SEC - now
+        parts.append(f"다음 판단 약 {int(nxt // 3600)}시간 {int(nxt % 3600 // 60)}분 뒤")
+        return "🕒 ENA 상태", " · ".join(parts)
+
     # ------------------------------------------------------------------ the watcher (called every minute by the dashboard)
     def tick(self, bot_dir: str | Path) -> int:
         c = self.config()
@@ -284,16 +356,19 @@ class Alerts:
                 cur = _exposure(raw)
                 if cur is None:
                     continue
-                if _worth_telling(exposure, cur, c["signal_mode"]):
+                if _worth_telling(exposure, cur, c["signal_mode"], c["signal_step"]):
                     msgs.append(_signal_text(exposure, cur, raw))
                 exposure = cur
-            elif kind == "error" and c["error"] and now - c["last_error_alert"] >= ERROR_GAP_SEC:
+            elif kind == "error" and c["error"] and now - c["last_error_alert"] >= c["error_gap_min"] * 60:
                 msgs.append(("⚠ ENA 봇 오류", _error_text(raw)))
                 c["last_error_alert"] = now
-        if c["stale"] and last_cycle and (now * 1000 - last_cycle) / 3_600_000 > STALE_AFTER_H and now - c["last_stale_alert"] >= STALE_GAP_SEC:
+        if c["stale"] and last_cycle and (now * 1000 - last_cycle) / 3_600_000 > c["stale_hours"] and now - c["last_stale_alert"] >= c["stale_repeat_hours"] * 3600:
             msgs.append(("🛑 ENA 봇 응답 없음", f"마지막 판단이 {(now * 1000 - last_cycle) / 3_600_000:.1f}시간 전입니다. 서비스(com.ena.trend)를 확인하세요."))
             c["last_stale_alert"] = now
         sent = 0
+        if c["report"] and now - c["last_report"] >= c["report_minutes"] * 60 and not (c["quiet"] and in_quiet(now, c["quiet_from"], c["quiet_to"])):
+            msgs.append(self._report(bot_dir, c, now, exposure, last_cycle))
+            c["last_report"] = now
         if msgs:
             for title, body in msgs[-5:]:  # after an outage, at most the last five
                 ok, why = self._push(title, body)
@@ -318,10 +393,10 @@ def _exposure(raw: str) -> Optional[float]:
         return None
 
 
-def _worth_telling(prev: Optional[float], cur: float, mode: str) -> bool:
+def _worth_telling(prev: Optional[float], cur: float, mode: str, step: float = 0.10) -> bool:
     if mode == "every" or prev is None:
         return True
-    return (prev == 0) != (cur == 0) or (prev > 0) != (cur > 0) or abs(cur - prev) >= SIGNAL_STEP
+    return (prev == 0) != (cur == 0) or (prev > 0) != (cur > 0) or abs(cur - prev) >= step
 
 
 def _side(x: float) -> str:

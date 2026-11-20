@@ -217,3 +217,84 @@ def test_the_card_is_on_the_bot_tab():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     for needle in ("🔔 아이폰 알림 (Bark)", "/api/botlab/alerts", "테스트 알림 보내기", "무작위 암호화 키 만들기", "crypto.getRandomValues"):
         assert needle in html, needle
+
+
+# ---------------------------------------------------------------- periods are the user's to set (v1.12.1)
+def test_periods_have_ranges_and_quiet_times_must_be_clock_times(tmp_path):
+    a, _ = make(tmp_path)
+    pub = a.update({"report": True, "report_minutes": 10, "error_gap_min": 5, "stale_hours": 2, "stale_repeat_hours": 3, "signal_step": 0.2, "quiet": True, "quiet_from": "22:30", "quiet_to": "06:15"})
+    assert pub["report"] and pub["report_minutes"] == 10 and pub["error_gap_min"] == 5 and pub["signal_step"] == 0.2 and pub["quiet_from"] == "22:30"
+    for bad in ({"report_minutes": 0}, {"report_minutes": 2000}, {"report_minutes": "x"}, {"stale_hours": 100}, {"signal_step": 5}, {"quiet_from": "25:00"}, {"quiet_to": "7pm"}):
+        with pytest.raises(A.AlertError):
+            a.update(bad)
+    assert a.public()["report_minutes"] == 10  # a refused change leaves the old value
+
+
+def test_quiet_window_works_across_midnight():
+    t = lambda h, m: time.mktime((2026, 11, 20, h, m, 0, 0, 0, -1))
+    assert A.in_quiet(t(23, 30), "23:00", "07:00") and A.in_quiet(t(3, 0), "23:00", "07:00") and not A.in_quiet(t(12, 0), "23:00", "07:00")
+    assert not A.in_quiet(t(7, 0), "23:00", "07:00") and A.in_quiet(t(23, 0), "23:00", "07:00")
+    assert A.in_quiet(t(13, 0), "12:00", "14:00") and not A.in_quiet(t(15, 0), "12:00", "14:00") and not A.in_quiet(t(5, 0), "08:00", "08:00")
+
+
+def test_the_status_report_goes_out_every_period_with_price_and_next_decision(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    (bot / "config.json").write_text(json.dumps({"symbol": "ENAUSDT"}))
+    put(bot, "trend_cycle", cycle(-0.31))
+    now = [time.mktime((2026, 11, 20, 12, 0, 0, 0, 0, -1))]
+    sent = []
+    prices = iter([0.1179, 0.1182, None, 0.1190])
+    a = A.Alerts(tmp_path / "lab", clock=lambda: now[0], http=lambda u, p: (sent.append(p) or (200, {"code": 200})), price=lambda sym: next(prices))
+    a.update({"device_key": DEVICE, "enabled": True, "signal": False, "report": True, "report_minutes": 10, "stale": False})
+    a.tick(bot)  # first look: remembers the log
+    a.tick(bot)
+    assert len(sent) == 1 and sent[0]["title"] == "🕒 ENA 상태"
+    assert "ENAUSDT 0.1179" in sent[0]["body"] and "목표 노출 -0.31 (숏)" in sent[0]["body"] and "다음 판단 약" in sent[0]["body"]
+    now[0] += 9 * 60
+    a.tick(bot)
+    assert len(sent) == 1  # not yet 10 minutes
+    now[0] += 61
+    a.tick(bot)
+    assert len(sent) == 2 and "(+0.25%)" in sent[1]["body"]  # change since the last report
+    now[0] += 600
+    a.tick(bot)
+    assert len(sent) == 3 and "ENAUSDT" not in sent[2]["body"] and "목표 노출" in sent[2]["body"]  # no price available: the rest still goes out
+    a.update({"report_minutes": 60})
+    now[0] += 600
+    a.tick(bot)
+    assert len(sent) == 3  # the new, longer period is respected
+
+
+def test_quiet_hours_silence_only_the_periodic_report(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    put(bot, "trend_cycle", cycle(0.2))
+    now = [time.mktime((2026, 11, 20, 23, 30, 0, 0, 0, -1))]
+    sent = []
+    a = A.Alerts(tmp_path / "lab", clock=lambda: now[0], http=lambda u, p: (sent.append(p) or (200, {"code": 200})), price=lambda s: 0.1)
+    a.update({"device_key": DEVICE, "enabled": True, "report": True, "report_minutes": 1, "quiet": True, "quiet_from": "23:00", "quiet_to": "07:00", "stale": False})
+    a.tick(bot)
+    put(bot, "error", {"error": "boom"})
+    put(bot, "trend_cycle", cycle(-0.5))  # a direction flip at night still goes out
+    a.tick(bot)
+    titles = [p["title"] for p in sent]
+    assert "🕒 ENA 상태" not in titles and "⚠ ENA 봇 오류" in titles and any("방향 전환" in t for t in titles)
+    now[0] = time.mktime((2026, 11, 21, 8, 0, 0, 0, 0, -1))
+    a.tick(bot)
+    assert any(p["title"] == "🕒 ENA 상태" for p in sent)  # morning: reports resume
+
+
+def test_the_public_price_lookup_is_defensive():
+    assert A.fetch_price("ENAUSDT", get=lambda u: {"result": {"list": [{"lastPrice": "0.1179"}]}}) == 0.1179
+    assert A.fetch_price("ENAUSDT", get=lambda u: {}) is None
+    assert A.fetch_price("bad symbol;", get=lambda u: (_ for _ in ()).throw(AssertionError("must not be called"))) is None
+
+    def down(u):
+        raise OSError("net")
+
+    assert A.fetch_price("ENAUSDT", get=down) is None
+
+
+def test_card_offers_the_period_and_quiet_hours_controls():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ("주기 상태 알림", "report_minutes", "조용한 시간", "quiet_from", "error_gap_min", "stale_hours", "signal_step"):
+        assert needle in html, needle
