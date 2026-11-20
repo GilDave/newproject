@@ -47,6 +47,41 @@ def environment_hint(command: str, output: str) -> str:
             f"`python3 -m venv .venv && .venv/bin/pip install {mod}` 를 실행하면 솔로몬이 그 .venv를 자동으로 씁니다.")
 
 
+BASELINE_TTL_SEC = 12 * 3600
+
+
+def baseline_key(commit: str, command: list[str]) -> str:
+    return commit.strip() + "|" + " ".join(command)
+
+
+def baseline_known_good(path: Path, key: str, now: float) -> bool:
+    """True when this exact commit already passed this exact test command (a rerun would tell nothing new and can take minutes)."""
+    import json
+
+    try:
+        seen = float(json.loads(Path(path).read_text(encoding="utf-8")).get(key) or 0)
+    except (OSError, ValueError, AttributeError):
+        return False
+    return seen > 0 and 0 <= now - seen < BASELINE_TTL_SEC
+
+
+def baseline_remember(path: Path, key: str, now: float) -> None:
+    import json
+
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data = {k: v for k, v in data.items() if now - float(v or 0) < BASELINE_TTL_SEC}
+    data[key] = now
+    try:
+        Path(path).write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass  # remembering is a convenience only
+
+
 def verify(settings: Settings, wt: Path) -> VerifyResult:
     cmd = settings.test_command
     if not cmd:

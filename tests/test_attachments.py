@@ -326,3 +326,38 @@ def test_the_screen_says_when_the_whole_test_suite_runs_before_the_first_attempt
 def test_the_now_card_names_the_test_phase():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     assert '"수정 전 코드의 테스트를 돌리는 중입니다"' in html and "baseline:0.5" in html
+
+
+def test_a_baseline_that_already_passed_on_the_same_commit_is_not_rerun(tmp_path):
+    repo = make_repo(tmp_path)
+
+    def one(steps):
+        s = make_settings()
+        s.test_command = ["python3", "-c", "print('ok')"]
+        s.approved_commands = ["python3"]
+        s.baseline_check = True
+        return Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json()]), "codex": ScriptedProvider("codex", steps)}).run("goal", repo)
+
+    first = events(one([write_file("src/new.py")]))
+    assert [e["event"] for e in first if e["event"].startswith("baseline")] == ["baseline_start", "baseline"]
+    second = events(one([write_file("src/other.py")]))
+    assert [e["event"] for e in second if e["event"].startswith("baseline")] == ["baseline_cached"]  # same commit, same command: no minutes lost
+    from solomon import status
+    run = status.summarize_run("x", second)
+    assert any("시작 전 점검 생략" in t for t in run.timeline)
+    s = make_settings()
+    s.test_command = ["python3", "-c", "print('changed command')"]
+    s.approved_commands = ["python3"]
+    s.baseline_check = True
+    third = events(Orchestrator(s, {"claude": ScriptedProvider("claude", [order_json(), review_json()]), "codex": ScriptedProvider("codex", [write_file("src/third.py")])}).run("goal", repo))
+    assert "baseline_start" in [e["event"] for e in third]  # another command is another question
+
+
+def test_baseline_cache_expires_and_ignores_garbage(tmp_path):
+    from solomon.verifier import BASELINE_TTL_SEC, baseline_known_good, baseline_remember
+    f = tmp_path / "baseline.json"
+    assert not baseline_known_good(f, "k", 1000.0)
+    f.write_text("not json")
+    assert not baseline_known_good(f, "k", 1000.0)
+    baseline_remember(f, "k", 1000.0)
+    assert baseline_known_good(f, "k", 1000.0 + 60) and not baseline_known_good(f, "k", 1000.0 + BASELINE_TTL_SEC + 1) and not baseline_known_good(f, "other", 1001.0)

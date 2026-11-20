@@ -219,6 +219,10 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
             run.stage_key = "baseline"
             run.stage = "시작 전 점검 (수정 전 테스트)"
             run.timeline.append(f"{clock}  시작 전 점검: 수정 전 코드의 테스트를 돌립니다 ({str(ev.get('command') or '')[:60]})")
+        elif kind == "baseline_cached":
+            run.stage_key = "build"
+            run.stage = "구현 준비"
+            run.timeline.append(f"{clock}  시작 전 점검 생략 — 같은 코드가 같은 테스트를 이미 통과했습니다")
         elif kind == "baseline":
             run.stage_key = "build"
             run.stage = "구현 준비"

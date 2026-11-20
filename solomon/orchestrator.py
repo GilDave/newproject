@@ -550,13 +550,24 @@ class Orchestrator:
         advice: Optional[str] = None
         advise_next = True
 
+        bkey = bfile = None
         if s.baseline_check and s.test_command:
+            try:
+                bkey = verifier_mod.baseline_key(gitops.git(["rev-parse", "HEAD"], wt).stdout, s.test_command)
+                bfile = run_dir.parent.parent / "baseline.json"
+            except Exception:
+                bkey = None
+        if s.baseline_check and s.test_command and bkey and verifier_mod.baseline_known_good(bfile, bkey, self._clock()):
+            log.event("baseline_cached", command=" ".join(s.test_command))  # the same code passed the same tests a short while ago
+        elif s.baseline_check and s.test_command:
             log.event("baseline_start", command=" ".join(s.test_command))  # the project's whole test suite runs now: the screen must say so
             t0 = self._clock()
             base = verify(s, wt)
             gitops.clean_untracked(wt)
             log.event("baseline", passed=base.passed, exit_code=base.exit_code, command=base.command, seconds=round(self._clock() - t0, 1),
                       output_tail=base.output_tail[-1500:])
+            if base.passed and not base.skipped and bkey:
+                verifier_mod.baseline_remember(bfile, bkey, self._clock())
             if not base.passed:
                 result.status = "ERROR"
                 result.summary = ("수정하기 전의 코드에서도 테스트가 실패합니다. 테스트 환경 문제일 수 있어 AI를 호출하지 않고 "
