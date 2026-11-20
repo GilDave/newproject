@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analysis as analysis_mod, alerts as alerts_mod, attachments as attach_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
+from . import (__version__, joblock, analysis as analysis_mod, alerts as alerts_mod, attachments as attach_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
                portfolio, projects as projects_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
@@ -531,6 +531,10 @@ class DashboardApp:
 
     def job_info(self) -> dict:
         job = self.job
+        if not job or job["popen"].poll() is not None:
+            if joblock.is_busy():  # running, but not started by this dashboard (terminal, or before a dashboard restart)
+                return {"state": "running", "external": True, "pid": 0, "project": None, "goal": "다른 곳(터미널·이전 대시보드)에서 실행 중인 작업",
+                        "exit_code": None, "started": time.time(), "kind": "external"}
         if not job:
             return {"state": "idle"}
         code = job["popen"].poll()
@@ -881,6 +885,7 @@ class DashboardApp:
         if len(goal) > MAX_GOAL:
             raise ApiError(400, f"목표가 너무 깁니다 ({MAX_GOAL}자 이하).")
         role_args = self._role_args(roles)
+        self._ensure_idle()  # before anything is stored or added
         try:
             pictures = attach_mod.decode(images)  # validated before anything is started
         except attach_mod.AttachError as exc:
@@ -911,6 +916,7 @@ class DashboardApp:
         return self._spawn("run", args, project, goal)
 
     def start_analysis(self, project: str, focus: str = "", ais: Optional[list] = None) -> dict:
+        self._ensure_idle()
         focus = (focus or "").strip()
         if len(focus) > MAX_GOAL:
             raise ApiError(400, f"분석 요청이 너무 깁니다 ({MAX_GOAL}자 이하).")
@@ -940,6 +946,7 @@ class DashboardApp:
         return self._spawn("analyze", args, project, focus or "전반 분석")
 
     def start_autofix(self, project: str, opts: Optional[dict] = None) -> dict:
+        self._ensure_idle()
         opts = opts or {}
         if (project or "") not in self._projects:
             try:
@@ -1108,11 +1115,16 @@ class DashboardApp:
             args += ["--config", self.config_path]
         return self._spawn("videoprobe", args, project, "AI별 영상 직접 시청 시험")
 
+    def _ensure_idle(self) -> None:
+        if self.job and self.job["popen"].poll() is None:
+            raise ApiError(409, "이미 실행 중인 작업이 있습니다. 끝나거나 중지한 뒤 다시 시도하세요.")
+        if joblock.is_busy():  # a job this dashboard does not know: started from a terminal or by an earlier dashboard
+            raise ApiError(409, joblock.BUSY)
+
     def _spawn(self, kind: str, args: list[str], project: str, label: str) -> dict:
         self._portfolio_cache = None
         with self._lock:
-            if self.job and self.job["popen"].poll() is None:
-                raise ApiError(409, "이미 실행 중인 작업이 있습니다. 끝나거나 중지한 뒤 다시 시도하세요.")
+            self._ensure_idle()
             log_path = (Path(project) / self.settings.state_dir / "dashboard.log") if project else self.store_path.parent / "tool.log"
             try:
                 popen = self._launcher(args, log_path)

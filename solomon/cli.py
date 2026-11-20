@@ -567,8 +567,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+from . import joblock  # noqa: E402
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    held = None
+    if getattr(args, "command", None) in joblock.JOB_COMMANDS and not getattr(args, "probe", False):
+        held = joblock.acquire()
+        if held is None:
+            print(f"error: {joblock.BUSY}", file=sys.stderr)
+            return 2
     try:
         return args.func(args)
     except (ConfigError, gitops.GitError, ValueError) as exc:  # user mistakes: show a message, not a traceback

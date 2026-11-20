@@ -2182,7 +2182,7 @@ function renderProjects(){
   });
 }
 
-const KIND_JOB = {run: "개선", analyze: "분석", video: "영상 분석", videoprobe: "영상 시험", tool: "도구", autofix: "밤샘 수정", tests: "테스트"};
+const KIND_JOB = {run: "개선", analyze: "분석", video: "영상 분석", videoprobe: "영상 시험", tool: "도구", autofix: "밤샘 수정", tests: "테스트", external: "외부 작업"};
 function renderStrip(){
   const strip = $("strip"), txt = $("stripText"), need = $("stripNeed");
   if (!state) return;

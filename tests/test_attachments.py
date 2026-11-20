@@ -189,3 +189,38 @@ def test_the_page_can_paste_drop_pick_and_show_the_pictures():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     for needle in ('id="attBtn"', 'id="attFile"', 'id="attList"', 'addEventListener("paste"', 'addEventListener("drop"', "createImageBitmap", "/api/attach?t=", "images: att.map", "첨부한 화면"):
         assert needle in html, needle
+
+
+# ---------------------------------------------------------------- one job at a time, across processes
+def test_a_job_lock_held_by_another_process_blocks_new_jobs(env, tmp_path):
+    from solomon import joblock
+    assert not joblock.is_busy()
+    held = joblock.acquire()
+    assert held is not None and joblock.is_busy() and joblock.acquire() is None
+    before = len(sleeper.calls)
+    for path, body in (("/api/run", {"goal": "x", "project": env.project}), ("/api/analyze", {"project": env.project})):
+        st, resp, _ = env.call("POST", path, body)
+        assert st == 409 and "이미 실행 중" in resp["error"], path
+    assert len(sleeper.calls) == before
+    held.close()
+    assert not joblock.is_busy()
+
+
+def test_cli_job_commands_refuse_while_another_job_holds_the_lock(tmp_path, capsys):
+    from solomon import joblock
+    held = joblock.acquire()
+    repo = make_repo(tmp_path / "r")
+    assert cli.main(["run", "goal", "--project", str(repo)]) == 2
+    assert "이미 실행 중" in capsys.readouterr().err
+    held.close()
+
+
+def test_the_page_shows_a_job_started_elsewhere_as_busy(env):
+    from solomon import joblock
+    assert env.app.job_info()["state"] == "idle"
+    held = joblock.acquire()
+    info = env.app.job_info()
+    assert info["state"] == "running" and info["external"] and "다른 곳" in info["goal"]
+    assert env.app.build_state(env.project, None)["job"]["external"]  # the buttons are disabled like for its own job
+    held.close()
+    assert env.app.job_info()["state"] == "idle"
