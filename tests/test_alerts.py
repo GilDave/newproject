@@ -15,6 +15,11 @@ from solomon import alerts as A
 from test_botlab import FakeRun, make_bot  # noqa: F401
 from test_dashboard import Env, sleeper
 
+@pytest.fixture(autouse=True)
+def no_real_monitor(monkeypatch):
+    monkeypatch.setattr(A, "read_monitor", lambda port=8787, get=None: None)  # never talk to a real 8787 from the tests
+
+
 DEVICE = "AbCdEfGh12345678XyZ"
 ENC = "0123456789abcdef"
 
@@ -370,3 +375,53 @@ def test_the_card_offers_the_item_switches_and_names_the_source_of_the_position(
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     for needle in ("알림에 넣을 항목", "show_entry", "show_pnl", "show_qty", "8787 화면의 평단과 같은 값인지 확인하세요", "pos.entry_field"):
         assert needle in html, needle
+
+
+# ---------------------------------------------------------------- reading the bot's own page (/api/state)
+STATE = {"now": 1795156236505, "symbol": "ENAUSDT", "ticker": {"last": 0.10385, "pct24h": -6.9694},
+         "cards": {"trend": {"detail": {"target_exposure": -0.58056}}},
+         "accounts": {"base": {"qty": -6082.0, "entry": 0.11444824110789135, "exposure": -0.5898}, "shadow": {"qty": -2979.0, "entry": 0.1096368}, "ml_shadow": {"qty": -948.0, "entry": 0.1084612}}}
+
+
+def test_the_monitor_state_gives_price_and_the_base_accounts_position(monkeypatch):
+    seen = {}
+    monkeypatch.undo()  # the autouse stub would hide the real function
+    mon = A.read_monitor(8787, get=lambda url, timeout=2.5: seen.update(url=url) or STATE)
+    assert seen["url"] == "http://127.0.0.1:8787/api/state"
+    assert mon["price"] == 0.10385 and mon["pct24h"] == -6.9694 and mon["base"] == {"qty": -6082.0, "entry": 0.11444824110789135} and mon["exposure"] == -0.58056
+    pos = A.position_from_monitor(mon)
+    assert pos["entry"] == 0.11444824110789135 and pos["side"] == "숏" and pos["source"] == "monitor" and pos["entry_field"] == "accounts.base.entry" and not pos["flat"]
+    assert A.position_from_monitor({"base": {"qty": 0.0, "entry": 0.0}})["flat"] is True
+    for odd in ({}, {"accounts": []}, {"accounts": {"base": {"qty": "x"}}}, []):
+        got = A.read_monitor(get=lambda u, t=2.5, v=odd: v)
+        assert got is None or got["base"] is None
+    assert A.position_from_monitor(None) is None
+
+    def down(u, t=2.5):
+        raise OSError("refused")
+
+    assert A.read_monitor(get=down) is None
+
+
+def test_alerts_use_the_pages_own_entry_price_and_price_for_the_profit(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    (bot / "config.json").write_text(json.dumps({"symbol": "ENAUSDT"}))
+    put(bot, "trend_cycle", cycle(0.3))
+    now = [time.mktime((2026, 11, 20, 12, 0, 0, 0, 0, -1))]
+    sent = []
+    mon = {"symbol": "ENAUSDT", "price": 0.10385, "pct24h": -6.97, "base": {"qty": -6082.0, "entry": 0.11444824110789135}, "exposure": -0.58}
+    a = A.Alerts(tmp_path / "lab", clock=lambda: now[0], http=lambda u, p: (sent.append(p) or (200, {"code": 200})), price=lambda s: 9.9, monitor=lambda: mon)
+    a.update({"device_key": DEVICE, "enabled": True, "report": True, "report_minutes": 10, "stale": False})
+    a.tick(bot)
+    put(bot, "trend_cycle", cycle(-0.58, price=0.1040))
+    a.tick(bot)
+    by = {p["title"]: p["body"] for p in sent}
+    sig = by["🔄 ENA 추세 방향 전환"]
+    assert "숏 평균 진입가 0.114448" in sig and "신호 가격 0.104" in sig and "진입가 대비 +9.26%" in sig  # profit from the page's price 0.10385, not the 0.1040 of the event
+    rep = by["🕒 ENA 상태"]
+    assert "ENAUSDT 0.10385" in rep and "9.9" not in rep.replace("0.10385", "")  # the outside ticker (9.9) was not even asked
+    assert a.position(bot)["source"] == "monitor"
+    mon.clear()  # the page is down: the saved state is the fallback
+    put_kv(bot, "trend_paper", {"qty": -6082.0, "entry": 0.11445})
+    mon_down = A.Alerts(tmp_path / "lab2", monitor=lambda: None)
+    assert mon_down.position(bot)["source"] == "kv"

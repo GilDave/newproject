@@ -180,10 +180,41 @@ def fetch_price(symbol: str, get: Callable = _http_get_json) -> Optional[float]:
         return None
 
 
+def read_monitor(port: int = 8787, get: Callable = _http_get_json) -> Optional[dict]:
+    """What the bot's OWN monitor page shows, read from its local /api/state (read-only): current price, 24h change, the base account's
+    position (accounts.base.qty / .entry) and the target exposure. None when the page is not up or looks different."""
+    try:
+        d = get(f"http://127.0.0.1:{port}/api/state", 2.5)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    base = (d.get("accounts") or {}).get("base") if isinstance(d.get("accounts"), dict) else None
+    try:
+        tk = d.get("ticker") or {}
+        return {"symbol": d.get("symbol"), "price": float(tk["last"]) if tk.get("last") is not None else None,
+                "pct24h": float(tk["pct24h"]) if tk.get("pct24h") is not None else None,
+                "base": {"qty": float(base["qty"]), "entry": float(base["entry"])} if isinstance(base, dict) and "qty" in base and "entry" in base else None,
+                "exposure": ((d.get("cards") or {}).get("trend") or {}).get("detail", {}).get("target_exposure")}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def position_from_monitor(mon: Optional[dict]) -> Optional[dict]:
+    b = (mon or {}).get("base")
+    if not b:
+        return None
+    q = b["qty"]
+    return {"key": "8787 모니터 화면의 데이터", "source": "monitor", "qty": q, "entry": b["entry"], "qty_field": "accounts.base.qty", "entry_field": "accounts.base.entry",
+            "flat": q == 0 or b["entry"] <= 0, "side": "롱" if q > 0 else "숏" if q < 0 else "없음", "others": []}
+
+
 class Alerts:
-    def __init__(self, directory: Path, clock: Callable[[], float] = time.time, http: Callable = _http_post, price: Callable = fetch_price):
+    def __init__(self, directory: Path, clock: Callable[[], float] = time.time, http: Callable = _http_post, price: Callable = fetch_price,
+                 monitor: Optional[Callable] = None):
         self.dir = Path(directory)
         self._clock, self._http, self._price = clock, http, price
+        self._monitor = monitor or (lambda: read_monitor())  # looked up at call time (tests and tools can replace read_monitor)
         self._last_price: Optional[float] = None
 
     @property
@@ -222,6 +253,10 @@ class Alerts:
             json.dump(data, fh)
         os.replace(tmp, self.secret_path)
         os.chmod(self.secret_path, 0o600)
+
+    def position(self, bot_dir: str | Path) -> Optional[dict]:
+        """The open position exactly as the bot's own page shows it; the saved state in the database is the fallback."""
+        return position_from_monitor(self._monitor()) or read_position(Path(bot_dir) / "data" / "bot.db")
 
     def public(self) -> dict:
         """What the page may see: switches and whether secrets exist (the last 4 characters of the device key), never the secrets."""
@@ -314,14 +349,15 @@ class Alerts:
             symbol = str(json.loads((Path(bot_dir) / "config.json").read_text(encoding="utf-8")).get("symbol") or "")
         except (OSError, ValueError):
             symbol = ""
-        px = self._price(symbol)
+        mon = self._monitor()
+        px = (mon or {}).get("price") or self._price(symbol)  # the page's own price first: no outside call needed
         parts = []
         if px is not None:
             prev = self._last_price
             if c["show_price"]:
                 parts.append(f"{symbol} {px:g}" + (f" ({(px / prev - 1) * 100:+.2f}%)" if prev else ""))
             self._last_price = px
-        note = _price_note(c, read_position(Path(bot_dir) / "data" / "bot.db"), px)
+        note = _price_note(c, position_from_monitor(mon) or read_position(Path(bot_dir) / "data" / "bot.db"), px)
         if note:
             parts.append(note[3:])
         if exposure is not None:
@@ -364,7 +400,8 @@ class Alerts:
                 if cur is None:
                     continue
                 if _worth_telling(exposure, cur, c["signal_mode"], c["signal_step"]):
-                    msgs.append(_signal_text(exposure, cur, raw, c, read_position(db)))
+                    mon = self._monitor()
+                    msgs.append(_signal_text(exposure, cur, raw, c, position_from_monitor(mon) or read_position(db), (mon or {}).get("price")))
                 exposure = cur
             elif kind == "error" and c["error"] and now - c["last_error_alert"] >= c["error_gap_min"] * 60:
                 msgs.append(("⚠ ENA 봇 오류", _error_text(raw)))
@@ -451,7 +488,7 @@ def read_position(db: str | Path) -> Optional[dict]:
     rank = lambda f: (any(w in f["key"].lower() for w in ("shadow", "btc", "ml")), not any(w in f["key"].lower() for w in ("paper", "trend", "account")), f["key"])
     found.sort(key=rank)
     best = found[0]
-    return {**best, "flat": best["qty"] == 0, "side": "롱" if best["qty"] > 0 else "숏" if best["qty"] < 0 else "없음", "others": [f["key"] for f in found[1:4]]}
+    return {**best, "source": "kv", "flat": best["qty"] == 0, "side": "롱" if best["qty"] > 0 else "숏" if best["qty"] < 0 else "없음", "others": [f["key"] for f in found[1:4]]}
 
 
 def _price_note(c: dict, pos: Optional[dict], px: Optional[float]) -> str:
@@ -480,7 +517,7 @@ def _side(x: float) -> str:
     return "롱" if x > 0.02 else "숏" if x < -0.02 else "중립"
 
 
-def _signal_text(prev: Optional[float], cur: float, raw: str, c: Optional[dict] = None, pos: Optional[dict] = None) -> tuple[str, str]:
+def _signal_text(prev: Optional[float], cur: float, raw: str, c: Optional[dict] = None, pos: Optional[dict] = None, px_now: Optional[float] = None) -> tuple[str, str]:
     c = c or DEFAULTS
     try:
         d = json.loads(raw)
@@ -491,7 +528,7 @@ def _signal_text(prev: Optional[float], cur: float, raw: str, c: Optional[dict] 
     flip = prev is not None and _side(prev) != _side(cur)
     body = ((f"{_side(prev)} → {_side(cur)} 전환 · " if flip else "") + f"{head} ({_side(cur)})"
             + (f" · 신호 가격 {price}" if price is not None and c["show_price"] else "")
-            + _price_note(c, pos, float(price) if isinstance(price, (int, float)) else None)
+            + _price_note(c, pos, px_now if px_now else (float(price) if isinstance(price, (int, float)) else None))
             + (f" · 가상 계좌 {float(eq):.1f} USDT" if isinstance(eq, (int, float)) and c["show_equity"] else ""))
     return ("🔄 ENA 추세 방향 전환" if flip else "📈 ENA 추세 신호"), body
 

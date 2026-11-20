@@ -793,7 +793,7 @@ function renderBot(){
     ab.appendChild(el("b", "", "알림에 넣을 항목"));
     const shP = mk("신호 가격 (신호가 나온 시점의 가격)", al.show_price), shE = mk("보유 포지션의 평균 진입가 (8787 화면의 '평단')", al.show_entry), shL = mk("진입가 대비 손익(%) — 숏은 가격이 내리면 +", al.show_pnl), shQ = mk("포지션 수량", al.show_qty), shA = mk("가상 계좌 잔고", al.show_equity);
     const pos = al.position;
-    ab.appendChild(el("div", "hint", pos ? (pos.flat ? "보유 포지션: 없음(진입가는 포지션이 생기면 알림에 붙습니다)" : `보유 포지션 읽음: ${pos.side} · 평균 진입가 ${pos.entry} · 수량 ${Math.abs(pos.qty).toLocaleString("ko-KR")} (출처: bot.db kv '${pos.key}' 의 ${pos.entry_field}) — 8787 화면의 평단과 같은 값인지 확인하세요.${pos.others && pos.others.length ? " 다른 후보: " + pos.others.join(", ") : ""}`)
+    ab.appendChild(el("div", "hint", pos ? (pos.flat ? "보유 포지션: 없음(진입가는 포지션이 생기면 알림에 붙습니다)" : `보유 포지션 읽음: ${pos.side} · 평균 진입가 ${pos.entry} · 수량 ${Math.abs(pos.qty).toLocaleString("ko-KR")} (출처: ${pos.source === "monitor" ? "8787 모니터 화면의 데이터" : "bot.db kv '" + pos.key + "'"} · ${pos.entry_field}) — 8787 화면의 평단과 같은 값인지 확인하세요.${pos.others && pos.others.length ? " 다른 후보: " + pos.others.join(", ") : ""}`)
       : "보유 포지션을 bot.db에서 찾지 못했습니다(포지션이 없거나 저장 방식이 달라서일 수 있습니다). 이 경우 진입가는 알림에서 빠지고 신호 가격만 갑니다."));
     const row = el("div", "row");
     const sv = el("button", "primary", "저장"); sv.onclick = async () => { const body = {action: "save", signal: cs.checked, signal_mode: cm.value, error: ce.checked, stale: cz.checked, report: cs2.checked, report_minutes: rm.value, quiet: qz.checked, quiet_from: qf.value, quiet_to: qt.value,
