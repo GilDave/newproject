@@ -1063,7 +1063,7 @@ function renderBot(){
     ab.appendChild(el("b", "", "알림에 넣을 항목"));
     const stl = el("select"); [["compact", "간략 — 방향 · 진입가 · 현재가 · 수익률 · 청산가만"], ["detail", "자세히 — 목표 노출 · 다음 판단 시각 등 모두"]].forEach(([v, t]) => { const o = el("option", "", t); o.value = v; stl.appendChild(o); }); stl.value = al.style || "compact";
     line(ab, "메시지 형식:", stl);
-    const shLq = mk("청산가 (봇의 8787 데이터에 청산가가 있을 때만 붙습니다)", al.show_liq !== false);
+    const shLq = mk("청산가 (봇이 알려 주는 값, 없으면 계좌 잔고로 계산한 추정값 · 추정이면 「(추정)」 표시)", al.show_liq !== false);
     ab.appendChild(el("div", "hint", "간략 형식은 예를 들어 제목 「🟢 ENA 숏 +12.3%」, 본문 「진입 0.113133 → 현재 0.09924 / 수익률 +12.28% · 청산가 …」처럼 옵니다. 아래 항목을 끄면 그 줄만 빠집니다. 가상 계좌 잔고는 자세히 형식에서만 붙습니다."));
     const shP = mk("신호 가격 (신호가 나온 시점의 가격)", al.show_price), shE = mk("보유 포지션의 평균 진입가 (8787 화면의 '평단')", al.show_entry), shL = mk("진입가 대비 손익(%) — 숏은 가격이 내리면 +", al.show_pnl), shQ = mk("포지션 수량", al.show_qty), shA = mk("가상 계좌 잔고", al.show_equity);
     const pos = al.position;

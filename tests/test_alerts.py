@@ -389,7 +389,7 @@ def test_the_monitor_state_gives_price_and_the_base_accounts_position(monkeypatc
     monkeypatch.undo()  # the autouse stub would hide the real function
     mon = A.read_monitor(8787, get=lambda url, timeout=2.5: seen.update(url=url) or STATE)
     assert seen["url"] == "http://127.0.0.1:8787/api/state"
-    assert mon["price"] == 0.10385 and mon["pct24h"] == -6.9694 and mon["base"] == {"qty": -6082.0, "entry": 0.11444824110789135, "liq": None} and mon["exposure"] == -0.58056  # the bot reports no liquidation price
+    assert mon["price"] == 0.10385 and mon["pct24h"] == -6.9694 and mon["base"] == {"qty": -6082.0, "entry": 0.11444824110789135, "liq": None, "balance": None} and mon["exposure"] == -0.58056  # no liquidation price and no balance in this sample
     pos = A.position_from_monitor(mon)
     assert pos["entry"] == 0.11444824110789135 and pos["side"] == "숏" and pos["source"] == "monitor" and pos["entry_field"] == "accounts.base.entry" and not pos["flat"]
     assert A.position_from_monitor({"base": {"qty": 0.0, "entry": 0.0}})["flat"] is True
@@ -505,3 +505,19 @@ def test_the_settings_page_gets_the_style_and_the_liquidation_switch(tmp_path):
     assert a.public()["style"] == "compact" and a.public()["show_liq"] is False
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     assert "메시지 형식:" in html and "show_liq: shLq.checked, style: stl.value" in html
+
+
+def test_without_a_liquidation_price_from_the_bot_an_estimate_from_the_account_balance_is_marked_as_such(monkeypatch):
+    # the real 8787 account: short 5948 at 0.113133 with a balance of 1007.81 USDT
+    assert round(A.liquidation_estimate(-5948.0, 0.11313297560281627, 1007.8087567116827), 4) == 0.2826
+    assert round(A.liquidation_estimate(1000.0, 0.10, 50.0), 4) == 0.05 and A.liquidation_estimate(1000.0, 0.10, 500.0) is None  # an unlevered long cannot go below 0
+    assert A.liquidation_estimate(0, 0.1, 100) is None and A.liquidation_estimate(-1, 0.1, None) is None and A.liquidation_estimate(-1, 0.1, -5) is None
+    monkeypatch.undo()
+    state = {"symbol": "ENAUSDT", "ticker": {"last": 0.0970}, "accounts": {"base": {"qty": -5948.0, "entry": 0.11313297560281627, "balance": 1007.8087567116827, "equity": 1103.47}}}
+    pos = A.position_from_monitor(A.read_monitor(8787, get=lambda url, timeout=2.5: state))
+    assert pos["liq_est"] is True and round(pos["liq"], 4) == 0.2826
+    c = dict(A.DEFAULTS, style="compact")
+    title, body = A._compact(c, pos, 0.0970, None)
+    assert title == "🟢 ENA 숏 +14.3%" and body == "진입 0.113133 → 현재 0.097\n수익률 +14.26% · 청산가 0.28257(추정)"
+    exact = A.position_from_monitor({"base": {"qty": -5948.0, "entry": 0.113, "liq": 0.31, "balance": 1007.8}})  # the bot's own number wins and is not marked
+    assert exact["liq"] == 0.31 and exact["liq_est"] is False and "(추정)" not in A._compact(c, exact, 0.097)[1]

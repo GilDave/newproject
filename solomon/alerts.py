@@ -203,10 +203,21 @@ def read_monitor(port: int = 8787, get: Callable = _http_get_json) -> Optional[d
         tk = d.get("ticker") or {}
         return {"symbol": d.get("symbol"), "price": float(tk["last"]) if tk.get("last") is not None else None,
                 "pct24h": float(tk["pct24h"]) if tk.get("pct24h") is not None else None,
-                "base": ({"qty": float(base["qty"]), "entry": float(base["entry"]), "liq": _liq(base)} if isinstance(base, dict) and "qty" in base and "entry" in base else None),
+                "base": ({"qty": float(base["qty"]), "entry": float(base["entry"]), "liq": _liq(base),
+                         "balance": float(base["balance"]) if isinstance(base.get("balance"), (int, float)) and not isinstance(base.get("balance"), bool) else None} if isinstance(base, dict) and "qty" in base and "entry" in base else None),
                 "exposure": ((d.get("cards") or {}).get("trend") or {}).get("detail", {}).get("target_exposure")}
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def liquidation_estimate(qty: float, entry: float, balance: Optional[float]) -> Optional[float]:
+    """Where the account would be wiped out if the price went against the position, with no leverage beyond what the account itself holds:
+    a short is liquidated at entry + balance / quantity, a long at entry - balance / quantity (a long without leverage cannot go below 0).
+    An ESTIMATE (maintenance margin and fees ignored): the exchange's own number is used when the bot reports one."""
+    if not qty or not entry or not balance or balance <= 0:
+        return None
+    p = entry + balance / abs(qty) if qty < 0 else entry - balance / qty
+    return p if p > 0 else None
 
 
 def position_from_monitor(mon: Optional[dict]) -> Optional[dict]:
@@ -214,8 +225,10 @@ def position_from_monitor(mon: Optional[dict]) -> Optional[dict]:
     if not b:
         return None
     q = b["qty"]
+    liq = b.get("liq")
+    est = None if liq else liquidation_estimate(q, b["entry"], b.get("balance"))
     return {"key": "8787 모니터 화면의 데이터", "source": "monitor", "qty": q, "entry": b["entry"], "qty_field": "accounts.base.qty", "entry_field": "accounts.base.entry",
-            "liq": b.get("liq"), "flat": q == 0 or b["entry"] <= 0, "side": "롱" if q > 0 else "숏" if q < 0 else "없음", "others": []}
+            "liq": liq or est, "liq_est": bool(est), "flat": q == 0 or b["entry"] <= 0, "side": "롱" if q > 0 else "숏" if q < 0 else "없음", "others": []}
 
 
 class Alerts:
@@ -541,7 +554,7 @@ def _compact(c: dict, pos: Optional[dict], px: Optional[float], exposure: Option
     if c["show_pnl"] and pnl is not None:
         two.append(f"수익률 {pnl:+.2f}%")
     if c.get("show_liq", True) and pos.get("liq"):
-        two.append(f"청산가 {pos['liq']:g}")
+        two.append(f"청산가 {pos['liq']:g}" + ("(추정)" if pos.get("liq_est") else ""))
     if c["show_qty"]:
         two.append(f"수량 {abs(q):,.0f}")
     line1 = " → ".join(one)
