@@ -18,6 +18,7 @@ from test_dashboard import Env, sleeper
 @pytest.fixture(autouse=True)
 def no_real_monitor(monkeypatch):
     monkeypatch.setattr(A, "read_monitor", lambda port=8787, get=None: None)  # never talk to a real 8787 from the tests
+    monkeypatch.setitem(A.DEFAULTS, "style", "detail")  # the older tests check the long message; the short one has its own tests below
 
 
 DEVICE = "AbCdEfGh12345678XyZ"
@@ -388,7 +389,7 @@ def test_the_monitor_state_gives_price_and_the_base_accounts_position(monkeypatc
     monkeypatch.undo()  # the autouse stub would hide the real function
     mon = A.read_monitor(8787, get=lambda url, timeout=2.5: seen.update(url=url) or STATE)
     assert seen["url"] == "http://127.0.0.1:8787/api/state"
-    assert mon["price"] == 0.10385 and mon["pct24h"] == -6.9694 and mon["base"] == {"qty": -6082.0, "entry": 0.11444824110789135} and mon["exposure"] == -0.58056
+    assert mon["price"] == 0.10385 and mon["pct24h"] == -6.9694 and mon["base"] == {"qty": -6082.0, "entry": 0.11444824110789135, "liq": None} and mon["exposure"] == -0.58056  # the bot reports no liquidation price
     pos = A.position_from_monitor(mon)
     assert pos["entry"] == 0.11444824110789135 and pos["side"] == "숏" and pos["source"] == "monitor" and pos["entry_field"] == "accounts.base.entry" and not pos["flat"]
     assert A.position_from_monitor({"base": {"qty": 0.0, "entry": 0.0}})["flat"] is True
@@ -425,3 +426,82 @@ def test_alerts_use_the_pages_own_entry_price_and_price_for_the_profit(tmp_path)
     put_kv(bot, "trend_paper", {"qty": -6082.0, "entry": 0.11445})
     mon_down = A.Alerts(tmp_path / "lab2", monitor=lambda: None)
     assert mon_down.position(bot)["source"] == "kv"
+
+
+# ---------------------------------------------------------------- the short message: direction, entry, now, profit %, liquidation price
+SHORT = {"side": "숏", "qty": -6082.0, "entry": 0.113133, "liq": 0.2201, "flat": False}
+
+
+def test_the_short_message_has_only_direction_entry_now_profit_and_liquidation():
+    c = dict(A.DEFAULTS, style="compact")
+    title, body = A._compact(c, SHORT, 0.09924, -0.54)
+    assert title == "🟢 ENA 숏 +12.3%" and body == "진입 0.113133 → 현재 0.09924\n수익률 +12.28% · 청산가 0.2201"
+    assert "목표 노출" not in body and "다음 판단" not in body and "마지막 판단" not in body
+    t2, b2 = A._compact(c, dict(SHORT, side="롱", qty=100.0, liq=0.05), 0.10, None)  # a long loses when the price falls below the entry
+    assert t2 == "🔴 ENA 롱 -11.6%" and "수익률 -11.61%" in b2 and "청산가 0.05" in b2
+
+
+def test_the_short_message_follows_the_switches_and_skips_a_liquidation_price_the_bot_does_not_report():
+    c = dict(A.DEFAULTS, style="compact", show_liq=False, show_entry=False)
+    title, body = A._compact(c, SHORT, 0.09924, None)
+    assert "청산가" not in body and "진입" not in body and body == "현재 0.09924\n수익률 +12.28%"
+    title, body = A._compact(dict(A.DEFAULTS, style="compact"), dict(SHORT, liq=None), 0.09924, None)
+    assert "청산가" not in body and "수익률 +12.28%" in body
+    title, body = A._compact(dict(A.DEFAULTS, style="compact", show_pnl=False, show_qty=True), SHORT, 0.09924, None)
+    assert title == "🟢 ENA 숏" and "수량 6,082" in body and "수익률" not in body
+
+
+def test_flat_has_a_one_line_message():
+    c = dict(A.DEFAULTS, style="compact")
+    assert A._compact(c, None, 0.0992, -0.54) == ("⚪ ENA 포지션 없음", "현재 0.0992 · 목표 방향 숏")
+    assert A._compact(c, dict(SHORT, flat=True), None, None)[1] == "보유 포지션이 없습니다"
+
+
+def test_a_direction_flip_message_is_short_too():
+    c = dict(A.DEFAULTS, style="compact")
+    title, body = A._signal_text(0.5, -0.54, '{"price": 0.1, "equity": 100}', c, SHORT, 0.09924)
+    assert title == "🔄 ENA 방향 전환: 롱 → 숏" and body == "진입 0.113133 → 현재 0.09924\n수익률 +12.28% · 청산가 0.2201" and "가상 계좌" not in body
+    title, body = A._signal_text(-0.54, -0.64, '{"price": 0.1}', c, None, 0.0992)
+    assert title == "📈 ENA 신호: 숏 (노출 -0.64)" and body == "현재 0.0992 · 신호가 0.1"
+
+
+def test_the_periodic_report_is_the_short_message_and_the_settings_persist(tmp_path):
+    bot = make_bot(tmp_path / "b")
+    (bot / "config.json").write_text(json.dumps({"symbol": "ENAUSDT"}))
+    put(bot, "trend_cycle", cycle(-0.54))
+    now = [time.mktime((2026, 11, 20, 12, 0, 0, 0, 0, -1))]
+    sent = []
+    mon = {"symbol": "ENAUSDT", "price": 0.09924, "pct24h": 0.68, "base": {"qty": -6082.0, "entry": 0.113133, "liq": 0.2201}, "exposure": -0.54}
+    a = A.Alerts(tmp_path / "lab", clock=lambda: now[0], http=lambda u, p: (sent.append(p) or (200, {"code": 200})), price=lambda s: 9.9, monitor=lambda: mon)
+    a.update({"device_key": DEVICE, "enabled": True, "report": True, "report_minutes": 10, "stale": False, "signal": False, "style": "compact"})
+    assert a.config()["style"] == "compact"
+    a.tick(bot)
+    now[0] += 11 * 60
+    a.tick(bot)
+    assert sent and sent[-1]["title"] == "🟢 ENA 숏 +12.3%" and sent[-1]["body"] == "진입 0.113133 → 현재 0.09924\n수익률 +12.28% · 청산가 0.2201"
+    a.update({"style": "detail", "show_liq": False})
+    assert a.config()["style"] == "detail" and a.config()["show_liq"] is False
+    a.update({"style": "nonsense"})
+    assert a.config()["style"] == "detail"  # an unknown value changes nothing
+
+
+def test_the_monitor_reader_finds_a_liquidation_price_by_name():
+    assert A._liq({"qty": -1, "entry": 1, "liq_price": 0.22}) == 0.22 and A._liq({"liquidationPrice": 3.5}) == 3.5
+    assert A._liq({"qty": -1, "entry": 1}) is None and A._liq({"liq": True}) is None and A._liq({"liq": 0}) is None
+
+
+def test_a_liquidation_price_in_the_pages_state_reaches_the_position(monkeypatch):
+    monkeypatch.undo()
+    state = {"symbol": "ENAUSDT", "ticker": {"last": 0.1}, "accounts": {"base": {"qty": -6082, "entry": 0.113, "liquidation_price": 0.22}}}
+    mon = A.read_monitor(8787, get=lambda url, timeout=2.5: state)
+    assert mon["base"]["liq"] == 0.22 and A.position_from_monitor(mon)["liq"] == 0.22
+
+
+def test_the_settings_page_gets_the_style_and_the_liquidation_switch(tmp_path):
+    a = A.Alerts(tmp_path / "lab")
+    pub = a.public()
+    assert pub["style"] in ("compact", "detail") and pub["show_liq"] is True
+    a.update({"style": "compact", "show_liq": False})
+    assert a.public()["style"] == "compact" and a.public()["show_liq"] is False
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    assert "메시지 형식:" in html and "show_liq: shLq.checked, style: stl.value" in html

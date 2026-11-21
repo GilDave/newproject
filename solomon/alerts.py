@@ -140,7 +140,8 @@ DEFAULTS = {"enabled": False, "server": DEFAULT_SERVER, "signal": True, "signal_
             "signal_step": 0.10,  # "change" mode: a message when the direction flips or the target exposure moves by at least this much
             "error_gap_min": 30.0, "stale_hours": 9.0, "stale_repeat_hours": 6.0,
             # what a message may contain (all the user's choice)
-            "show_price": True, "show_entry": True, "show_pnl": True, "show_qty": False, "show_equity": True,
+            "show_price": True, "show_entry": True, "show_pnl": True, "show_qty": False, "show_equity": True, "show_liq": True,
+            "style": "compact",  # compact: direction, entry, now, profit %, liquidation price. detail: everything the switches allow
             "report": False, "report_minutes": 10.0, "quiet": False, "quiet_from": "23:00", "quiet_to": "07:00",
             "last_event_id": 0, "last_exposure": None, "last_error_alert": 0.0, "last_stale_alert": 0.0, "last_report": 0.0, "last_sent": 0.0, "last_failure": ""}
 LIMITS = {"signal_step": (0.01, 1.0), "error_gap_min": (1, 1440), "stale_hours": (1, 72), "stale_repeat_hours": (1, 72), "report_minutes": (1, 1440)}
@@ -180,6 +181,14 @@ def fetch_price(symbol: str, get: Callable = _http_get_json) -> Optional[float]:
         return None
 
 
+def _liq(d: dict) -> Optional[float]:
+    """A liquidation price the bot itself reports (a field whose name contains 'liq'); None when it does not report one."""
+    for k, v in (d or {}).items():
+        if "liq" in str(k).lower() and isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            return float(v)
+    return None
+
+
 def read_monitor(port: int = 8787, get: Callable = _http_get_json) -> Optional[dict]:
     """What the bot's OWN monitor page shows, read from its local /api/state (read-only): current price, 24h change, the base account's
     position (accounts.base.qty / .entry) and the target exposure. None when the page is not up or looks different."""
@@ -194,7 +203,7 @@ def read_monitor(port: int = 8787, get: Callable = _http_get_json) -> Optional[d
         tk = d.get("ticker") or {}
         return {"symbol": d.get("symbol"), "price": float(tk["last"]) if tk.get("last") is not None else None,
                 "pct24h": float(tk["pct24h"]) if tk.get("pct24h") is not None else None,
-                "base": {"qty": float(base["qty"]), "entry": float(base["entry"])} if isinstance(base, dict) and "qty" in base and "entry" in base else None,
+                "base": ({"qty": float(base["qty"]), "entry": float(base["entry"]), "liq": _liq(base)} if isinstance(base, dict) and "qty" in base and "entry" in base else None),
                 "exposure": ((d.get("cards") or {}).get("trend") or {}).get("detail", {}).get("target_exposure")}
     except (KeyError, TypeError, ValueError):
         return None
@@ -206,7 +215,7 @@ def position_from_monitor(mon: Optional[dict]) -> Optional[dict]:
         return None
     q = b["qty"]
     return {"key": "8787 모니터 화면의 데이터", "source": "monitor", "qty": q, "entry": b["entry"], "qty_field": "accounts.base.qty", "entry_field": "accounts.base.entry",
-            "flat": q == 0 or b["entry"] <= 0, "side": "롱" if q > 0 else "숏" if q < 0 else "없음", "others": []}
+            "liq": b.get("liq"), "flat": q == 0 or b["entry"] <= 0, "side": "롱" if q > 0 else "숏" if q < 0 else "없음", "others": []}
 
 
 class Alerts:
@@ -264,7 +273,7 @@ class Alerts:
         dk = s.get("device_key", "")
         return {**{k: c[k] for k in ("enabled", "server", "signal", "signal_mode", "error", "stale", "last_sent", "last_failure", "signal_step", "error_gap_min",
                                      "stale_hours", "stale_repeat_hours", "report", "report_minutes", "quiet", "quiet_from", "quiet_to", "last_report",
-                                     "show_price", "show_entry", "show_pnl", "show_qty", "show_equity")},
+                                     "show_price", "show_entry", "show_pnl", "show_qty", "show_equity", "show_liq", "style")},
                 "key_set": bool(dk), "key_tail": dk[-4:] if len(dk) >= 8 else "", "enc_set": bool(s.get("enc_key"))}
 
     def update(self, body: dict) -> dict:
@@ -289,7 +298,7 @@ class Alerts:
             if not sv.startswith("https://"):
                 raise AlertError(400, "서버 주소는 https:// 로 시작해야 합니다.")
             c["server"] = sv
-        for k in ("signal", "error", "stale", "report", "quiet", "show_price", "show_entry", "show_pnl", "show_qty", "show_equity"):
+        for k in ("signal", "error", "stale", "report", "quiet", "show_price", "show_entry", "show_pnl", "show_qty", "show_equity", "show_liq"):
             if k in body:
                 c[k] = bool(body[k])
         for k, (lo, hi) in LIMITS.items():
@@ -306,6 +315,8 @@ class Alerts:
                 if not TIME_RE.match(str(body[k])):
                     raise AlertError(400, "조용한 시간은 HH:MM 형식(예: 23:00)이어야 합니다.")
                 c[k] = str(body[k])
+        if body.get("style") in ("compact", "detail"):
+            c["style"] = body["style"]
         if body.get("signal_mode") in ("change", "every"):
             c["signal_mode"] = body["signal_mode"]
         if "enabled" in body:
@@ -357,7 +368,11 @@ class Alerts:
             if c["show_price"]:
                 parts.append(f"{symbol} {px:g}" + (f" ({(px / prev - 1) * 100:+.2f}%)" if prev else ""))
             self._last_price = px
-        note = _price_note(c, position_from_monitor(mon) or read_position(Path(bot_dir) / "data" / "bot.db"), px)
+        pos = position_from_monitor(mon) or read_position(Path(bot_dir) / "data" / "bot.db")
+        if c.get("style", "compact") == "compact":
+            self._last_price = px if px is not None else self._last_price
+            return _compact(c, pos, px, exposure)
+        note = _price_note(c, pos, px)
         if note:
             parts.append(note[3:])
         if exposure is not None:
@@ -482,7 +497,8 @@ def read_position(db: str | Path) -> Optional[dict]:
         q = next((p for p in flat if last(p) in _QTY), None)
         e = next((p for p in flat if last(p) in _ENTRY and flat[p] > 0), None)
         if q and e:
-            found.append({"key": key, "qty": flat[q], "entry": flat[e], "qty_field": q, "entry_field": e})
+            lq = next((flat[p] for p in flat if "liq" in last(p) and flat[p] > 0), None)
+            found.append({"key": key, "qty": flat[q], "entry": flat[e], "qty_field": q, "entry_field": e, "liq": lq})
     if not found:
         return None
     rank = lambda f: (any(w in f["key"].lower() for w in ("shadow", "btc", "ml")), not any(w in f["key"].lower() for w in ("paper", "trend", "account")), f["key"])
@@ -507,6 +523,31 @@ def _price_note(c: dict, pos: Optional[dict], px: Optional[float]) -> str:
     return " · " + " · ".join(parts) if parts else ""
 
 
+def _compact(c: dict, pos: Optional[dict], px: Optional[float], exposure: Optional[float] = None) -> tuple[str, str]:
+    """The short message: direction, entry price, price now, profit %, liquidation price (each can be switched off)."""
+    if not pos or pos.get("flat"):
+        body = [f"현재 {px:g}" if px else "", f"목표 방향 {_side(exposure)}" if exposure is not None else ""]
+        return "⚪ ENA 포지션 없음", " · ".join(x for x in body if x) or "보유 포지션이 없습니다"
+    side, entry, q = pos["side"], pos["entry"], pos["qty"]
+    pnl = (px - entry) / entry * (1 if q > 0 else -1) * 100 if px and entry else None  # a short gains when the price falls
+    icon = "⚪" if pnl is None else "🟢" if pnl >= 0 else "🔴"
+    title = f"{icon} ENA {side}" + (f" {pnl:+.1f}%" if pnl is not None and c["show_pnl"] else "")
+    one = []
+    if c["show_entry"]:
+        one.append(f"진입 {entry:g}")
+    if c["show_price"] and px:
+        one.append(f"현재 {px:g}")
+    two = []
+    if c["show_pnl"] and pnl is not None:
+        two.append(f"수익률 {pnl:+.2f}%")
+    if c.get("show_liq", True) and pos.get("liq"):
+        two.append(f"청산가 {pos['liq']:g}")
+    if c["show_qty"]:
+        two.append(f"수량 {abs(q):,.0f}")
+    line1 = " → ".join(one)
+    return title, "\n".join(x for x in (line1, " · ".join(two)) if x) or title
+
+
 def _worth_telling(prev: Optional[float], cur: float, mode: str, step: float = 0.10) -> bool:
     if mode == "every" or prev is None:
         return True
@@ -524,6 +565,15 @@ def _signal_text(prev: Optional[float], cur: float, raw: str, c: Optional[dict] 
     except ValueError:
         d = {}
     price, eq = d.get("price"), d.get("equity")
+    if c.get("style", "compact") == "compact":
+        flip = prev is not None and _side(prev) != _side(cur)
+        px = px_now if px_now else (float(price) if isinstance(price, (int, float)) else None)
+        title, body = _compact(c, pos, px, cur)
+        head = f"🔄 ENA 방향 전환: {_side(prev)} → {_side(cur)}" if flip else f"📈 ENA 신호: {_side(cur)} (노출 {cur:+.2f})"
+        if pos and not pos.get("flat"):
+            return head, body
+        parts = ([f"현재 {px:g}"] if px else []) + ([f"신호가 {price:g}"] if c["show_price"] and isinstance(price, (int, float)) else [])
+        return head, " · ".join(parts) or head
     head = f"목표 노출 {prev:+.2f} → {cur:+.2f}" if prev is not None else f"목표 노출 {cur:+.2f}"
     flip = prev is not None and _side(prev) != _side(cur)
     body = ((f"{_side(prev)} → {_side(cur)} 전환 · " if flip else "") + f"{head} ({_side(cur)})"
