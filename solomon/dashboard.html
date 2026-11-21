@@ -426,6 +426,8 @@ textarea{min-height:84px}
 .rptask .st.applied{color:#3ecf8e;border-color:#2c6b52}.rptask .st.passed{color:#f7d98b;border-color:#8a6d1e}.rptask .st.running{color:#9cc2ff;border-color:#2f74e6}.rptask .st.failed{color:#ff9aa6;border-color:#6b2a36}
 .rptask textarea{min-height:110px;margin:6px 0}
 .rptask .meta{font-size:12px;color:var(--dim)}
+.rptarget{margin:10px 0;padding:8px 12px;border:1px solid #2f74e6;border-radius:10px;background:#0e2140}
+.rptarget #rp-target{font-family:ui-monospace,Menlo,monospace;font-size:13px;margin:0 8px}
 .rpchain{margin:10px 0;padding:10px 12px;border:1px dashed #566f98;border-radius:10px;background:#111a28}
 .rptask label.sel{display:inline-flex;gap:6px;align-items:center;margin:0 8px 0 0;font-size:12px;color:var(--dim)}
 </style>
@@ -601,6 +603,11 @@ textarea{min-height:84px}
         <div class="rp-tasks" id="rp-tasks" hidden>
           <h2>📋 개선 작업으로 이어가기</h2>
           <div class="hint">보고서의 구현 방안을 <b>작은 작업</b>으로 나눠 한 번에 하나씩 개선 모드(구현 → 테스트 → 교차 검수)로 실행합니다. 앞 단계를 <b>적용하고 커밋</b>한 뒤 다음 단계를 실행하세요. 구현 AI가 못 하는 일(조사, 화면 확인, API 키 등록)은 「사람이 할 일」로 따로 모읍니다.</div>
+          <div class="rptarget" id="rp-target-box" hidden>
+            <b>🎯 작업을 실행할 프로젝트</b> <span id="rp-target"></span> <button id="rp-target-pick">바꾸기</button>
+            <div class="hint">보고서가 저장된 프로젝트와 달라도 됩니다. 단계 실행·자동 실행은 <b>여기에 적은 프로젝트</b>의 코드를 바꿉니다(ENA봇 기능이면 ena-bot 폴더).</div>
+            <div class="warnbox" id="rp-target-warn" hidden></div>
+          </div>
           <div class="row"><select id="rp-task-ai" style="width:auto"></select><button id="rp-task-make" class="primary">작은 작업으로 나누기</button></div>
           <div id="rp-chain" class="rpchain" hidden>
             <b>🌙 자리를 비워도 순서대로 자동 실행</b>
@@ -2874,10 +2881,18 @@ function rpRenderTasks(){
   if (sel.dataset.options !== opts){ sel.dataset.options = opts; clear(sel); state.providers.filter(p => p.installed && p.name !== "ollama").forEach(p => { const o = el("option", "", pname(p.name) + "가 나눔"); o.value = p.name; sel.appendChild(o); }); }
   const busy = state.job.state === "running", list = $("rp-task-list"), human = $("rp-task-human");
   $("rp-task-make").disabled = busy; $("rp-task-make").textContent = r.tasks ? "다시 나누기" : "작은 작업으로 나누기";
+  const tb = $("rp-target-box"); tb.hidden = !r.tasks;
+  if (r.tasks){
+    const target = r.tasks.target || rpProject(); $("rp-target").textContent = target;
+    const w = $("rp-target-warn"), asksEna = /ena/i.test(r.question || ""), isEna = /ena/i.test(target.split("/").slice(-2).join("/"));
+    w.hidden = !(asksEna && !isEna);
+    if (!w.hidden) w.textContent = "⚠ 질문에 ENA가 들어 있는데 실행 대상이 「" + target.split("/").slice(-1)[0] + "」입니다. ENA봇 기능이라면 「바꾸기」로 ena-bot 폴더를 고르세요. 그대로 실행하면 이 프로젝트의 코드가 바뀝니다.";
+  }
   const chain = $("rp-chain"); chain.hidden = !r.tasks;
   if (r.tasks && rp.chainFor !== r.report_id){ rp.chainFor = r.report_id; rp.chainSel = new Set(r.tasks.tasks.filter(t => !["applied", "running"].includes(t.state)).map(t => t.id)); }
   const refreshChain = () => { const n = rp.chainSel ? rp.chainSel.size : 0; $("rp-chain-go").disabled = busy || !n; $("rp-chain-info").textContent = n ? n + "단계 선택됨" : "실행할 단계를 체크하세요"; };
   refreshChain();
+  const targetName = () => (r.tasks && r.tasks.target) || rpProject();
   const sig = JSON.stringify([r.report_id, r.tasks, busy]);
   if (list.dataset.sig === sig) return;  // unchanged: do not rebuild (a goal being edited must not vanish)
   const typing = list.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA";
@@ -2907,8 +2922,8 @@ function rpRenderTasks(){
     go.disabled = busy || t.state === "running" || t.state === "applied";
     go.onclick = async () => {
       const warn = unmet.length ? "\n\n⚠ 먼저 적용해야 할 단계(" + unmet.map(x => "단계 " + x).join(", ") + ")가 아직 적용되지 않았습니다. 그대로 실행하면 앞 단계의 코드가 없는 상태에서 만듭니다." : "";
-      if (!confirm("단계 " + t.id + " 「" + t.title + "」을 개선 모드로 실행합니다 (구현 → 테스트 → 교차 검수). 결과는 관리 탭에서 확인하고 적용합니다." + warn + "\n\n시작할까요?")) return;
-      try { await api("/api/report/task-run", {project: rpProject(), id: r.report_id, task_id: t.id, roles: collectRoles(), persist: $("persist").checked, shadow: $("shadow").checked}); toast("단계 " + t.id + " 실행을 시작했습니다. 진행은 상단 「현재 작업」과 작업실에서 봅니다."); selectedProject = rpProject(); selectedRun = null; poll(); } catch (e) { toast(e.message, true); }
+      if (!confirm("단계 " + t.id + " 「" + t.title + "」을 개선 모드로 실행합니다 (구현 → 테스트 → 교차 검수).\n\n🎯 대상 프로젝트: " + targetName() + "\n결과는 관리 탭에서 확인하고 적용합니다." + warn + "\n\n시작할까요?")) return;
+      try { await api("/api/report/task-run", {project: rpProject(), id: r.report_id, task_id: t.id, roles: collectRoles(), persist: $("persist").checked, shadow: $("shadow").checked}); toast("단계 " + t.id + " 실행을 시작했습니다. 진행은 상단 「현재 작업」과 작업실에서 봅니다."); selectedProject = targetName(); selectedRun = null; poll(); } catch (e) { toast(e.message, true); }
     };
     row.appendChild(go);
     const open = el("button", "", "개선 화면에서 열기"); open.title = "목표를 개선 화면의 입력칸에 채워 두고 역할을 직접 고를 수 있게 합니다";
@@ -2987,11 +3002,18 @@ $("rp-export").onclick = () => {
     try { const r = await api("/api/report/export", {project: rpProject(), id, folder}); toast(r.message); } catch (e) { toast(e.message, true); }
   }, "");
 };
+$("rp-target-pick").onclick = () => {
+  if (!rp.cur) return;
+  const id = rp.cur.report_id;
+  openBrowser("작업을 실행할 프로젝트 폴더 고르기 (ENA봇이면 ena-bot)", async (path) => {
+    try { await api("/api/project", {path}); const r = await api("/api/report/target", {project: rpProject(), id, target: path}); toast(r.message); await poll(); loadProjects(); rpTick(); } catch (e) { toast(e.message, true); }
+  }, (rp.cur.tasks && rp.cur.tasks.target) || "");
+};
 $("rp-chain-go").onclick = async () => {
   if (!rp.cur || !rp.chainSel || !rp.chainSel.size) return;
   const ids = [...rp.chainSel].sort((a, b) => a - b);
-  if (!confirm("단계 " + ids.join(", ") + " 을(를) 순서대로 자동 실행합니다.\n\n· 새 브랜치에만 쌓이고 원본은 바뀌지 않습니다\n· 각 단계가 테스트와 교차 검수를 통과해야 다음으로 갑니다\n· 제한 시간 " + $("rp-chain-h").value + "시간, 끝나면 아이폰 알림\n\n시작할까요?")) return;
-  try { await api("/api/report/chain", {project: rpProject(), id: rp.cur.report_id, task_ids: ids, budget_hours: Number($("rp-chain-h").value), roles: collectRoles()}); toast("자동 실행을 시작했습니다. 자리를 비워도 됩니다."); selectedProject = rpProject(); await poll(); } catch (e) { toast(e.message, true); }
+  if (!confirm("단계 " + ids.join(", ") + " 을(를) 순서대로 자동 실행합니다.\n\n🎯 대상 프로젝트: " + ((rp.cur.tasks && rp.cur.tasks.target) || rpProject()) + "\n· 새 브랜치에만 쌓이고 원본은 바뀌지 않습니다\n· 각 단계가 테스트와 교차 검수를 통과해야 다음으로 갑니다\n· 제한 시간 " + $("rp-chain-h").value + "시간, 끝나면 아이폰 알림\n\n시작할까요?")) return;
+  try { await api("/api/report/chain", {project: rpProject(), id: rp.cur.report_id, task_ids: ids, budget_hours: Number($("rp-chain-h").value), roles: collectRoles()}); toast("자동 실행을 시작했습니다. 자리를 비워도 됩니다."); selectedProject = (rp.cur.tasks && rp.cur.tasks.target) || rpProject(); await poll(); } catch (e) { toast(e.message, true); }
 };
 $("rp-task-make").onclick = async () => {
   if (!rp.cur) return;

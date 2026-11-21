@@ -499,15 +499,26 @@ def task_goal_text(project: Path, state_dir: str, rid: str, task_id: int) -> str
     return "\n".join(parts)
 
 
-def task_statuses(project: Path, state_dir: str, rid: str, tasks: list[dict]) -> dict[int, dict]:
+def set_task_target(project: Path, state_dir: str, rid: str, target: str) -> dict:
+    """Which project the tasks are BUILT in. A report may live in one project (where it was asked) while its tasks change another one (the bot)."""
+    data = load_tasks(project, state_dir, rid)
+    if data is None:
+        raise ReportError("작업 목록이 없습니다.")
+    data["target"] = str(target)
+    (Path(project) / state_dir / "reports" / rid / "tasks.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+def task_statuses(project: Path, state_dir: str, rid: str, tasks: list[dict], target: Optional[str] = None) -> dict[int, dict]:
     """Where every task stands, read back from the runs that carry its marker: todo / running / passed (waiting to be applied) / applied / failed."""
     from . import manage
     from .status import load_runs
 
-    runs = load_runs(Path(project), state_dir)
-    marks = manage._load_marks(Path(project), state_dir)
+    where = Path(target or project)  # the runs of the tasks are in the project they were built in
+    runs = load_runs(where, state_dir)
+    marks = manage._load_marks(where, state_dir)
     batch_of: dict[str, str] = {}  # run id -> the chain (batch) that built it, so the screen can send the person to the right place to apply it
-    for f in (Path(project) / state_dir / "batches").glob("*/batch.json"):
+    for f in (where / state_dir / "batches").glob("*/batch.json"):
         try:
             for it in json.loads(f.read_text(encoding="utf-8")).get("items", []):
                 if it.get("run_id"):
@@ -525,7 +536,7 @@ def task_statuses(project: Path, state_dir: str, rid: str, tasks: list[dict]) ->
         if not r.finished:
             st = "running"
         elif r.status == "PASSED":
-            applied = (Path(project) / state_dir / "runs" / r.run_id / "applied.json").is_file()
+            applied = (where / state_dir / "runs" / r.run_id / "applied.json").is_file()
             ms = manage._state_of(f"run:{r.run_id}", marks, applied)
             st = "applied" if ms in ("applied", "committed") else "discarded" if ms == "discarded" else "passed"
         else:

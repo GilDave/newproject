@@ -474,3 +474,76 @@ def test_the_report_tab_has_the_unattended_chain():
         assert needle in html, needle
     from solomon import cli, joblock
     assert "report-chain" in joblock.JOB_COMMANDS and "report-chain" in next(a for a in cli.build_parser()._actions if a.dest == "command").choices
+
+
+# ---------------------------------------------------------------- the tasks can be built in another project than the one holding the report
+def two_projects(tmp_path):
+    other = tmp_path / "other-bot"
+    other.mkdir()
+    import subprocess
+    for cmd in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *cmd], cwd=other, check=True)
+    (other / "README.md").write_text("bot\n")
+    subprocess.run(["git", "add", "."], cwd=other, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=other, check=True)
+    return other
+
+
+def test_status_and_runs_follow_the_target_project(repo, tmp_path):
+    other = two_projects(tmp_path)
+    rid = make_tasks(repo)
+    R.set_task_target(repo, ".solomon", rid, str(other))
+    assert R.load_tasks(repo, ".solomon", rid)["target"] == str(other)
+    tasks = R.load_tasks(repo, ".solomon", rid)["tasks"]
+    assert R.task_statuses(repo, ".solomon", rid, tasks, str(other))[1]["state"] == "todo"
+    goal = R.task_goal_text(repo, ".solomon", rid, 1)  # the goal comes from the report's project ...
+    from solomon.orchestrator import Orchestrator
+    from helpers import write_file as wf, order_json as oj, review_json as rj
+    o = Orchestrator(make_settings(), {"claude": ScriptedProvider("claude", [oj(), rj()]), "codex": ScriptedProvider("codex", [wf("src/new.py")])})
+    r = o.run(goal, other)  # ... and the work is done in the other one
+    assert r.status == "PASSED" and (Path(r.run_dir).parent.parent.parent == other / ".solomon" or str(other) in r.run_dir)
+    assert R.task_statuses(repo, ".solomon", rid, tasks)[1]["state"] == "todo"  # looking in the report's project finds nothing
+    assert R.task_statuses(repo, ".solomon", rid, tasks, str(other))[1]["state"] == "passed"  # looking in the target finds the run
+
+
+def test_the_chain_builds_in_the_target_and_reads_tasks_from_the_report_project(repo, tmp_path):
+    from solomon import autofix
+    other = two_projects(tmp_path)
+    rid = make_tasks(repo, deps=((), ()))
+    s = new_settings()
+    ok = [json.dumps({"allowed_paths": ["src/"], "protected_paths": [], "acceptance_criteria": ["ok"], "allowed_deletions": [], "context": "t"}), json.dumps({"verdict": "PASS", "issues": [], "summary": "ok"})]
+    from helpers import write_file as wf
+    o = chain_orch(s, ok * 2, [wf("src/new.py"), wf("src/t2.py")])
+    r = autofix.run_task_chain(s, other, rid, orchestrator=o, report_project=repo)
+    assert r.status == "DONE" and (other / ".solomon" / "batches" / r.batch_id).is_dir() and not (repo / ".solomon" / "batches").exists()
+    assert "src/t2.py" in gitout(other, "ls-tree", "-r", "--name-only", r.branch)
+    assert gitout(repo, "branch", "--list", "solomon/chain-*").strip() == ""  # nothing was built in the project that only holds the report
+
+
+def test_dashboard_runs_and_chains_in_the_chosen_target(env, tmp_path):
+    repo = Path(env.project)
+    other = two_projects(tmp_path)
+    env.app.add_project(str(other))
+    rid = make_tasks(repo)
+    st, body, _ = env.call("POST", "/api/report/target", {"project": env.project, "id": rid, "target": str(other.resolve())})
+    assert st == 200
+    assert env.call("POST", "/api/report/target", {"project": env.project, "id": rid, "target": "/nowhere"})[0] == 400
+    q = "/api/report?project=" + quote(env.project) + "&id=" + rid
+    assert env.call("GET", q)[1]["tasks"]["target"] == str(other.resolve())
+    st, body, _ = env.call("POST", "/api/report/task-run", {"project": env.project, "id": rid, "task_id": 1})
+    assert st == 200
+    args = sleeper.calls[-1]
+    assert args[3] == "run" and args[args.index("--project") + 1] == str(other.resolve()) and args[4].startswith(f"[보고서 {rid} · 단계 1/3]")
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+    st, body, _ = env.call("POST", "/api/report/chain", {"project": env.project, "id": rid})
+    assert st == 200
+    args = sleeper.calls[-1]
+    assert args[3] == "report-chain" and args[args.index("--project") + 1] == str(other.resolve()) and args[args.index("--report-project") + 1] == env.project
+    assert body["job"]["project"] == str(other.resolve())
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+
+
+def test_the_report_tab_shows_and_changes_the_target():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ('id="rp-target-box"', 'id="rp-target-pick"', '"/api/report/target"', "작업을 실행할 프로젝트", "🎯 대상 프로젝트: ", "질문에 ENA가 들어 있는데 실행 대상이", "selectedProject = targetName()"):
+        assert needle in html, needle

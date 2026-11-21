@@ -349,7 +349,8 @@ def _report_chain(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, _stop)
     try:
         res = autofix_mod.run_task_chain(settings, project, args.id, [int(i) for i in args.tasks.split(",") if i.strip()] if args.tasks else None,
-                                         budget_minutes=args.budget_minutes)
+                                         budget_minutes=args.budget_minutes,
+                                         report_project=Path(args.report_project).expanduser() if args.report_project else None)
     except (autofix_mod.AutofixError, ConfigError, gitops.GitError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -643,6 +644,7 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--project")
     rc.add_argument("--config")
     rc.add_argument("--tasks", help="only these task numbers, e.g. 1,2,4 (default: every task not applied yet)")
+    rc.add_argument("--report-project", help="the project the report is stored in, when the tasks are built in another one (--project)")
     rc.add_argument("--budget-minutes", type=float, default=360.0)
     rc.add_argument("--test-command")
     for role in ALL_ROLES:

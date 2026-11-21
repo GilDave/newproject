@@ -1177,8 +1177,9 @@ class DashboardApp:
         view["html"] = mdhtml.render(view["markdown"])[0] if view.get("markdown") else ""
         tasks = report_mod.load_tasks(Path(project), self.settings.state_dir, rid)
         if tasks:
-            stat = report_mod.task_statuses(Path(project), self.settings.state_dir, rid, tasks["tasks"])
-            tasks = dict(tasks, tasks=[dict(t, **stat[t["id"]]) for t in tasks["tasks"]])
+            target = tasks.get("target") or project
+            stat = report_mod.task_statuses(Path(project), self.settings.state_dir, rid, tasks["tasks"], target)
+            tasks = dict(tasks, target=target, tasks=[dict(t, **stat[t["id"]]) for t in tasks["tasks"]])
         view["tasks"] = tasks
         view["drafts_html"] = {n: mdhtml.render(t)[0] for n, t in view.get("drafts", {}).items()}
         return view
@@ -1224,21 +1225,41 @@ class DashboardApp:
             raise ApiError(400, "시간 값이 올바르지 않습니다.") from None
         if not 0.25 <= hours <= 24:
             raise ApiError(400, "제한 시간은 0.25~24시간이어야 합니다.")
-        if not self.is_git(project):
+        target = self._task_target(project, rid)
+        if not self.is_git(target):
             raise ApiError(400, "자동 실행에는 git 저장소가 필요합니다 (커밋이 1개 이상).")
-        cmd, _ = self.effective_test_command(project)
+        cmd, _ = self.effective_test_command(target)
         if not cmd:
             raise ApiError(400, "테스트 명령이 없으면 자동 실행을 하지 않습니다. 프로젝트 설정에서 테스트 명령을 정하세요.")
         role_args = self._role_args(body.get("roles"))
         self._ensure_idle()
-        args = [sys.executable, "-m", "solomon", "report-chain", "--project", project, "--id", rid, "--budget-minutes", str(int(hours * 60)),
+        args = [sys.executable, "-m", "solomon", "report-chain", "--project", target, "--id", rid, "--budget-minutes", str(int(hours * 60)),
                 "--test-command", shlex.join(cmd)]
+        if target != project:
+            args += ["--report-project", project]
         if ids:
             args += ["--tasks", ",".join(str(i) for i in ids)]
         if self.config_path:
             args += ["--config", self.config_path]
         args += role_args
-        return self._spawn("autofix", args, project, f"보고서 순차 실행 ({len(ids) if ids else len(data['tasks'])}단계)")
+        return self._spawn("autofix", args, target, f"보고서 순차 실행 ({len(ids) if ids else len(data['tasks'])}단계)")
+
+    def _task_target(self, project: str, rid: str) -> str:
+        """The project a report's tasks are built in: the one chosen for it, else the project the report is stored in. Must still be registered."""
+        data = report_mod.load_tasks(Path(project), self.settings.state_dir, rid)
+        target = (data or {}).get("target") or project
+        if target not in self._projects:
+            raise ApiError(400, "작업을 실행할 프로젝트가 등록되어 있지 않습니다. 대상 프로젝트를 다시 지정하세요.")
+        return target
+
+    def set_report_target(self, project: str, body: dict) -> dict:
+        project = self._known(project)
+        target = self._known(str(body.get("target", "")))
+        try:
+            report_mod.set_task_target(Path(project), self.settings.state_dir, str(body.get("id", "")), target)
+        except report_mod.ReportError as exc:
+            raise ApiError(400, str(exc)) from exc
+        return {"ok": True, "target": target, "message": f"작업을 실행할 프로젝트: {target}"}
 
     def edit_report_task(self, project: str, body: dict) -> dict:
         project = self._known(project)
@@ -1263,7 +1284,8 @@ class DashboardApp:
             goal = report_mod.task_goal_text(Path(project), self.settings.state_dir, rid, tid)
         except report_mod.ReportError as exc:
             raise ApiError(400, str(exc)) from exc
-        return self.start_run(goal, project, body.get("roles"), bool(body.get("persist")), shadow=bool(body.get("shadow")))
+        target = self._task_target(project, rid)
+        return self.start_run(goal, target, body.get("roles"), bool(body.get("persist")), shadow=bool(body.get("shadow")))
 
     def delete_report(self, project: str, rid: str) -> dict:
         project = self._known(project)
@@ -1512,6 +1534,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_report(str(body.get("project", "")), body)})
                 if path == "/api/report/tasks":
                     return self._json(200, {"job": app.start_report_tasks(str(body.get("project", "")), body)})
+                if path == "/api/report/target":
+                    return self._json(200, app.set_report_target(str(body.get("project", "")), body))
                 if path == "/api/report/chain":
                     return self._json(200, {"job": app.start_report_chain(str(body.get("project", "")), body)})
                 if path == "/api/report/task-run":

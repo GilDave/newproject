@@ -299,6 +299,7 @@ def run_task_chain(
     item_minutes: float = DEFAULT_ITEM_MIN,
     orchestrator: Optional[Orchestrator] = None,
     clock: Callable[[], float] = time.time,
+    report_project: Optional[Path] = None,
 ) -> BatchResult:
     """The tasks of a report, built one after another unattended: each is a normal Solomon run that starts from the result of the one before,
     passed ones are committed to a NEW branch (the checked-out branch and folder are never touched), and a person applies the result later.
@@ -309,11 +310,12 @@ def run_task_chain(
     gitops.ensure_repo(project)
     if not settings.test_command:
         raise AutofixError("테스트 명령이 없으면 자동 실행을 하지 않습니다 (검증 없는 변경이 쌓입니다). 프로젝트 설정에서 테스트 명령을 정하세요.")
-    data = report_mod.load_tasks(project, settings.state_dir, report_id)
+    rproject = Path(report_project).resolve() if report_project else project  # where the report lives; `project` is where the tasks are built
+    data = report_mod.load_tasks(rproject, settings.state_dir, report_id)
     if not data:
         raise AutofixError("작업 목록이 없습니다. 먼저 보고서에서 '작은 작업으로 나누기'를 하세요.")
     tasks = {t["id"]: t for t in data["tasks"]}
-    status = report_mod.task_statuses(project, settings.state_dir, report_id, data["tasks"])
+    status = report_mod.task_statuses(rproject, settings.state_dir, report_id, data["tasks"], str(project))
     applied = {i for i, st in status.items() if st["state"] == "applied"}
     wanted = [i for i in (task_ids or [t["id"] for t in data["tasks"]]) if i in tasks and i not in applied and status[i]["state"] != "running"]
     if not wanted:
@@ -377,7 +379,7 @@ def run_task_chain(
             return sha
 
         try:
-            res = orch.run(report_mod.task_goal_text(project, settings.state_dir, report_id, tid), project, base_ref=branch, on_pass=commit)
+            res = orch.run(report_mod.task_goal_text(rproject, settings.state_dir, report_id, tid), project, base_ref=branch, on_pass=commit)
         except Exception as exc:  # one broken step must not end the night
             item.status, item.summary = "ERROR", f"{type(exc).__name__}: {exc}"
             log("item_end", n=n, task=tid, status="ERROR", summary=item.summary)
