@@ -346,3 +346,181 @@ def load_report(project: Path, state_dir: str, rid: str) -> Optional[dict]:
                 project=meta.get("project", str(project)), context=meta.get("context", False), created=meta.get("created", view["started"]))
     view["interrupted"] = bool(not view["finished"] and not meta)
     return view
+
+
+# ---------------------------------------------------------------- report -> small improvement tasks (the pipeline from a plan to the builders)
+MAX_TASKS = 10
+MAX_TASK_GOAL = 3000
+_NEEDS_PERSON = re.compile(
+    r"사용자[^.\n]{0,14}(검수|승인|확인|동의|리뷰)|사전\s*(검수|승인)|출처\s*링크|조회일|웹\s*(검색|서칭)|서칭|브라우저|렌더링\s*(확인|검증)|스크린샷|git\s*(diff|status|log)", re.I)
+
+
+def split_prompt(question: str, report_md: str, context: str = "") -> str:
+    return (
+        "You are a technical lead. Below is a REPORT (a plan) written for the QUESTION. Split its implementation plan into SMALL work tasks that an "
+        "automated pipeline can build one at a time. Each task is given to a builder AI that works OFFLINE in a copy of the project, writes code and tests, "
+        "and is checked by the project's tests and by reviewers. It cannot browse the web, use a browser, run git, or ask anyone.\n"
+        "Reply with ONLY one JSON object:\n"
+        '{"tasks": [{"title": string, "goal": string, "size": "S"|"M", "files": string[], "depends_on": integer[], "verify": string}], "human_steps": string[]}\n'
+        "Rules for the tasks (write every string in Korean):\n"
+        f"- At most {MAX_TASKS} tasks, in the order they should be built. Numbering starts at 1; depends_on lists the numbers of tasks that must be applied first.\n"
+        "- ONE feature slice per task, with its own tests: at most about 5 files and 400 changed lines. The first task should be the smallest useful, "
+        "independent piece (pure functions and tests before anything that touches the screen or the network).\n"
+        "- goal: a complete, self-contained instruction for the builder (what to build, function/file names, thresholds, inputs and outputs, edge cases, "
+        "which tests to write). Copy the exact details it needs from the report. Do NOT ask for web research, sources, links, browser or screenshot checks, "
+        "git output, or approval before coding.\n"
+        "- files: the project files or folders the task will likely touch (from the project file list when given; new files are fine).\n"
+        "- verify: how the result is checked by tests (one sentence).\n"
+        "- human_steps: what only the PERSON can do (look at a chart, confirm a data source, register an API key ...). Not tasks.\n"
+        + (f"\nPROJECT CONTEXT (file names and README start):\n{context}\n" if context else "")
+        + f"\nQUESTION:\n{question}\n\nREPORT:\n{report_md[:30000]}\n"
+    )
+
+
+def _validate_tasks(data: dict) -> tuple[list[dict], list[str]]:
+    raw = data.get("tasks")
+    if not isinstance(raw, list) or not raw:
+        raise ReportError("작업 목록이 비어 있습니다")
+    tasks: list[dict] = []
+    new_id: dict[int, int] = {}  # the position in the AI's list -> the number after dropping unusable entries
+    human = [str(x).strip()[:300] for x in (data.get("human_steps") or []) if str(x).strip()][:10]
+    for i, t in enumerate(raw[:MAX_TASKS], 1):
+        if not isinstance(t, dict):
+            continue
+        title, goal = str(t.get("title", "")).strip()[:120], str(t.get("goal", "")).strip()[:MAX_TASK_GOAL]
+        if not title:
+            continue
+        keep, moved = [], []
+        for sentence in re.split(r"(?<=[.。!?])\s+|\n+", goal):  # what only a person can do leaves the builder's instruction
+            if sentence.strip():
+                (moved if _NEEDS_PERSON.search(sentence) else keep).append(sentence.strip())
+        for m in moved:
+            human.append(f"단계 {i} ({title}): {m[:200]}")
+        goal = "\n".join(keep)
+        if len(goal) < 20:
+            continue
+        files = [str(f).strip()[:200] for f in (t.get("files") or []) if str(f).strip() and ".." not in str(f) and not str(f).startswith("/")][:8]
+        deps = sorted({new_id[int(d)] for d in (t.get("depends_on") or []) if isinstance(d, (int, float)) and not isinstance(d, bool) and int(d) in new_id})
+        new_id[i] = len(tasks) + 1
+        tasks.append({"id": len(tasks) + 1, "title": title, "goal": goal, "size": "M" if str(t.get("size", "S")).upper() == "M" else "S", "files": files,
+                      "depends_on": deps, "verify": str(t.get("verify", "")).strip()[:300]})
+    if not tasks:
+        raise ReportError("쓸 수 있는 작업이 없습니다 (제목과 목표가 빠졌습니다)")
+    return tasks, human[:12]
+
+
+def plan_tasks(settings: Settings, project: Path, rid: str, ai: Optional[str] = None, *, providers: Optional[dict[str, Provider]] = None) -> dict:
+    from .jsonutil import extract_json
+    from .providers import build_providers, default_ais
+
+    project = Path(project).resolve()
+    view = load_report(project, settings.state_dir, rid)
+    if view is None or not view.get("markdown"):
+        raise ReportError("나눌 보고서가 없습니다 (아직 작성 중이거나 실패한 보고서입니다).")
+    providers = providers if providers is not None else build_providers(settings)
+    order = [ai] if ai else [a for a in SYNTH_ORDER if a in providers and a != "ollama"] + [a for a in default_ais(providers) if a not in SYNTH_ORDER]
+    order = [a for a in order if a in providers] or list(providers)[:1]
+    if not order:
+        raise ValueError("no AI CLI is installed")
+    rdir = project / settings.state_dir / "reports" / rid
+    log = _Log(rdir / "events.jsonl")
+    ctx = ""
+    if view.get("context"):
+        try:
+            ctx = project_context(project)
+        except Exception:
+            ctx = ""
+    sandbox = tempfile.TemporaryDirectory(prefix="solomon-tasks-")
+    gitops.git(["init", "-q"], sandbox.name)
+    last = "AI가 응답하지 못했습니다"
+    try:
+        for who in order:
+            log.event("tasks_start", provider=who)
+            try:
+                res = providers[who].run(split_prompt(view.get("question", ""), view["markdown"], ctx), cwd=sandbox.name, write=False,
+                                         timeout=float(settings.timeouts.get("analysis", 900.0)), no_output_timeout=None)
+                tasks, human = _validate_tasks(extract_json(res.text))
+            except (QuotaExhausted, ProviderError, ValueError) as exc:  # ValueError covers ReportError and bad JSON
+                last = f"{who}: {exc}"[:300]
+                log.event("tasks_end", provider=who, ok=False, error=last)
+                continue
+            out = {"report_id": rid, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "provider": who, "tasks": tasks, "human_steps": human}
+            (rdir / "tasks.json").write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+            log.event("tasks_end", provider=who, ok=True, count=len(tasks))
+            return out
+    finally:
+        sandbox.cleanup()
+    raise ReportError("작업으로 나누지 못했습니다: " + last)
+
+
+def load_tasks(project: Path, state_dir: str, rid: str) -> Optional[dict]:
+    if not REPORT_ID.match(rid or ""):
+        raise ReportError("보고서 번호가 올바르지 않습니다.")
+    try:
+        data = json.loads((Path(project) / state_dir / "reports" / rid / "tasks.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and isinstance(data.get("tasks"), list) else None
+
+
+def save_task_goal(project: Path, state_dir: str, rid: str, task_id: int, goal: str) -> dict:
+    data = load_tasks(project, state_dir, rid)
+    goal = (goal or "").strip()
+    if data is None:
+        raise ReportError("작업 목록이 없습니다.")
+    if len(goal) < 20 or len(goal) > MAX_TASK_GOAL:
+        raise ReportError(f"목표는 20~{MAX_TASK_GOAL}자여야 합니다.")
+    task = next((t for t in data["tasks"] if t.get("id") == task_id), None)
+    if task is None:
+        raise ReportError("그 작업이 없습니다.")
+    task["goal"] = goal
+    (Path(project) / state_dir / "reports" / rid / "tasks.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+def task_marker(rid: str, task_id: int, total: int) -> str:
+    return f"[보고서 {rid} · 단계 {task_id}/{total}]"
+
+
+def task_goal_text(project: Path, state_dir: str, rid: str, task_id: int) -> str:
+    """The text a builder run gets for one task: a marker (so the screen can follow the run back to its task), the goal, and the check."""
+    data = load_tasks(project, state_dir, rid)
+    if data is None:
+        raise ReportError("작업 목록이 없습니다. 먼저 '작은 작업으로 나누기'를 하세요.")
+    task = next((t for t in data["tasks"] if t.get("id") == task_id), None)
+    if task is None:
+        raise ReportError("그 작업이 없습니다.")
+    parts = [task_marker(rid, task_id, len(data["tasks"])) + " " + task["title"], "", task["goal"]]
+    if task.get("files"):
+        parts += ["", "건드릴 가능성이 큰 파일: " + ", ".join(task["files"])]
+    if task.get("verify"):
+        parts += ["", "확인 방법: " + task["verify"]]
+    parts += ["", "이 작업 하나만 구현하세요. 보고서의 다른 단계는 별도 작업으로 나중에 진행합니다."]
+    return "\n".join(parts)
+
+
+def task_statuses(project: Path, state_dir: str, rid: str, tasks: list[dict]) -> dict[int, dict]:
+    """Where every task stands, read back from the runs that carry its marker: todo / running / passed (waiting to be applied) / applied / failed."""
+    from . import manage
+    from .status import load_runs
+
+    runs = load_runs(Path(project), state_dir)
+    marks = manage._load_marks(Path(project), state_dir)
+    out: dict[int, dict] = {}
+    for t in tasks:
+        mk = task_marker(rid, t["id"], len(tasks))
+        mine = [r for r in runs if (r.goal or "").startswith(mk)]
+        if not mine:
+            out[t["id"]] = {"state": "todo", "run_id": None, "runs": 0}
+            continue
+        r = mine[-1]
+        if not r.finished:
+            st = "running"
+        elif r.status == "PASSED":
+            applied = (Path(project) / state_dir / "runs" / r.run_id / "applied.json").is_file()
+            ms = manage._state_of(f"run:{r.run_id}", marks, applied)
+            st = "applied" if ms in ("applied", "committed") else "discarded" if ms == "discarded" else "passed"
+        else:
+            st = "failed"
+        out[t["id"]] = {"state": st, "run_id": r.run_id, "runs": len(mine), "status": r.status}
+    return out

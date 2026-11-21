@@ -445,4 +445,4 @@ def test_a_finished_test_run_is_not_reported_as_a_run_that_could_not_start(tmp_p
     finally:
         e.close()
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
-    assert '"tool", "tests", "report", "external"].includes(k)' in html and '작업 폴더의 테스트를 실행하는 중입니다' in html
+    assert '"tool", "tests", "report", "reporttasks", "external"].includes(k)' in html and '작업 폴더의 테스트를 실행하는 중입니다' in html

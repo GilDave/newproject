@@ -416,6 +416,16 @@ textarea{min-height:84px}
   .rpw{display:block;padding:0}.card{background:#fff!important;border:0!important;box-shadow:none!important;padding:0!important}
   .doc,.doc *{color:#000!important;background:transparent!important;border-color:#999!important}.rp-meta{color:#444!important}
 }
+
+.rp-tasks{margin-top:22px;padding-top:6px;border-top:1px solid var(--line)}
+.rp-tasks h2{font-size:17px;margin:12px 0 6px}
+.rptask{border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin:8px 0;background:#141a22}
+.rptask .th{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.rptask .tt{font-weight:700;font-size:14px}
+.rptask .st{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.rptask .st.applied{color:#3ecf8e;border-color:#2c6b52}.rptask .st.passed{color:#f7d98b;border-color:#8a6d1e}.rptask .st.running{color:#9cc2ff;border-color:#2f74e6}.rptask .st.failed{color:#ff9aa6;border-color:#6b2a36}
+.rptask textarea{min-height:110px;margin:6px 0}
+.rptask .meta{font-size:12px;color:var(--dim)}
 </style>
 </head>
 <body>
@@ -586,6 +596,13 @@ textarea{min-height:84px}
         </div>
         <div class="rp-meta" id="rp-meta"></div>
         <div class="doc" id="rp-body"></div>
+        <div class="rp-tasks" id="rp-tasks" hidden>
+          <h2>📋 개선 작업으로 이어가기</h2>
+          <div class="hint">보고서의 구현 방안을 <b>작은 작업</b>으로 나눠 한 번에 하나씩 개선 모드(구현 → 테스트 → 교차 검수)로 실행합니다. 앞 단계를 <b>적용하고 커밋</b>한 뒤 다음 단계를 실행하세요. 구현 AI가 못 하는 일(조사, 화면 확인, API 키 등록)은 「사람이 할 일」로 따로 모읍니다.</div>
+          <div class="row"><select id="rp-task-ai" style="width:auto"></select><button id="rp-task-make" class="primary">작은 작업으로 나누기</button></div>
+          <div id="rp-task-list"></div>
+          <div id="rp-task-human"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -1201,7 +1218,7 @@ function renderDash(){
   const cur = isVid ? state.video : isAn ? state.analysis : state.current;
   const title = $("nowTitle"), sub = $("nowSub"), tail = $("tail");
   tail.hidden = true;
-  const kindHere = (k) => isVid ? k === "video" : isAn ? k === "analyze" : !["analyze", "video", "videoprobe", "tool", "tests", "report", "external"].includes(k);  // a test run, a report or a job from elsewhere is not "the run" of this screen
+  const kindHere = (k) => isVid ? k === "video" : isAn ? k === "analyze" : !["analyze", "video", "videoprobe", "tool", "tests", "report", "reporttasks", "external"].includes(k);  // a test run, a report or a job from elsewhere is not "the run" of this screen
   const here = running && kindHere(job.kind);
   const selectedAn = isVid ? selectedVideo : selectedAnalysis, noun = isVid ? "영상 분석" : "분석";
   if (isAn){
@@ -1229,6 +1246,9 @@ function renderDash(){
 
   if (running && job.kind === "tests"){
     title.textContent = "작업 폴더의 테스트를 실행하는 중입니다"; sub.textContent = "프로젝트의 테스트 명령을 돌리는 중입니다 · 결과는 「관리」 탭에 표시됩니다";
+  }
+  if (running && job.kind === "reporttasks"){
+    title.textContent = "보고서를 작은 작업으로 나누는 중입니다"; sub.textContent = "AI가 구현 방안을 단계별 작업으로 쪼갭니다 · 결과는 「보고서」 탭에 나옵니다";
   }
   if (running && job.kind === "report"){  // a report is being written: the report screen has the details
     title.textContent = "보고서를 작성하는 중입니다"; sub.textContent = "각 AI가 초안을 쓰고 하나가 합칩니다 · 진행과 결과는 「보고서」 탭에서 봅니다";
@@ -2611,7 +2631,7 @@ function renderProjects(){
   });
 }
 
-const KIND_JOB = {report: "보고서", run: "개선", analyze: "분석", video: "영상 분석", videoprobe: "영상 시험", tool: "도구", autofix: "밤샘 수정", tests: "테스트", external: "외부 작업"};
+const KIND_JOB = {report: "보고서", reporttasks: "작업 나누기", run: "개선", analyze: "분석", video: "영상 분석", videoprobe: "영상 시험", tool: "도구", autofix: "밤샘 수정", tests: "테스트", external: "외부 작업"};
 function renderStrip(){
   const strip = $("strip"), txt = $("stripText"), need = $("stripNeed");
   if (!state) return;
@@ -2837,6 +2857,53 @@ async function rpOpenReport(id){
     rp.cur = r; rpRenderDoc();
   } catch (e) { toast(e.message, true); }
 }
+const TASK_ST = {todo: "⬜ 아직", running: "🔄 진행 중", passed: "🟡 통과 · 적용 대기", applied: "✅ 적용됨", failed: "❌ 실패", discarded: "↩ 폐기함"};
+function rpRenderTasks(){
+  const r = rp.cur, box = $("rp-tasks");
+  box.hidden = !(r && r.finished && r.status === "DONE" && r.markdown);
+  if (box.hidden) return;
+  const sel = $("rp-task-ai"), opts = JSON.stringify(state.providers.map(p => [p.name, p.installed]));
+  if (sel.dataset.options !== opts){ sel.dataset.options = opts; clear(sel); state.providers.filter(p => p.installed && p.name !== "ollama").forEach(p => { const o = el("option", "", pname(p.name) + "가 나눔"); o.value = p.name; sel.appendChild(o); }); }
+  const busy = state.job.state === "running", list = $("rp-task-list"), human = $("rp-task-human");
+  $("rp-task-make").disabled = busy; $("rp-task-make").textContent = r.tasks ? "다시 나누기" : "작은 작업으로 나누기";
+  const sig = JSON.stringify([r.report_id, r.tasks, busy]);
+  if (list.dataset.sig === sig) return;  // unchanged: do not rebuild (a goal being edited must not vanish)
+  const typing = list.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA";
+  if (typing) return;
+  list.dataset.sig = sig; clear(list); clear(human);
+  if (!r.tasks){ list.appendChild(el("div", "hint", "아직 나누지 않았습니다. 위 버튼을 누르면 AI가 1~2분 안에 단계별 작업 목록을 만듭니다.")); return; }
+  const byId = {}; r.tasks.tasks.forEach(t => byId[t.id] = t);
+  r.tasks.tasks.forEach(t => {
+    const c = el("div", "rptask"), h = el("div", "th");
+    h.appendChild(el("span", "tt", "단계 " + t.id + " · " + t.title + (t.size === "M" ? "  (중간 크기)" : "")));
+    h.appendChild(el("span", "st " + t.state, (TASK_ST[t.state] || t.state) + (t.runs > 1 ? " · " + t.runs + "회 시도" : "")));
+    c.appendChild(h);
+    const unmet = (t.depends_on || []).filter(d => !byId[d] || !["applied"].includes(byId[d].state));
+    if ((t.depends_on || []).length) c.appendChild(el("div", "meta", "먼저 적용: " + t.depends_on.map(d => "단계 " + d + (byId[d] && byId[d].state === "applied" ? " ✔" : " ✗")).join(", ")));
+    if ((t.files || []).length) c.appendChild(el("div", "meta", "건드릴 파일: " + t.files.join(", ")));
+    const d = el("details"); d.appendChild(el("summary", "", "구현 지시문 보기 · 고치기")); keepOpen(d, "rptask:" + r.report_id + ":" + t.id, false);
+    const ta = el("textarea"); ta.value = t.goal; d.appendChild(ta);
+    if (t.verify) d.appendChild(el("div", "meta", "확인 방법: " + t.verify));
+    const save = el("button", "", "지시문 저장"); save.onclick = async () => { try { await api("/api/report/task-edit", {project: rpProject(), id: r.report_id, task_id: t.id, goal: ta.value}); toast("저장했습니다."); rpTick(); } catch (e) { toast(e.message, true); } };
+    d.appendChild(save); c.appendChild(d);
+    const row = el("div", "row");
+    const go = el("button", t.state === "todo" || t.state === "failed" || t.state === "discarded" ? "primary" : "", t.state === "failed" ? "▶ 다시 실행" : "▶ 이 작업 실행");
+    go.disabled = busy || t.state === "running" || t.state === "applied";
+    go.onclick = async () => {
+      const warn = unmet.length ? "\n\n⚠ 먼저 적용해야 할 단계(" + unmet.map(x => "단계 " + x).join(", ") + ")가 아직 적용되지 않았습니다. 그대로 실행하면 앞 단계의 코드가 없는 상태에서 만듭니다." : "";
+      if (!confirm("단계 " + t.id + " 「" + t.title + "」을 개선 모드로 실행합니다 (구현 → 테스트 → 교차 검수). 결과는 관리 탭에서 확인하고 적용합니다." + warn + "\n\n시작할까요?")) return;
+      try { await api("/api/report/task-run", {project: rpProject(), id: r.report_id, task_id: t.id, roles: collectRoles(), persist: $("persist").checked, shadow: $("shadow").checked}); toast("단계 " + t.id + " 실행을 시작했습니다. 진행은 상단 「현재 작업」과 작업실에서 봅니다."); selectedProject = rpProject(); selectedRun = null; poll(); } catch (e) { toast(e.message, true); }
+    };
+    row.appendChild(go);
+    const open = el("button", "", "개선 화면에서 열기"); open.title = "목표를 개선 화면의 입력칸에 채워 두고 역할을 직접 고를 수 있게 합니다";
+    open.onclick = () => { $("goal").value = t.goal; selectedProject = rpProject(); $("project").value = rpProject(); setMode("run"); setTab("dash"); toast("목표를 채웠습니다. 역할을 확인하고 실행을 누르세요."); };
+    row.appendChild(open);
+    if (t.run_id && (t.state === "passed" || t.state === "applied" || t.state === "failed")){ const mg = el("button", "", t.state === "passed" ? "관리 탭에서 적용" : "결과 보기"); mg.onclick = () => openProject(rpProject(), {tab: "mg", key: "run:" + t.run_id}); row.appendChild(mg); }
+    c.appendChild(row); list.appendChild(c);
+  });
+  const hs = (r.tasks.human_steps || []);
+  if (hs.length){ const b = el("div", "warnbox"); b.appendChild(el("b", "", "👤 사람이 할 일 (AI가 못 하는 일)")); hs.forEach(x => b.appendChild(el("div", "", "· " + clip(x, 220)))); human.appendChild(b); }
+}
 function rpRenderDoc(){
   const r = rp.cur; if (!r) return;
   $("rp-empty").hidden = true; $("rp-docbox").hidden = false;
@@ -2847,6 +2914,7 @@ function rpRenderDoc(){
   meta.appendChild(el("div", "", "작성: " + Object.entries(r.ais).map(([n, a]) => pname(n) + (a.state === "done" ? " ✓" : a.state === "running" ? " …" : a.state === "waiting" ? " (대기)" : " ✗")).join(" · ")
     + (r.synthesizer ? " · 통합: " + pname(r.synthesizer) : "") + (r.context ? " · 프로젝트 맥락 포함" : "")));
   const body = $("rp-body");
+  rpRenderTasks();
   if (!r.finished){ body.innerHTML = ""; body.appendChild(el("div", "hint", r.stage + " — 보통 3~8분 걸립니다. 이 화면은 저절로 갱신됩니다.")); return; }
   if (rp.tab === "drafts"){
     body.innerHTML = Object.keys(r.drafts_html || {}).map(n => "<h2>" + pname(n) + "의 초안</h2>" + r.drafts_html[n]).join("") || "<p>초안이 없습니다.</p>";
@@ -2869,10 +2937,13 @@ async function rpTick(){
   await rpLoadList();
   const job = state.job, running = job && job.state === "running" && job.kind === "report";
   if (running && rp.list.length && (!rp.id || rp.list[0].report_id !== rp.id) && !rp.list[0].finished) rp.id = rp.list[0].report_id;  // follow the one being written
-  if (rp.id && (running || (rp.cur && !rp.cur.finished) || !rp.cur || rp.cur.report_id !== rp.id)){
+  const busyJob = job && job.state === "running" && ["report", "reporttasks", "run"].includes(job.kind);
+  const taskRunning = !!(rp.cur && rp.cur.tasks && rp.cur.tasks.tasks.some(t => t.state === "running"));  // until the run behind a task has ended
+  if (rp.id && (running || busyJob || taskRunning || (rp.cur && !rp.cur.finished) || !rp.cur || rp.cur.report_id !== rp.id)){
     try {
       const r = await api("/api/report?project=" + encodeURIComponent(rpProject()) + "&id=" + encodeURIComponent(rp.id));
-      const changed = !rp.cur || JSON.stringify([r.finished, r.stage, r.ais, r.markdown.length]) !== JSON.stringify([rp.cur.finished, rp.cur.stage, rp.cur.ais, rp.cur.markdown.length]) || rp.cur.report_id !== r.report_id;
+      const sigOf = x => JSON.stringify([x.finished, x.stage, x.ais, x.markdown.length, x.tasks]);
+      const changed = !rp.cur || sigOf(r) !== sigOf(rp.cur) || rp.cur.report_id !== r.report_id;
       rp.cur = r; if (changed) rpRenderDoc();
     } catch (e) { if (!e.offline) { rp.id = null; } }
   }
@@ -2898,6 +2969,10 @@ $("rp-export").onclick = () => {
   openBrowser("보고서(.md)를 저장할 폴더 고르기", async (folder) => {
     try { const r = await api("/api/report/export", {project: rpProject(), id, folder}); toast(r.message); } catch (e) { toast(e.message, true); }
   }, "");
+};
+$("rp-task-make").onclick = async () => {
+  if (!rp.cur) return;
+  try { await api("/api/report/tasks", {project: rpProject(), id: rp.cur.report_id, ai: $("rp-task-ai").value || undefined}); toast("작은 작업으로 나누는 중입니다. 1~2분 걸립니다."); await poll(); setTimeout(rpTick, 1500); } catch (e) { toast(e.message, true); }
 };
 $("rp-del").onclick = async () => {
   if (!rp.cur) return toast("지울 보고서를 먼저 여세요.", true);

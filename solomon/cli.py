@@ -349,6 +349,27 @@ def _report(args: argparse.Namespace) -> int:
     return 0 if res["status"] == "DONE" else 1
 
 
+def _report_tasks(args: argparse.Namespace) -> int:
+    from . import report as report_mod
+
+    settings = load_settings(args.config)
+
+    def _stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        project = Path(args.project or settings.project_path or ".").expanduser()
+        out = report_mod.plan_tasks(settings, project, args.id, args.ai)
+    except (report_mod.ReportError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"report:   {out['report_id']}\nwritten by {out['provider']}: {len(out['tasks'])} tasks")
+    for t in out["tasks"]:
+        print(f"  {t['id']}. [{t['size']}] {t['title']}" + (f" (after {t['depends_on']})" if t["depends_on"] else ""))
+    return 0
+
+
 def _video(args: argparse.Namespace) -> int:
     from . import video as video_mod
 
@@ -509,6 +530,13 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--context", action="store_true", help="also send the project's file list and README start so the plan is concrete")
     rp.add_argument("--config", help="path to solomon.toml")
     rp.set_defaults(func=_report)
+
+    rt = sub.add_parser("report-tasks", help="split a finished report into small improvement tasks (one AI, read-only); the dashboard's report tab runs them one by one")
+    rt.add_argument("--id", required=True, help="the report number")
+    rt.add_argument("--project", help="the project the report is stored in")
+    rt.add_argument("--ai", help="which AI splits it (default: the first installed one of claude, codex, antigravity)")
+    rt.add_argument("--config", help="path to solomon.toml")
+    rt.set_defaults(func=_report_tasks)
 
     ini = sub.add_parser("init", help="write an editable solomon.toml (all options, commented)")
     ini.add_argument("--path", help="where to write it (default: ./solomon.toml)")

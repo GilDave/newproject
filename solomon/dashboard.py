@@ -1164,8 +1164,59 @@ class DashboardApp:
         from . import mdhtml
 
         view["html"] = mdhtml.render(view["markdown"])[0] if view.get("markdown") else ""
+        tasks = report_mod.load_tasks(Path(project), self.settings.state_dir, rid)
+        if tasks:
+            stat = report_mod.task_statuses(Path(project), self.settings.state_dir, rid, tasks["tasks"])
+            tasks = dict(tasks, tasks=[dict(t, **stat[t["id"]]) for t in tasks["tasks"]])
+        view["tasks"] = tasks
         view["drafts_html"] = {n: mdhtml.render(t)[0] for n, t in view.get("drafts", {}).items()}
         return view
+
+    def start_report_tasks(self, project: str, body: dict) -> dict:
+        project = self._known(project)
+        rid = str(body.get("id", ""))
+        view = None
+        try:
+            view = report_mod.load_report(Path(project), self.settings.state_dir, rid)
+        except report_mod.ReportError as exc:
+            raise ApiError(400, str(exc)) from exc
+        if view is None or not view.get("markdown"):
+            raise ApiError(400, "나눌 보고서가 없습니다 (아직 작성 중이거나 실패한 보고서입니다).")
+        ai = body.get("ai")
+        if ai:
+            self._check_ais([str(ai)])
+        self._ensure_idle()
+        args = [sys.executable, "-m", "solomon", "report-tasks", "--project", project, "--id", rid]
+        if ai:
+            args += ["--ai", str(ai)]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        return self._spawn("reporttasks", args, project, "보고서를 작은 작업으로 나누는 중")
+
+    def edit_report_task(self, project: str, body: dict) -> dict:
+        project = self._known(project)
+        try:
+            tid = int(body.get("task_id"))
+        except (TypeError, ValueError):
+            raise ApiError(400, "작업 번호가 올바르지 않습니다.") from None
+        try:
+            report_mod.save_task_goal(Path(project), self.settings.state_dir, str(body.get("id", "")), tid, str(body.get("goal", "")))
+        except report_mod.ReportError as exc:
+            raise ApiError(400, str(exc)) from exc
+        return {"ok": True, "message": "목표를 저장했습니다."}
+
+    def run_report_task(self, project: str, body: dict) -> dict:
+        project = self._known(project)
+        rid = str(body.get("id", ""))
+        try:
+            tid = int(body.get("task_id"))
+        except (TypeError, ValueError):
+            raise ApiError(400, "작업 번호가 올바르지 않습니다.") from None
+        try:
+            goal = report_mod.task_goal_text(Path(project), self.settings.state_dir, rid, tid)
+        except report_mod.ReportError as exc:
+            raise ApiError(400, str(exc)) from exc
+        return self.start_run(goal, project, body.get("roles"), bool(body.get("persist")), shadow=bool(body.get("shadow")))
 
     def delete_report(self, project: str, rid: str) -> dict:
         project = self._known(project)
@@ -1412,6 +1463,12 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_video(str(body.get("project", "")), body)})
                 if path == "/api/report":
                     return self._json(200, {"job": app.start_report(str(body.get("project", "")), body)})
+                if path == "/api/report/tasks":
+                    return self._json(200, {"job": app.start_report_tasks(str(body.get("project", "")), body)})
+                if path == "/api/report/task-run":
+                    return self._json(200, {"job": app.run_report_task(str(body.get("project", "")), body)})
+                if path == "/api/report/task-edit":
+                    return self._json(200, app.edit_report_task(str(body.get("project", "")), body))
                 if path == "/api/report/delete":
                     return self._json(200, app.delete_report(str(body.get("project", "")), str(body.get("id", ""))))
                 if path == "/api/report/export":

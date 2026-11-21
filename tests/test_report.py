@@ -236,3 +236,111 @@ def test_the_report_tab_has_folder_management():
 def test_the_folder_picker_falls_back_to_home_instead_of_a_dead_end():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     assert '그 폴더는 열 수 없어 홈 폴더에서 시작합니다' in html and 'return load("")' in html
+
+
+# ---------------------------------------------------------------- report -> small improvement tasks
+SPLIT = json.dumps({"tasks": [
+    {"title": "엘리엇 파동 탐지 함수", "goal": "ena_bot/elliott_wave.py 에 지그재그 기반 충격파(1-5) 탐지 함수를 만든다. 입력은 봉 목록, 출력은 파동 후보와 무효화 가격. 규칙 위반 테스트를 tests/test_elliott_wave.py 에 쓴다.",
+     "size": "S", "files": ["ena_bot/elliott_wave.py", "tests/test_elliott_wave.py"], "depends_on": [], "verify": "새 테스트와 전체 테스트가 통과한다"},
+    {"title": "차트 오버레이", "goal": "대시보드 차트 API 응답에 위 탐지 결과를 넣고 index.html 에서 파동 선과 라벨을 그린다. 출처 링크와 조회일을 문서에 기록한다.",
+     "size": "M", "files": ["ena_bot/dashboard.py"], "depends_on": [1, 9], "verify": "API 응답 테스트"},
+    {"title": "", "goal": "제목이 없어 버려진다 " * 5}], "human_steps": ["브라우저에서 차트가 겹치는지 눈으로 확인"]}, ensure_ascii=False)
+
+
+def tasks_repo(repo, steps=None):
+    res = run(repo, providers(claude=[doc(1), merged()], codex=[doc(2)]))
+    return res
+
+
+def test_a_report_is_split_into_small_tasks_with_the_impossible_parts_moved_to_the_person(repo):
+    res = tasks_repo(repo)
+    out = R.plan_tasks(make_settings(), repo, res["report_id"], providers=providers(claude=[SPLIT]))
+    assert out["provider"] == "claude" and [t["id"] for t in out["tasks"]] == [1, 2] and out["tasks"][1]["depends_on"] == [1]  # 9 does not exist, the untitled one is gone
+    assert "출처 링크" not in out["tasks"][1]["goal"] and any("출처 링크" in h for h in out["human_steps"]) and "브라우저에서 차트가" in " ".join(out["human_steps"])
+    assert R.load_tasks(repo, ".solomon", res["report_id"])["tasks"][0]["title"] == "엘리엇 파동 탐지 함수"
+
+
+def test_the_splitter_is_told_the_builder_limits_and_gets_the_report(repo):
+    res = tasks_repo(repo)
+    ps = providers(claude=[SPLIT])
+    R.plan_tasks(make_settings(), repo, res["report_id"], providers=ps)
+    prompt = ps["claude"].calls[0]["prompt"]
+    assert "OFFLINE" in prompt and "통합 보고서" in prompt and "REPORT:" in prompt and "at most about 5 files" in prompt
+
+
+def test_the_next_ai_splits_when_the_first_cannot(repo):
+    res = tasks_repo(repo)
+    out = R.plan_tasks(make_settings(), repo, res["report_id"], providers=providers(claude=["not json at all"], codex=[SPLIT]))
+    assert out["provider"] == "codex"
+    with pytest.raises(R.ReportError, match="나누지 못했습니다"):
+        R.plan_tasks(make_settings(), repo, res["report_id"], providers=providers(claude=["x"], codex=["{}"]))
+    with pytest.raises(R.ReportError, match="나눌 보고서가 없습니다"):
+        R.plan_tasks(make_settings(), repo, "20260101-000000-abcdef", providers=providers(claude=[SPLIT]))
+
+
+def test_a_task_becomes_a_marked_goal_and_its_state_follows_its_run(repo):
+    res = tasks_repo(repo)
+    rid = res["report_id"]
+    R.plan_tasks(make_settings(), repo, rid, providers=providers(claude=[SPLIT]))
+    goal = R.task_goal_text(repo, ".solomon", rid, 1)
+    assert goal.startswith(f"[보고서 {rid} · 단계 1/2] 엘리엇 파동 탐지 함수") and "ena_bot/elliott_wave.py" in goal and "이 작업 하나만 구현하세요" in goal and "확인 방법:" in goal
+    tasks = R.load_tasks(repo, ".solomon", rid)["tasks"]
+    assert R.task_statuses(repo, ".solomon", rid, tasks)[1]["state"] == "todo"
+    # a run that carries the marker
+    from solomon.orchestrator import Orchestrator
+    from helpers import write_file as wf, order_json as oj, review_json as rj
+    o = Orchestrator(make_settings(), {"claude": ScriptedProvider("claude", [oj(), rj()]), "codex": ScriptedProvider("codex", [wf("src/new.py")])})
+    r = o.run(goal, repo)
+    assert r.status == "PASSED"
+    st = R.task_statuses(repo, ".solomon", rid, tasks)
+    assert st[1]["state"] == "passed" and st[1]["run_id"] == r.run_id and st[2]["state"] == "todo"
+    (Path(r.run_dir) / "applied.json").write_text("{}")
+    assert R.task_statuses(repo, ".solomon", rid, tasks)[1]["state"] == "applied"
+
+
+def test_editing_a_task_goal_is_validated(repo):
+    res = tasks_repo(repo)
+    rid = res["report_id"]
+    R.plan_tasks(make_settings(), repo, rid, providers=providers(claude=[SPLIT]))
+    R.save_task_goal(repo, ".solomon", rid, 1, "새 지시문입니다. 충분히 길게 씁니다 ena_bot/x.py 에 함수를 만든다.")
+    assert "새 지시문" in R.task_goal_text(repo, ".solomon", rid, 1)
+    for bad in ("짧음", "x" * (R.MAX_TASK_GOAL + 1)):
+        with pytest.raises(R.ReportError):
+            R.save_task_goal(repo, ".solomon", rid, 1, bad)
+    with pytest.raises(R.ReportError):
+        R.save_task_goal(repo, ".solomon", rid, 99, "충분히 긴 지시문입니다. 그러나 없는 작업입니다 ena_bot/x.py")
+
+
+def test_dashboard_pipeline_from_report_to_a_builder_run(env):
+    repo = Path(env.project)
+    res = run(repo, providers(claude=[doc(1), merged()], codex=[doc(2)]))
+    rid = res["report_id"]
+    st, body, _ = env.call("POST", "/api/report/tasks", {"project": env.project, "id": rid, "ai": "claude"})
+    assert st == 200 and sleeper.calls[-1][3] == "report-tasks" and "--id" in sleeper.calls[-1] and "claude" in sleeper.calls[-1]
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+    assert env.call("POST", "/api/report/task-run", {"project": env.project, "id": rid, "task_id": 1})[0] == 400  # not split yet
+    R.plan_tasks(make_settings(), repo, rid, providers=providers(claude=[SPLIT]))
+    q = "/api/report?project=" + quote(env.project) + "&id=" + rid
+    view = env.call("GET", q)[1]
+    assert [t["state"] for t in view["tasks"]["tasks"]] == ["todo", "todo"] and view["tasks"]["human_steps"]
+    st, body, _ = env.call("POST", "/api/report/task-edit", {"project": env.project, "id": rid, "task_id": 2, "goal": "수정한 지시문입니다. ena_bot/dashboard.py 에 오버레이를 만든다."})
+    assert st == 200
+    assert env.call("POST", "/api/report/task-edit", {"project": env.project, "id": rid, "task_id": 2, "goal": "짧"})[0] == 400
+    st, body, _ = env.call("POST", "/api/report/task-run", {"project": env.project, "id": rid, "task_id": 2})
+    assert st == 200
+    args = sleeper.calls[-1]
+    assert args[3] == "run" and args[4].startswith(f"[보고서 {rid} · 단계 2/2] 차트 오버레이") and "수정한 지시문입니다" in args[4]
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+    assert env.call("POST", "/api/report/task-run", {"project": env.project, "id": rid, "task_id": 9})[0] == 400
+    assert env.call("POST", "/api/report/task-run", {"project": env.project, "id": "../x", "task_id": 1})[0] == 400
+    assert env.call("POST", "/api/report/tasks", {"project": env.project, "id": rid}, token=None)[0] == 401
+
+
+def test_the_report_tab_has_the_task_pipeline():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ('id="rp-tasks"', 'id="rp-task-make"', '"/api/report/tasks"', '"/api/report/task-run"', '"/api/report/task-edit"', "개선 화면에서 열기", "관리 탭에서 적용",
+                   "먼저 적용:", "사람이 할 일", "taskRunning", 'reporttasks: "작업 나누기"', '"tool", "tests", "report", "reporttasks", "external"'):
+        assert needle in html, needle
+    from solomon import cli, joblock
+    assert "report-tasks" in joblock.JOB_COMMANDS
+    assert "report-tasks" in next(a for a in cli.build_parser()._actions if a.dest == "command").choices
