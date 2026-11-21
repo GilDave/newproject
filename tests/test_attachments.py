@@ -427,3 +427,22 @@ def test_one_compact_vertical_rhythm_for_every_screen():
                    ".page-head{padding-block:8px 0}"):
         assert needle in block, needle  # the same numbers for the dashboard, work room, manage, projects, bot lab and report screens
     assert ".strip{grid-row:3;grid-column:1/-1}" in html  # on a narrow screen the status strip still gets its own row
+
+
+def test_a_finished_test_run_is_not_reported_as_a_run_that_could_not_start(tmp_path):
+    import time
+    from test_dashboard import crasher
+    e = Env(tmp_path, launcher=crasher)
+    try:
+        assert e.call("POST", "/api/tests", {"project": e.project})[0] == 200
+        job = {}
+        for _ in range(40):
+            job = e.state()[1]["job"]
+            if job["state"] == "exited":
+                break
+            time.sleep(0.2)
+        assert job["state"] == "exited" and job["kind"] == "tests" and not job.get("orphan")  # no "실행하지 못했습니다 · 시작 단계에서 오류" for a test run
+    finally:
+        e.close()
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    assert '"tool", "tests", "report", "external"].includes(k)' in html and '작업 폴더의 테스트를 실행하는 중입니다' in html

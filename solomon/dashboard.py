@@ -576,7 +576,7 @@ class DashboardApp:
              "live": bool(tracing_runs and r is latest and not r.finished)}
             for r in reversed(runs[-30:])
         ]
-        if job["state"] == "exited" and job.get("project") == project and job.get("started"):
+        if job["state"] == "exited" and job.get("project") == project and job.get("started") and job.get("kind") == "run":  # only a run is expected to create a run record
             since = datetime.fromtimestamp(job["started"]) - timedelta(seconds=5)
             job["orphan"] = not any(r.started and r.started >= since for r in runs)  # died before creating a run
         state["provider_cards"] = self._provider_cards(runs, state["providers"], project)
