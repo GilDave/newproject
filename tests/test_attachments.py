@@ -417,3 +417,13 @@ def test_the_current_job_card_is_on_top_and_sticks_and_checkboxes_do_not_redraw_
     assert "position:sticky" in css and "grid-column:1/-1" in css
     assert "if (box.dataset.key === key) return;" in html and "window.scrollTo(0, keepY)" in html  # an unchanged list is left alone; a redraw never moves the page
     assert "renderReport(state.analysis); }; h.appendChild(k)" not in html and "boxes.set(c.id, k)" in html and "refreshFix()" in html
+
+
+def test_one_compact_vertical_rhythm_for_every_screen():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    i = html.index("/* density (v1.15.5)")
+    block = html[i:html.index("@media(max-width:1250px)", i)]
+    for needle in (".grid,.pjw,.mg,.work,.rpw{padding:0 var(--gutter) 14px;gap:10px 12px}", ".card{padding:11px 14px}", "header{grid-template-columns:auto auto minmax(0,1fr) auto auto",
+                   ".page-head{padding-block:8px 0}"):
+        assert needle in block, needle  # the same numbers for the dashboard, work room, manage, projects, bot lab and report screens
+    assert ".strip{grid-row:3;grid-column:1/-1}" in html  # on a narrow screen the status strip still gets its own row

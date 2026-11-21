@@ -332,6 +332,22 @@ button{max-width:100%}
 .modal[open]{display:flex}
 .modal::backdrop{background:#05080dba}
 .mbox{height:max-content}
+/* density (v1.15.5): one compact vertical rhythm for every screen; the narrow-screen rules below still win */
+:root{--gutter:clamp(12px,1.2vw,20px)}
+header{grid-template-columns:auto auto minmax(0,1fr) auto auto;gap:4px 16px;padding:7px var(--gutter);align-items:center}
+.strip{grid-row:auto;grid-column:auto;justify-self:start;max-width:min(100%,560px)}
+.grid,.pjw,.mg,.work,.rpw{padding:0 var(--gutter) 14px;gap:10px 12px}
+.pjw,.work{gap:10px}
+.col{gap:10px}
+.page-head{padding-block:8px 0}
+.page-head h1{font-size:clamp(20px,2.1vw,26px)}
+.card{padding:11px 14px}
+.card h2{margin-bottom:8px;font-size:14px}
+label{margin:7px 0 3px}
+textarea{min-height:84px}
+#now{padding:7px 14px;top:6px}
+.stage{height:clamp(380px,36vw,500px)}
+.rp-bar{margin-bottom:8px}
 @media(max-width:1250px){
   .grid{grid-template-columns:minmax(280px,350px) minmax(0,1fr)}
   .grid>section:nth-of-type(3){grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -339,7 +355,7 @@ button{max-width:100%}
 @media(max-width:1000px){
   header{grid-template-columns:minmax(0,1fr) auto auto;column-gap:12px}
   .tabs{grid-row:2;grid-column:1/-1}
-  .strip{grid-row:3}
+  .strip{grid-row:3;grid-column:1/-1}
 }
 @media(max-width:730px){
   .grid,.mg,.w-two{grid-template-columns:minmax(0,1fr)}
