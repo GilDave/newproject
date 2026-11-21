@@ -56,6 +56,8 @@ class RunSummary:
     active: Optional[dict] = None  # the call in flight right now: {role, provider, since}
     quota_providers: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)  # screenshots the person attached to the goal
+    human_steps: list[str] = field(default_factory=list)  # what only the person can do (planner's order + criteria moved out of the acceptance list)
+    later: list[str] = field(default_factory=list)  # parts of a big goal left for separate runs
     failovers: list[dict] = field(default_factory=list)  # plan B switches: {role, from, to, reason}
     attempt_details: list[dict] = field(default_factory=list)  # one entry per attempt: builder, changes, scope, tests, review
 
@@ -69,7 +71,7 @@ class RunSummary:
             "run_id": self.run_id, "goal": self.goal, "status": self.status, "finished": self.finished,
             "summary": self.summary, "attempts": self.attempts, "stage": self.stage, "stage_key": self.stage_key,
             "started": self.started.isoformat() if self.started else None,
-            "elapsed_sec": self.elapsed_sec(), "roles": self.roles, "warnings": self.warnings,
+            "elapsed_sec": self.elapsed_sec(), "roles": self.roles, "warnings": self.warnings, "human_steps": self.human_steps, "later": self.later,
             "timeline": self.timeline, "calls": self.calls, "active": self.active,
             "quota_providers": self.quota_providers, "failovers": self.failovers, "attachments": self.attachments, "attempt_details": self.attempt_details,
             "providers": {
@@ -238,7 +240,15 @@ def summarize_run(run_id: str, events: list[dict]) -> RunSummary:
                 why = (" · 실패한 테스트: " + ", ".join(n.split("::")[-1] for n in failing[:4]) + (f" 외 {len(failing) - 4}개" if len(failing) > 4 else "")) if failing \
                     else (" · " + str(ev.get("output_tail") or "").strip().splitlines()[-1][:100] if str(ev.get("output_tail") or "").strip() else "")
             run.timeline.append(f"{clock}  시작 전 점검 {'통과' if ev.get('passed') else '실패'}" + (f" · {ev.get('seconds')}초" if ev.get("seconds") is not None else "") + why)
+        elif kind == "criteria_moved":
+            for c in ev.get("criteria", []):
+                if str(c) not in run.human_steps:
+                    run.human_steps.append(str(c))
+            run.timeline.append(f"{clock}  이 파이프라인이 확인할 수 없는 기준 {ev.get('count')}개를 '사람이 할 일'로 옮겼습니다")
         elif kind == "order":
+            o = ev.get("order") or {}
+            run.human_steps = [str(x) for x in (o.get("human_steps") or []) if str(x) not in run.human_steps] + run.human_steps
+            run.later = [str(x) for x in (o.get("later") or [])]
             run.stage_key = "plan"
             run.stage = _STAGE_BY_EVENT[kind]
             run.timeline.append(f"{clock}  작업 지시서 생성")

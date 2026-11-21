@@ -39,6 +39,8 @@ class Order:
     max_files_changed: int = 15
     max_diff_lines: int = 1500
     context: str = ""
+    human_steps: list[str] = field(default_factory=list)  # what only the PERSON can do (research with sources, a browser check, approving a plan ...)
+    later: list[str] = field(default_factory=list)  # parts of a big goal left for separate, later runs
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], goal: str, max_files: int, max_lines: int) -> "Order":
@@ -66,6 +68,8 @@ class Order:
             max_files_changed=_limit("max_files_changed", max_files),
             max_diff_lines=_limit("max_diff_lines", max_lines),
             context=str(data.get("context", "")),
+            human_steps=[x.strip()[:300] for x in _str_list(data, "human_steps")[:8] if x.strip()],
+            later=[x.strip()[:300] for x in _str_list(data, "later")[:12] if x.strip()],
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -78,6 +82,8 @@ class Order:
             "max_files_changed": self.max_files_changed,
             "max_diff_lines": self.max_diff_lines,
             "context": self.context,
+            "human_steps": self.human_steps,
+            "later": self.later,
         }
 
 

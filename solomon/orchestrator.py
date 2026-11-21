@@ -266,6 +266,7 @@ class Orchestrator:
                 log.event("plan_invalid", error=error)
                 continue
             order = self._plan_review(goal, order, project, log)
+            self._move_unattainable_criteria(order, log)
             pol = policy_mod.load(project, self.s.state_dir)
             self._policy = pol
             if pol["protect"]:  # the project's own protected paths: no plan may drop them
@@ -275,6 +276,28 @@ class Orchestrator:
             log.event("order", order=order.to_dict())
             return order
         raise PlanError(f"planner did not produce a valid ORDER: {error}")
+
+    UNATTAINABLE = re.compile(
+        r"사용자[^.\n]{0,14}(검수|승인|확인|동의|리뷰)|사전\s*(검수|승인)|구현\s*착수\s*전|승인\s*(받|대기)|"
+        r"출처\s*링크|링크를|조회일|열람|공개\s*자료를?\s*(검색|확인|조사)|웹\s*(검색|서칭)|서칭|검색해|"
+        r"브라우저|렌더링\s*(확인|검증)|화면(에서|을)\s*(확인|캡처)|스크린샷|육안|"
+        r"git\s*(diff|status|log|명령)|커밋\s*목록|미커밋|기준\s*커밋|"
+        r"user\s+(approval|review|sign-?off)|before\s+(coding|implementation)|source\s+links?|look-?up\s+dates?|browser|screenshots?|git\s+(diff|status|log)", re.I)
+
+    def _move_unattainable_criteria(self, order: Order, log: RunLog) -> None:
+        """The builder is offline and has no browser, git or user: an acceptance criterion that needs one of them can never be met, and a reviewer
+        then fails the work forever. Such criteria become steps for the PERSON (shown with the result) instead of reasons to reject."""
+        keep, moved = [], []
+        for c in order.acceptance_criteria:
+            (moved if self.UNATTAINABLE.search(c) else keep).append(c)
+        if not moved:
+            return
+        order.acceptance_criteria = keep or ["새 코드에 대한 테스트가 있고 전체 테스트가 통과한다"]
+        for c in moved:
+            if c not in order.human_steps:
+                order.human_steps.append(c)
+        order.human_steps = order.human_steps[:12]
+        log.event("criteria_moved", count=len(moved), criteria=[m[:160] for m in moved])
 
     # ----------------------------------------------------------------- review
     def _with_attachments(self, name: str, prompt: str) -> tuple[str, Optional[list[str]]]:
@@ -298,18 +321,40 @@ class Orchestrator:
             if verification.skipped
             else f"command: {verification.command}\nexit code: {verification.exit_code}\n{verification.output_tail[-1500:]}"
         )
-        prompt = prompts.reviewer(order, gitops.full_diff(wt), summary, warnings)
-        images: Optional[list[str]] = None
-        prompt, mine = self._with_attachments(self.s.roles[role], prompt)  # the user's own screenshots of the problem
-        images = list(mine) if mine else None
+        parts = prompts.split_diff(gitops.full_diff(wt))  # a big change is read in several parts: a reviewer must never be asked to pass what it could not read
+        if len(parts) > 1:
+            log.event("review_split", attempt=attempt, role=role, parts=len(parts))
+        extra_images: Optional[list[str]] = None
+        visual_text = ""
         if visual and visual.ok and visual.shots:
             if self._can_see(self.s.roles[role]):
                 shots = [str(p.resolve()) for p in visual.shots]
-                images = (images or []) + shots
-                prompt += prompts.visual_note(shots, can_see=True)
+                extra_images = shots
+                visual_text = prompts.visual_note(shots, can_see=True)
                 self._visual_seers.append(self.s.roles[role])
             else:
-                prompt += prompts.visual_note([], can_see=False)
+                visual_text = prompts.visual_note([], can_see=False)
+        merged = ReviewResult("PASS", [], "")
+        for k, part in enumerate(parts, 1):
+            prompt = prompts.reviewer(order, part, summary, warnings, part=(k, len(parts)) if len(parts) > 1 else None)
+            prompt, mine = self._with_attachments(self.s.roles[role], prompt)  # the user's own screenshots of the problem
+            images = list(mine) if mine else None
+            if k == 1 and extra_images:
+                images = (images or []) + extra_images
+            if k == 1:
+                prompt += visual_text
+            one = self._review_call(role, prompt, images, wt, log, attempt)
+            if len(parts) == 1:
+                return one
+            one.issues = [f"(부분 {k}/{len(parts)}) {i}" for i in one.issues]
+            one.notes = [f"(부분 {k}/{len(parts)}) {n}" for n in one.notes]
+            if one.verdict != "PASS":
+                return one  # one part is enough to send the work back: the remaining parts are not worth a call
+            merged.notes += one.notes
+            merged.summary = one.summary or merged.summary
+        return merged
+
+    def _review_call(self, role: str, prompt: str, images: Optional[list[str]], wt: Path, log: RunLog, attempt: int) -> ReviewResult:
         last = ReviewResult("FAIL", ["no verdict"], error=True)
         for retry in range(1 + REVIEW_RETRIES):
             if retry:

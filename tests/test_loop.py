@@ -598,3 +598,101 @@ def test_a_change_inside_the_open_corner_passes_the_scope_check_and_one_outside_
     orch2, _ = three(make_settings(max_attempts=1), [order_json(allowed=("src/", "notes/"))], [lambda pr, cwd: (write_file("src/new.py")(pr, cwd), write_file("notes/closed/a.md", "x\n")(pr, cwd))[0]])
     r2 = orch2.run("goal", repo)
     assert r2.status == "FAILED" and any("protected path" in json.dumps(e) for e in events(r2) if e["event"] == "scope_violation")
+
+
+# ---------------------------------------------------------------- a big goal must not loop forever on things the pipeline cannot do
+def test_split_diff_loses_nothing_and_cuts_between_files():
+    from solomon.prompts import split_diff
+    files = [f"diff --git a/f{i}.py b/f{i}.py\n" + "+x = 1\n" * 40 for i in range(10)]
+    diff = "".join(files)
+    parts = split_diff(diff, 700)
+    assert len(parts) > 1 and "".join(parts) == diff and all(len(p) <= 700 for p in parts)
+    assert all(p.startswith("diff --git") for p in parts)  # every part starts at a file boundary
+    assert split_diff("small", 700) == ["small"]
+    huge = "diff --git a/h.py b/h.py\n" + "".join(f"+line {i}\n" for i in range(500))
+    cut = split_diff(huge, 600, 50)
+    assert "".join(cut) == huge and all(len(p) <= 600 for p in cut)
+    many = split_diff("".join(files), 300, max_parts=3)
+    assert len(many) == 3 and "more part(s) of the diff are not shown" in many[-1]
+
+
+def write_many(*names, body=""):
+    def step(prompt, cwd):
+        for rel in names:
+            target = Path(cwd) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body or "x = 1\n", encoding="utf-8")
+        return "done"
+    return step
+
+
+def test_a_large_change_is_reviewed_in_parts_and_a_part_can_send_it_back(tmp_path, monkeypatch):
+    from solomon import prompts
+    orig = prompts.split_diff
+    monkeypatch.setattr(prompts, "split_diff", lambda d, *a, **k: orig(d, 1200, 8))
+    repo = make_repo(tmp_path)
+    body = "".join(f"value_{i} = {i}\n" for i in range(60))
+    passed = review_json()
+    orch, p = three(make_settings(), [order_json()] + [passed] * 10,
+                    [write_many("src/new.py", "src/b.py", "src/c.py", body=body)])
+    res = orch.run("goal", repo)
+    reviews = [c for c in p["claude"].calls if "THIS IS PART" in c["prompt"]]
+    assert res.status == "PASSED" and len(reviews) >= 2
+    assert "THIS IS PART 1 OF" in reviews[0]["prompt"] and "Do NOT fail because other files" in reviews[0]["prompt"]
+    assert not any("diff truncated" in c["prompt"] for c in p["claude"].calls)
+
+
+def test_a_failing_part_stops_the_review_and_names_the_part(tmp_path, monkeypatch):
+    from solomon import prompts
+    orig = prompts.split_diff
+    monkeypatch.setattr(prompts, "split_diff", lambda d, *a, **k: orig(d, 400, 8))
+    repo = make_repo(tmp_path)
+    body = "".join(f"value_{i} = {i}\n" for i in range(60))
+    bad = json.dumps({"verdict": "FAIL", "issues": [{"severity": "blocker", "text": "경계값에서 죽습니다"}], "summary": "x"})
+    s = make_settings()
+    s.max_attempts = 1
+    orch, p = three(s, [order_json(), review_json(), bad], [write_many("src/new.py", "src/b.py", body=body)])
+    res = orch.run("goal", repo)
+    assert res.status != "PASSED"
+    review_calls = [c for c in p["claude"].calls if "THIS IS PART" in c["prompt"]]
+    assert len(review_calls) == 2  # part 1 passed, part 2 failed: no third call
+
+
+def test_criteria_that_need_the_web_a_browser_git_or_a_person_become_steps_for_the_person(tmp_path):
+    repo = make_repo(tmp_path)
+    crit = ["src/new.py 파일이 존재한다", "공개 자료를 검색해 출처 링크와 조회일을 문서에 기록한다", "코드 구현 착수 전에 기획안에 대해 사용자 검수를 거친다",
+            "브라우저에서 차트 렌더링 확인 결과를 기록한다", "git diff 출력으로 15개 파일 이하임을 보여준다", "tests/test_new.py 가 새 함수를 검증한다"]
+    orch, p = three(make_settings(), [order_json(acceptance_criteria=crit, human_steps=["직접 확인"], later=["고래 지갑 추적", "경제 캘린더"]), review_json()],
+                    [write_file("src/new.py")])
+    res = orch.run("goal", repo)
+    assert res.status == "PASSED"
+    evs = [json.loads(l) for l in (Path(res.run_dir) / "events.jsonl").read_text().splitlines()]
+    moved = next(e for e in evs if e["event"] == "criteria_moved")
+    assert moved["count"] == 4
+    order = next(e for e in evs if e["event"] == "order")["order"]
+    assert order["acceptance_criteria"] == ["src/new.py 파일이 존재한다", "tests/test_new.py 가 새 함수를 검증한다"]
+    assert order["later"] == ["고래 지갑 추적", "경제 캘린더"] and "직접 확인" in order["human_steps"] and len(order["human_steps"]) == 5
+    builder_prompt = p["codex"].calls[0]["prompt"]
+    assert "출처 링크" not in builder_prompt.split("human_steps")[0] and "사용자 검수" not in builder_prompt.split("human_steps")[0]  # the builder is never asked for them
+    from solomon import status
+    run = status.summarize_run("x", evs)
+    assert run.later == ["고래 지갑 추적", "경제 캘린더"] and any("출처 링크" in h for h in run.human_steps) and any("사람이 할 일" in t for t in run.timeline)
+
+
+def test_a_goal_whose_criteria_are_all_impossible_still_gets_a_checkable_one(tmp_path):
+    repo = make_repo(tmp_path)
+    orch, p = three(make_settings(), [order_json(acceptance_criteria=["사용자 승인을 받는다"]), review_json()], [write_file("src/new.py")])
+    res = orch.run("goal", repo)
+    order = next(json.loads(l) for l in (Path(res.run_dir) / "events.jsonl").read_text().splitlines() if '"event": "order"' in l)["order"]
+    assert order["acceptance_criteria"] == ["새 코드에 대한 테스트가 있고 전체 테스트가 통과한다"] and order["human_steps"] == ["사용자 승인을 받는다"]
+
+
+def test_the_planner_is_told_what_the_builder_cannot_do_and_to_split_big_goals():
+    from solomon import prompts
+    text = prompts.planner("g", ["a.py"], 15, 1500)
+    for needle in ("works OFFLINE", "NEVER write an acceptance criterion", "human_steps", "plan ONLY the first self-contained slice", "later"):
+        assert needle in text, needle
+    from solomon.schemas import Order
+    o = Order.from_dict({"allowed_paths": ["src/"], "human_steps": ["a", " "], "later": ["b"]}, "g", 15, 1500)
+    assert o.human_steps == ["a"] and o.later == ["b"] and o.to_dict()["later"] == ["b"]
+    assert Order.from_dict({"allowed_paths": ["src/"]}, "g", 15, 1500).human_steps == []

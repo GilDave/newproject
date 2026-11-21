@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from .schemas import Order
 
@@ -15,7 +16,9 @@ ORDER_SCHEMA = """{
   "allowed_deletions": string[],    // [] unless the goal explicitly requires deleting something
   "max_files_changed": integer,
   "max_diff_lines": integer,
-  "context": string                 // what the builder must know
+  "context": string,                // what the builder must know
+  "human_steps": string[],          // what only the PERSON can do after the run (see rule 8), [] if nothing
+  "later": string[]                 // parts of a big goal NOT done in this run (see rule 9), [] if the goal fits
 }"""
 
 
@@ -42,7 +45,13 @@ def planner(goal: str, files: list[str], max_files: int, max_lines: int, referen
         "3. Put anything the goal does not need to touch into protected_paths.\n"
         f"4. max_files_changed <= {max_files} and max_diff_lines <= {max_lines}.\n"
         "5. acceptance_criteria must be checkable, including which tests should exist.\n"
-        "6. Remind the builder to preserve existing functions, classes and tests.\n\n"
+        "6. Remind the builder to preserve existing functions, classes and tests.\n"
+        "7. The builder works OFFLINE in a copy of the project: it cannot browse the web, run a browser, run git, wait for or ask the user, or call live services.\n"
+        "8. So NEVER write an acceptance criterion that needs web research results (source links, look-up dates), a browser or visual check, git command "
+        "output, a user approval or review BEFORE coding, or a live external service. Put what only the person can do into human_steps instead "
+        "(Korean, short). If the goal asks for research or a plan, the builder writes it from what it knows and marks unverified facts as 'unverified'.\n"
+        "9. If the goal bundles several independent features, plan ONLY the first self-contained slice that fits the limits (one feature with its tests) "
+        "and list every other feature in later (Korean, one short sentence each). A small step that passes beats a huge one that cannot.\n\n"
         f"SCHEMA:\n{ORDER_SCHEMA}\n\n"
         f"USER GOAL:\n{goal}\n{guard}\n"
         f"PROJECT FILES (git ls-files, truncated):\n{listing}\n"
@@ -77,8 +86,44 @@ def builder(order: Order, feedback: str | None, advice: str | None = None, test_
     return text
 
 
-def reviewer(order: Order, diff: str, test_summary: str, warnings: list[str]) -> str:
-    clipped = diff if len(diff) <= _MAX_DIFF_CHARS else diff[:_MAX_DIFF_CHARS] + "\n...[diff truncated]"
+def split_diff(diff: str, limit: int = _MAX_DIFF_CHARS, max_parts: int = 8) -> list[str]:
+    """The diff in parts of at most `limit` characters, cut between files (a single huge file is cut between lines). Nothing is dropped
+    unless there are more than `max_parts` parts, and then the last part says so."""
+    if len(diff) <= limit:
+        return [diff]
+    files = re.split(r"(?m)^(?=diff --git )", diff)
+    pieces: list[str] = []
+    for f in files:
+        if not f:
+            continue
+        while len(f) > limit:
+            cut = f.rfind("\n", 0, limit)
+            cut = cut if cut > limit // 2 else limit
+            pieces.append(f[:cut])
+            f = f[cut:]
+        pieces.append(f)
+    parts: list[str] = []
+    cur = ""
+    for pc in pieces:
+        if cur and len(cur) + len(pc) > limit:
+            parts.append(cur)
+            cur = ""
+        cur += pc
+    if cur:
+        parts.append(cur)
+    if len(parts) > max_parts:
+        dropped = len(parts) - max_parts
+        parts = parts[:max_parts]
+        parts[-1] += f"\n...[{dropped} more part(s) of the diff are not shown]"
+    return parts
+
+
+def reviewer(order: Order, diff: str, test_summary: str, warnings: list[str], part: tuple[int, int] | None = None) -> str:
+    clipped = diff if len(diff) <= _MAX_DIFF_CHARS * 2 else diff[:_MAX_DIFF_CHARS * 2] + "\n...[diff truncated]"
+    partnote = ("" if not part else
+                f"\nTHIS IS PART {part[0]} OF {part[1]} of the change: the diff was too large for one reading, so it is split between files and every part is reviewed "
+                "in its own call. Judge ONLY the files shown here. Do NOT fail because other files or their tests are not in this part; "
+                "an acceptance criterion about code in another part is checked in that part.\n")
     warn = "\n".join(f"- {w}" for w in warnings) or "- none"
     return (
         "You are the REVIEWER. You did not write this code. Review it independently and read-only.\n"
@@ -92,7 +137,7 @@ def reviewer(order: Order, diff: str, test_summary: str, warnings: list[str]) ->
         "Each blocker must say exactly what to change. Do not use PASS if you could not read the diff.\n"
         "Write \"summary\" and every item of \"issues\" in Korean.\n\n"
         f"ORDER:\n{json.dumps(order.to_dict(), indent=2, ensure_ascii=False)}\n\n"
-        f"AUTOMATIC CHECKS:\n{test_summary}\n\nWARNINGS:\n{warn}\n\n"
+        f"AUTOMATIC CHECKS:\n{test_summary}\n\nWARNINGS:\n{warn}\n{partnote}\n"
         f"DIFF:\n{clipped}\n"
     )
 

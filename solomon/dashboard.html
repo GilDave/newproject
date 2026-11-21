@@ -1546,6 +1546,8 @@ function renderRight(cur, isAn){
   $("resultTitle").textContent = isAn ? "분석 요약" : "결과";
   $("summary").textContent = cur ? (cur.summary || (cur.live ? "진행 중입니다…" : "요약이 없습니다.")) : (isAn ? "아직 분석 결과가 없습니다." : "아직 결과가 없습니다.");
   const w = $("warns"); clear(w); (cur && cur.warnings ? cur.warnings : []).forEach(x => w.appendChild(el("div", "warnbox", "⚠ " + warnKo(x))));
+  if (cur && cur.human_steps && cur.human_steps.length){ const b = el("div", "warnbox"); b.appendChild(el("b", "", "👤 사람이 할 일 (AI가 할 수 없어 기준에서 뺐습니다)")); cur.human_steps.forEach(x => b.appendChild(el("div", "", "· " + clip(x, 200)))); w.appendChild(b); }
+  if (cur && cur.later && cur.later.length){ const b = el("div", "warnbox"); b.appendChild(el("b", "", "📋 이번 작업에 넣지 않은 것 — 별도 작업으로 하나씩 요청하세요")); cur.later.forEach(x => b.appendChild(el("div", "", "· " + clip(x, 200)))); w.appendChild(b); }
   if (isAn && cur && cur.report_path){ w.appendChild(el("div", "hint", "보고서 파일: " + cur.report_path)); }
   const ab = $("apply"), ai = $("applyinfo");
   ab.hidden = isAn || !state.apply.possible;
