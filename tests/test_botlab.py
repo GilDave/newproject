@@ -272,3 +272,77 @@ def test_price_fetch_asks_only_for_the_days_the_scoring_needs_and_keeps_off_the_
     now[0] = T0 / 1000 + 3 * 86400 + 5000
     L.evaluate()
     assert "--days" in run.calls[0] and int(run.calls[0][run.calls[0].index("--days") + 1]) < 30
+
+
+# ---------------------------------------------------------------- restarting the bot's services
+class LaunchctlRun:
+    """`launchctl list` shows the ENA services; kickstart records what it was asked and can fail for one label."""
+
+    def __init__(self, fail=()):
+        self.calls, self.fail = [], set(fail)
+
+    def __call__(self, args, **kw):
+        self.calls.append(list(args))
+        if args[:2] == ["launchctl", "list"]:
+            return subprocess.CompletedProcess(args, 0, "11\t0\tcom.ena.trend\n12\t0\tcom.ena.dashboard\n-\t0\tcom.ena.report\n99\t0\tcom.apple.x\n", "")
+        label = args[-1].split("/")[-1]
+        if label in self.fail:
+            return subprocess.CompletedProcess(args, 113, "", "Could not find service")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+
+def test_the_engine_is_restarted_last_and_only_known_ena_services_can_be_touched(tmp_path):
+    import os
+    from solomon import botlab as B
+    run = LaunchctlRun()
+    lab = B.BotLab(tmp_path / "lab", run=run)
+    lab.monitor = lambda port=8787: {"up": True}  # no real network
+    res = lab.restart_services(["com.ena.trend", "com.ena.dashboard", "com.ena.report"], sleep=lambda s: None)
+    kick = [c for c in run.calls if c[:3] == ["launchctl", "kickstart", "-k"]]
+    assert [c[-1].split("/")[-1] for c in kick] == ["com.ena.report", "com.ena.dashboard", "com.ena.trend"]  # the trading engine goes last
+    assert all(c[-1].startswith(f"gui/{os.getuid()}/com.ena.") for c in kick)
+    assert all(r["ok"] for r in res["results"]) and {r["label"]: r["running"] for r in res["results"]} == {"com.ena.report": False, "com.ena.dashboard": True, "com.ena.trend": True}
+    for bad in (["com.apple.x"], ["com.ena.trend; rm"], ["com.ena.unknown"], [], "com.ena.trend", ["../com.ena.trend"], [1], ["com.ena.trend"] * 9):
+        with pytest.raises(B.BotLabError):
+            lab.restart_services(bad, sleep=lambda s: None)
+    assert not any("com.apple" in " ".join(c) for c in kick)
+
+
+def test_a_service_that_cannot_be_restarted_is_reported_and_the_others_still_are(tmp_path):
+    from solomon import botlab as B
+    lab = B.BotLab(tmp_path / "lab", run=LaunchctlRun(fail=["com.ena.dashboard"]))
+    lab.monitor = lambda port=8787: {"up": False}
+    res = lab.restart_services(["com.ena.dashboard", "com.ena.trend"], sleep=lambda s: None)
+    by = {r["label"]: r for r in res["results"]}
+    assert by["com.ena.dashboard"]["ok"] is False and "Could not find service" in by["com.ena.dashboard"]["error"] and by["com.ena.trend"]["ok"] is True
+    assert res["monitor"] is False
+
+
+def test_without_launchctl_it_says_so(tmp_path):
+    from solomon import botlab as B
+
+    def boom(args, **kw):
+        raise OSError("no launchctl")
+    with pytest.raises(B.BotLabError, match="launchctl"):
+        B.BotLab(tmp_path / "lab", run=boom).restart_services(["com.ena.trend"], sleep=lambda s: None)
+
+
+def test_dashboard_endpoint_and_buttons(tmp_path, monkeypatch):
+    from test_dashboard import Env
+    e = Env(tmp_path)
+    try:
+        lab = e.app.botlab
+        lab._run = LaunchctlRun()
+        lab.monitor = lambda port=8787: {"url": "http://127.0.0.1:8787/", "up": True}  # no real network in the test
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        st, body, _ = e.call("POST", "/api/botlab/restart", {"labels": ["com.ena.dashboard", "com.ena.trend"]})
+        assert st == 200 and "재시작했습니다: com.ena.dashboard, com.ena.trend" in body["message"] and "모니터(8787)" in body["message"]
+        assert e.call("POST", "/api/botlab/restart", {"labels": ["com.apple.x"]})[0] == 400
+        assert e.call("POST", "/api/botlab/restart", {"labels": []})[0] == 400
+        assert e.call("POST", "/api/botlab/restart", {"labels": ["com.ena.trend"]}, token=None)[0] == 401
+    finally:
+        e.close()
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ('id="t-ena-restart"', "ENA 봇 재시작", '"/api/botlab/restart"', "openEnaRestart", "com.ena.trend", "실거래 모드입니다", "거래 엔진은 맨 마지막"):
+        assert needle in html, needle
+    assert html.index('id="t-restart"') < html.index('id="t-ena-restart"')  # to the right of the dashboard's own restart button

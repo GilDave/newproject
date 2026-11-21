@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,10 @@ HISTORY_KEEP = 500
 
 class BotLabError(Exception):
     pass
+
+
+ENA_LABEL = re.compile(r"^com\.ena\.[A-Za-z0-9_.-]{1,40}$")
+RESTART_ORDER = ("com.ena.report", "com.ena.ollama", "com.ena.dashboard", "com.ena.trend")  # the trading engine last: everything it depends on is already back
 
 
 def detect(projects: list[str]) -> str:
@@ -116,6 +121,35 @@ class BotLab:
             if len(parts) == 3 and parts[2].startswith("com.ena."):
                 items.append({"label": parts[2], "running": parts[0].strip() not in ("-", ""), "last_exit": parts[1].strip()})
         return {"available": True, "items": sorted(items, key=lambda x: x["label"])}
+
+    def restart_services(self, labels: list, sleep: Callable[[float], None] = time.sleep) -> dict:
+        """Restart the bot's launchd services (`launchctl kickstart -k`). Only labels `launchctl list` shows AND that start with com.ena. are
+        accepted, so nothing else on the computer can be touched; the trading engine goes last."""
+        if not isinstance(labels, list) or not labels or len(labels) > 8 or not all(isinstance(x, str) for x in labels):
+            raise BotLabError("재시작할 서비스를 하나 이상 고르세요.")
+        svc = self.services()
+        if not svc["available"]:
+            raise BotLabError("launchctl을 쓸 수 없습니다 (맥에서만 서비스를 재시작할 수 있습니다).")
+        known = {i["label"] for i in svc["items"]}
+        for lab in labels:
+            if not ENA_LABEL.match(lab) or lab not in known:
+                raise BotLabError(f"알 수 없는 서비스입니다: {lab}")
+        chosen = sorted(set(labels), key=lambda x: RESTART_ORDER.index(x) if x in RESTART_ORDER else -1)
+        uid = os.getuid()
+        results = []
+        for lab in chosen:
+            try:
+                res = self._run(["launchctl", "kickstart", "-k", f"gui/{uid}/{lab}"], capture_output=True, text=True, timeout=20)
+                ok, err = res.returncode == 0, ((res.stderr or res.stdout or "").strip()[:200] if res.returncode else "")
+            except (OSError, subprocess.SubprocessError) as exc:
+                ok, err = False, str(exc)[:200]
+            results.append({"label": lab, "ok": ok, "error": err})
+        sleep(3.0)  # give them a moment, then look again
+        after = {i["label"]: i["running"] for i in self.services().get("items", [])}
+        for r in results:
+            r["running"] = bool(after.get(r["label"]))
+        self._monitor = (0.0, False)  # the 8787 page was cached for 10 seconds: look again
+        return {"results": results, "monitor": bool(self.monitor().get("up"))}
 
     def health(self, bot_dir: str) -> dict:
         db = Path(bot_dir) / "data" / "bot.db"

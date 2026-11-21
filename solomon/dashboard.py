@@ -778,6 +778,17 @@ class DashboardApp:
         out["message"] = msg
         return out
 
+    def botlab_restart(self, body: dict) -> dict:
+        """Restart the ENA bot's launchd services chosen on the page (the trading engine last)."""
+        try:
+            res = self.botlab.restart_services(body.get("labels"))
+        except botlab_mod.BotLabError as exc:
+            raise ApiError(400, str(exc)) from exc
+        bad = [r["label"] for r in res["results"] if not r["ok"]]
+        names = ", ".join(r["label"] for r in res["results"] if r["ok"])
+        res["message"] = (f"재시작했습니다: {names}" if not bad else f"일부를 재시작하지 못했습니다: {', '.join(bad)}") + (" · 모니터(8787) 응답 확인" if res["monitor"] else "")
+        return res
+
     def botlab_mode(self, body: dict) -> dict:
         d = self._bot_dir()
         try:
@@ -1519,6 +1530,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, app.botlab_keys(body))
                 if path == "/api/botlab/alerts":
                     return self._json(200, app.botlab_alerts(body))
+                if path == "/api/botlab/restart":
+                    return self._json(200, app.botlab_restart(body))
                 if path == "/api/botlab/mode":
                     return self._json(200, app.botlab_mode(body))
                 if path == "/api/botlab/policy":
