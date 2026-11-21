@@ -1151,9 +1151,14 @@ class DashboardApp:
         if len(question) > report_mod.MAX_QUESTION:
             raise ApiError(400, f"질문이 너무 깁니다 ({report_mod.MAX_QUESTION}자 이하).")
         chosen = self._check_ais(body.get("ais"))
+        merger = str(body.get("merger") or "")
+        if merger:
+            self._check_ais([merger])
         self._ensure_idle()
         project = self._project_for(project)
         args = [sys.executable, "-m", "solomon", "report", question, "--project", project, "--ais", ",".join(chosen)]
+        if merger:
+            args += ["--merger", merger]
         if body.get("context"):
             args += ["--context"]
         if self.config_path:

@@ -426,6 +426,9 @@ textarea{min-height:84px}
 .rptask .st.applied{color:#3ecf8e;border-color:#2c6b52}.rptask .st.passed{color:#f7d98b;border-color:#8a6d1e}.rptask .st.running{color:#9cc2ff;border-color:#2f74e6}.rptask .st.failed{color:#ff9aa6;border-color:#6b2a36}
 .rptask textarea{min-height:110px;margin:6px 0}
 .rptask .meta{font-size:12px;color:var(--dim)}
+.rproles{margin:10px 0;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:#141a22}
+.rrgrid{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 10px;align-items:center;margin:8px 0}
+.rrgrid span{font-size:13px;color:var(--dim)}
 .rptarget{margin:10px 0;padding:8px 12px;border:1px solid #2f74e6;border-radius:10px;background:#0e2140}
 .rptarget #rp-target{font-family:ui-monospace,Menlo,monospace;font-size:13px;margin:0 8px}
 .rpchain{margin:10px 0;padding:10px 12px;border:1px dashed #566f98;border-radius:10px;background:#111a28}
@@ -578,8 +581,11 @@ textarea{min-height:84px}
       <datalist id="rp-projects"></datalist>
       <div class="hint" id="rp-where"></div>
       <label class="chk"><input type="checkbox" id="rp-ctx" checked> 프로젝트의 파일 목록과 README 앞부분을 AI에게 보내 구체적인 계획 받기 (비밀 값은 가립니다)</label>
-      <label>보고서를 쓸 AI — 각자 독립적으로 쓰고 하나가 합칩니다</label>
+      <label>① 보고서를 쓸 AI — 각자 독립적으로 따로 씁니다 (2개 이상 권장)</label>
       <div class="aichecks" id="rp-ais"></div>
+      <label for="rp-merger">② 쓴 글을 하나로 합칠 AI</label>
+      <select id="rp-merger"></select>
+      <div class="hint">③ 작은 작업으로 나누는 AI와 ④ 단계를 실행할 때의 역할(계획·구현·검수·결정권자)은 보고서를 만든 뒤 아래쪽 「개선 작업으로 이어가기」에서 정합니다.</div>
       <div class="row"><button class="primary" id="rp-go">▶ 보고서 만들기</button></div>
       <div class="hint" id="rp-hint">읽기 전용입니다. 프로젝트의 코드는 바뀌지 않고, 결과는 프로젝트 폴더의 .solomon/reports 에 저장됩니다. 보통 3~8분 걸립니다.</div>
     </div>
@@ -603,6 +609,12 @@ textarea{min-height:84px}
         <div class="rp-tasks" id="rp-tasks" hidden>
           <h2>📋 개선 작업으로 이어가기</h2>
           <div class="hint">보고서의 구현 방안을 <b>작은 작업</b>으로 나눠 한 번에 하나씩 개선 모드(구현 → 테스트 → 교차 검수)로 실행합니다. 앞 단계를 <b>적용하고 커밋</b>한 뒤 다음 단계를 실행하세요. 구현 AI가 못 하는 일(조사, 화면 확인, API 키 등록)은 「사람이 할 일」로 따로 모읍니다.</div>
+          <div class="rproles" id="rp-roles">
+            <b>🧩 ④ 단계를 실행할 때의 AI (역할)</b>
+            <div class="rrgrid" id="rp-roles-grid"></div>
+            <div class="hint" id="rp-roles-hint"></div>
+            <div class="hint">이 설정은 대시보드의 「역할 배정」과 같은 값입니다. 여기서 바꾸면 대시보드에도 반영되고, 이 브라우저에 기억됩니다. 구현 AI와 검수 AI는 서로 달라야 하고, 로컬 모델은 결정권자에 쓰는 것을 권합니다.</div>
+          </div>
           <div class="rptarget" id="rp-target-box" hidden>
             <b>🎯 작업을 실행할 프로젝트</b> <span id="rp-target"></span> <button id="rp-target-pick">바꾸기</button>
             <div class="hint">보고서가 저장된 프로젝트와 달라도 됩니다. 단계 실행·자동 실행은 <b>여기에 적은 프로젝트</b>의 코드를 바꿉니다(ENA봇 기능이면 ena-bot 폴더).</div>
@@ -702,6 +714,9 @@ const isOptRole = (r) => /[23]$/.test(r) || r === "arbiter";
 const ROLE_KO = {planner:"계획", planner2:"계획 검토1", planner3:"계획 검토2", builder:"구현", builder2:"구현 보조1", builder3:"구현 보조2",
   reviewer:"검수", reviewer2:"2차 검수", reviewer3:"3차 검수", arbiter:"결정권자", analysis:"분석"};
 const roleBase = (r) => r.replace(/[23]$/, "");
+const ROLE_SAVE_KEY = "solomon.roles.v1";
+function savedRoles(){ try { return JSON.parse(localStorage.getItem(ROLE_SAVE_KEY) || "{}") || {}; } catch (e) { return {}; } }
+function saveRoles(){ try { const r = {}; ALL_ROLES.forEach(x => { r[x] = $("r-" + x).value; }); localStorage.setItem(ROLE_SAVE_KEY, JSON.stringify(r)); } catch (e) {} }
 function collectRoles(){
   const roles = {};
   ALL_ROLES.forEach(r => { const v = $("r-" + r).value; if (v || !isOptRole(r)) roles[r] = v; });
@@ -822,7 +837,10 @@ function fillRoleSelects(cur){
     }
     // the next run's decision-maker defaults to the local model when it is connected (an earlier run having had none does not change that)
     const arbDefault = role === "arbiter" && (state.providers.find(p => p.name === "ollama") || {}).installed ? "ollama" : "";
-    const target = rolesDirty && keep !== undefined && sel.dataset.touched ? keep : (want[role] || arbDefault);
+    // the form is the person's setting for the NEXT run: their own saved choice (even "없음") wins over the roles of the run on screen
+    const saved = savedRoles();
+    const preferred = Object.prototype.hasOwnProperty.call(saved, role) ? saved[role] : (want[role] || arbDefault);
+    const target = rolesDirty && keep !== undefined && sel.dataset.touched ? keep : preferred;
     if ([...sel.options].some(o => o.value === target && !o.disabled)) sel.value = target;
     else if (!optional){ const first = [...sel.options].find(o => !o.disabled); if (first) sel.value = first.value; }
     else sel.value = "";
@@ -2765,7 +2783,7 @@ $("savetest").onclick = async () => {
   catch (e) { toast(e.message, true); }
   poll();
 };
-ALL_ROLES.forEach(r => $("r-" + r).addEventListener("change", (ev) => { ev.target.dataset.touched = "1"; rolesDirty = true; if (state) render(); }));
+ALL_ROLES.forEach(r => $("r-" + r).addEventListener("change", (ev) => { ev.target.dataset.touched = "1"; rolesDirty = true; saveRoles(); if (state) render(); }));
 $("project").addEventListener("change", () => { const v = $("project").value.trim(); if (state && state.projects.includes(v)){ selectedProject = v; selectedRun = null; selectedAnalysis = null; selectedVideo = null; poll(); } });
 $("brand").onclick = (event) => { event.preventDefault(); setTab("dash"); };
 $("fxDemo").onclick = () => FX.isDemo() ? FX.stop() : FX.demo();
@@ -2838,6 +2856,13 @@ function rpFillProjects(){
       l.appendChild(i); l.appendChild(document.createTextNode(pname(p.name) + (p.local ? " (로컬)" : "") + (p.installed ? "" : " (미설치)"))); box.appendChild(l);
     });
   }
+  const mg = $("rp-merger"), mopts = JSON.stringify(state.providers.map(p => [p.name, p.installed]));
+  if (mg.dataset.options !== mopts){
+    const keepMg = mg.value; mg.dataset.options = mopts; clear(mg);
+    const auto = el("option", "", "자동 (Claude → Codex → Antigravity 순으로 먼저 쓴 AI)"); auto.value = ""; mg.appendChild(auto);
+    state.providers.filter(p => p.installed).forEach(p => { const o = el("option", "", pname(p.name) + (p.local ? " (로컬 — 긴 글 합치기는 느릴 수 있음)" : "")); o.value = p.name; mg.appendChild(o); });
+    mg.value = [...mg.options].some(o => o.value === keepMg) ? keepMg : "";
+  }
   const proj = rpProject();
   $("rp-where").textContent = proj ? (state.projects.includes(proj) ? "보고서 저장 위치: " + proj + "/.solomon/reports/" : "아직 등록되지 않은 폴더입니다. 보고서를 만들면 자동으로 프로젝트에 등록됩니다 (파일은 바뀌지 않습니다).") : "";
 }
@@ -2874,6 +2899,25 @@ async function rpOpenReport(id){
   } catch (e) { toast(e.message, true); }
 }
 const TASK_ST = {todo: "⬜ 아직", running: "🔄 진행 중", passed: "🟡 통과 · 적용 대기", applied: "✅ 적용됨", failed: "❌ 실패", discarded: "↩ 폐기함"};
+const RP_ROLES = [["planner", "계획 (무엇을 어디까지 고칠지)"], ["builder", "구현 (코드 작성)"], ["reviewer", "검수 1"], ["reviewer2", "검수 2 (선택)"], ["arbiter", "👑 결정권자 (선택)"]];
+function rpFillRoles(){
+  const grid = $("rp-roles-grid"); if (!grid || !state) return;
+  if (!grid.children.length){
+    RP_ROLES.forEach(([role, label]) => {
+      grid.appendChild(el("span", "", label));
+      const sel = el("select"); sel.id = "rp-r-" + role;
+      sel.onchange = () => { const d = $("r-" + role); d.value = sel.value; d.dispatchEvent(new Event("change")); rpFillRoles(); };  // the dashboard's own handler remembers it
+      grid.appendChild(sel);
+    });
+  }
+  RP_ROLES.forEach(([role]) => {
+    const sel = $("rp-r-" + role), src = $("r-" + role);
+    const sig = [...src.options].map(o => o.value + o.text + o.disabled).join("|");
+    if (sel.dataset.sig !== sig){ sel.dataset.sig = sig; clear(sel); [...src.options].forEach(o => { const c = el("option", "", o.text); c.value = o.value; c.disabled = o.disabled; sel.appendChild(c); }); }
+    if (document.activeElement !== sel) sel.value = src.value;
+  });
+  $("rp-roles-hint").textContent = $("rolehint").textContent;
+}
 function rpRenderTasks(){
   const r = rp.cur, box = $("rp-tasks");
   box.hidden = !(r && r.finished && r.status === "DONE" && r.markdown);
@@ -2882,6 +2926,7 @@ function rpRenderTasks(){
   if (sel.dataset.options !== opts){ sel.dataset.options = opts; clear(sel); state.providers.filter(p => p.installed && p.name !== "ollama").forEach(p => { const o = el("option", "", pname(p.name) + "가 나눔"); o.value = p.name; sel.appendChild(o); }); }
   const busy = state.job.state === "running", list = $("rp-task-list"), human = $("rp-task-human");
   $("rp-task-make").disabled = busy; $("rp-task-make").textContent = r.tasks ? "다시 나누기" : "작은 작업으로 나누기";
+  rpFillRoles();
   const tb = $("rp-target-box"); tb.hidden = !r.tasks;
   if (r.tasks){
     const target = r.tasks.target || rpProject(); $("rp-target").textContent = target;
@@ -3035,7 +3080,7 @@ $("rp-go").onclick = async () => {
   if (!ais.length) return toast("보고서를 쓸 AI를 하나 이상 고르세요.", true);
   $("rp-go").disabled = true;
   try {
-    await api("/api/report", {project, question, ais, context: $("rp-ctx").checked});
+    await api("/api/report", {project, question, ais, context: $("rp-ctx").checked, merger: $("rp-merger").value || undefined});
     toast("보고서 작성을 시작했습니다."); rp.id = null; rp.cur = null; rp.listKey = null; await poll(); setTimeout(rpTick, 1200);
   } catch (e) { toast(e.message, true); }
   $("rp-go").disabled = false; rpProgress();

@@ -547,3 +547,36 @@ def test_the_report_tab_shows_and_changes_the_target():
     html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
     for needle in ('id="rp-target-box"', 'id="rp-target-pick"', '"/api/report/target"', "작업을 실행할 프로젝트", "🎯 대상 프로젝트: ", "질문에 ENA가 들어 있는데 실행 대상이", "selectedProject = targetName()"):
         assert needle in html, needle
+
+
+# ---------------------------------------------------------------- the person chooses which AI merges the drafts
+def test_the_chosen_merger_merges_even_if_it_wrote_no_draft_and_others_are_fallbacks(repo):
+    ps = providers(claude=[doc(1)], codex=[doc(2)], antigravity=[merged()])
+    res = R.run_report(make_settings(), repo, "질문입니다 충분히 긴 질문", ["claude", "codex"], providers=ps, merger="antigravity")
+    assert res["status"] == "DONE" and res["synthesizer"] == "antigravity" and res["merger_choice"] == "antigravity" and res["title"] == "통합 보고서"
+    assert len(ps["antigravity"].calls) == 1 and "DRAFT 1" in ps["antigravity"].calls[0]["prompt"]
+    assert len(ps["claude"].calls) == 1 and len(ps["codex"].calls) == 1  # they only wrote their drafts
+    ps2 = providers(claude=[doc(1), merged()], codex=[doc(2)], antigravity=[ProviderError("down")])
+    res2 = R.run_report(make_settings(), repo, "질문입니다 충분히 긴 질문", ["claude", "codex"], providers=ps2, merger="antigravity")
+    assert res2["status"] == "DONE" and res2["synthesizer"] == "claude"  # the chosen one failed: the automatic order takes over
+    with pytest.raises(ValueError, match="unknown AI for merging"):
+        R.run_report(make_settings(), repo, "질문입니다 충분히 긴 질문", ["claude"], providers=providers(claude=[doc(1)]), merger="nobody")
+
+
+def test_dashboard_passes_the_merger_and_the_cli_accepts_it(env):
+    st, body, _ = env.call("POST", "/api/report", {"project": env.project, "question": "병합 AI 시험 질문입니다", "ais": ["claude"], "merger": "claude"})
+    assert st == 200 and sleeper.calls[-1][sleeper.calls[-1].index("--merger") + 1] == "claude"
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+    assert env.call("POST", "/api/report", {"project": env.project, "question": "병합 AI 시험 질문입니다", "ais": ["claude"], "merger": "nobody"})[0] == 400
+    st, body, _ = env.call("POST", "/api/report", {"project": env.project, "question": "병합 AI 시험 질문입니다", "ais": ["claude"]})
+    assert st == 200 and "--merger" not in sleeper.calls[-1]  # automatic when nothing is chosen
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+    rp = next(a for a in cli.build_parser()._actions if a.dest == "command").choices["report"]
+    assert "--merger" in {o for a in rp._actions for o in a.option_strings}
+
+
+def test_the_ai_menus_are_numbered_and_the_roles_are_remembered():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ("① 보고서를 쓸 AI", "② 쓴 글을 하나로 합칠 AI", 'id="rp-merger"', "④ 단계를 실행할 때의 AI (역할)", 'id="rp-roles-grid"', "RP_ROLES", "rpFillRoles()",
+                   'merger: $("rp-merger").value || undefined', "ROLE_SAVE_KEY", "savedRoles()", "saveRoles();", "Object.prototype.hasOwnProperty.call(saved, role)", "the person's setting for the NEXT run"):
+        assert needle in html, needle

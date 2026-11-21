@@ -95,7 +95,7 @@ class _Log:
 
 
 def run_report(settings: Settings, project: Path, question: str, ais: Optional[list[str]] = None, *, use_project_context: bool = False,
-               providers: Optional[dict[str, Provider]] = None) -> dict:
+               providers: Optional[dict[str, Provider]] = None, merger: Optional[str] = None) -> dict:
     from .providers import build_providers, default_ais
 
     question = (question or "").strip()
@@ -111,6 +111,8 @@ def run_report(settings: Settings, project: Path, question: str, ais: Optional[l
         raise ValueError(f"unknown AI: {', '.join(unknown)} (known: {', '.join(providers)})")
     if not chosen:
         raise ValueError("no AI CLI is installed")
+    if merger and merger not in providers:
+        raise ValueError(f"unknown AI for merging: {merger}")
 
     rid = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     rdir = project / settings.state_dir / "reports" / rid
@@ -118,7 +120,7 @@ def run_report(settings: Settings, project: Path, question: str, ais: Optional[l
     if gitops.git(["rev-parse", "--is-inside-work-tree"], project, check=False).returncode == 0:
         gitops.exclude_from_git(project, settings.state_dir)
     log = _Log(rdir / "events.jsonl")
-    result: dict = {"report_id": rid, "status": "FAILED", "question": question, "project": str(project), "ais": {}, "synthesizer": "", "title": "",
+    result: dict = {"report_id": rid, "status": "FAILED", "question": question, "project": str(project), "ais": {}, "synthesizer": "", "title": "", "merger_choice": merger or "",
                     "created": time.strftime("%Y-%m-%d %H:%M:%S"), "context": bool(use_project_context)}
     log.event("report_start", project=str(project), question=question, ais=chosen, context=bool(use_project_context))
 
@@ -192,6 +194,8 @@ def run_report(settings: Settings, project: Path, question: str, ais: Optional[l
     notes: list[str] = []
     if len(drafts) >= 2:
         order = [n for n in SYNTH_ORDER if n in drafts] + [n for n in drafts if n not in SYNTH_ORDER]
+        if merger:  # the person's choice first (it may be an AI that wrote no draft); the others stay as fallbacks
+            order = [merger] + [n for n in order if n != merger]
         for who in order:
             log.event("merge_start", provider=who, drafts=len(drafts))
             started = time.time()
