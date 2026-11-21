@@ -289,6 +289,130 @@ def run_autofix(
     return _finish(result, project, bdir, base, log, tip=branch if passed else None)
 
 
+def run_task_chain(
+    settings: Settings,
+    project: Path,
+    report_id: str,
+    task_ids: Optional[list[int]] = None,
+    *,
+    budget_minutes: float = DEFAULT_BUDGET_MIN,
+    item_minutes: float = DEFAULT_ITEM_MIN,
+    orchestrator: Optional[Orchestrator] = None,
+    clock: Callable[[], float] = time.time,
+) -> BatchResult:
+    """The tasks of a report, built one after another unattended: each is a normal Solomon run that starts from the result of the one before,
+    passed ones are committed to a NEW branch (the checked-out branch and folder are never touched), and a person applies the result later.
+    A task whose prerequisite did not pass (or was never applied) is skipped, independent tasks go on, three failures in a row stop the night."""
+    from . import report as report_mod
+
+    project = Path(project).resolve()
+    gitops.ensure_repo(project)
+    if not settings.test_command:
+        raise AutofixError("테스트 명령이 없으면 자동 실행을 하지 않습니다 (검증 없는 변경이 쌓입니다). 프로젝트 설정에서 테스트 명령을 정하세요.")
+    data = report_mod.load_tasks(project, settings.state_dir, report_id)
+    if not data:
+        raise AutofixError("작업 목록이 없습니다. 먼저 보고서에서 '작은 작업으로 나누기'를 하세요.")
+    tasks = {t["id"]: t for t in data["tasks"]}
+    status = report_mod.task_statuses(project, settings.state_dir, report_id, data["tasks"])
+    applied = {i for i, st in status.items() if st["state"] == "applied"}
+    wanted = [i for i in (task_ids or [t["id"] for t in data["tasks"]]) if i in tasks and i not in applied and status[i]["state"] != "running"]
+    if not wanted:
+        raise AutofixError("실행할 작업이 없습니다 (모두 적용되었거나 선택한 작업이 없습니다).")
+    wanted.sort()
+
+    batch_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+    bdir = project / settings.state_dir / "batches" / batch_id
+    bdir.mkdir(parents=True)
+    gitops.exclude_from_git(project, settings.state_dir)
+    branch = f"solomon/chain-{batch_id}"
+    result = BatchResult(batch_id, "NOTHING", "", branch, str(bdir),
+                         [Item(i, f"단계 {i}: {tasks[i]['title']}", ", ".join(tasks[i].get("files") or [])[:90], "medium", [i]) for i in wanted])
+    events = bdir / "events.jsonl"
+
+    def log(kind: str, **fields) -> None:
+        with events.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(clock())), "event": kind, **fields}, ensure_ascii=False) + "\n")
+
+    log("batch_start", report=report_id, items=[dataclasses.asdict(i) for i in result.items], branch=branch, budget_minutes=budget_minutes)
+    base = gitops.resolve(project, "HEAD")
+    snapshot_note = ""
+    if settings.include_uncommitted and gitops.is_dirty(project):
+        try:
+            base, kept = gitops.snapshot_worktree(project)
+            snapshot_note = f"커밋 안 된 변경 {len(kept)}개 포함"
+            log("snapshot", files=kept[:80], count=len(kept))
+        except gitops.GitError as exc:
+            log("snapshot_failed", error=str(exc)[:200])
+    gitops.create_branch(project, branch, base)
+    if orchestrator is None:
+        sv = dataclasses.replace(settings, roles=dict(settings.roles), max_attempts=ITEM_ATTEMPTS,
+                                 max_files_changed=min(settings.max_files_changed, ITEM_FILES), max_diff_lines=min(settings.max_diff_lines, ITEM_LINES))
+        orchestrator = Orchestrator(sv, quota_board=quota_mod.QuotaBoard.persistent())
+    orch = orchestrator
+    started = clock()
+    failures = 0
+    stop: Optional[str] = None
+    done_here: set[int] = set()
+    first = True
+    for n, item in enumerate(result.items, 1):
+        tid = item.cluster
+        left = budget_minutes - (clock() - started) / 60
+        if left <= 1:
+            stop = "시간 예산을 다 써서 남은 단계는 건너뛰었습니다"
+            break
+        missing = [d for d in tasks[tid].get("depends_on", []) if d not in done_here and d not in applied]
+        if missing:
+            item.status = "SKIPPED"
+            item.summary = "먼저 끝나야 할 단계 " + ", ".join(str(d) for d in missing) + " 가 통과하지 못했거나 적용되지 않아 건너뜁니다"
+            log("item_skipped", n=n, task=tid, missing=missing)
+            continue
+        orch.s.max_run_minutes = min(item_minutes, left)
+        orch.s.baseline_check = bool(settings.baseline_check) and first  # the test setup is judged once, on the original code
+        first = False
+        log("item_start", n=n, task=tid, cluster=tid, title=item.title)
+
+        def commit(wt: Path, res, item=item, tid=tid) -> str:
+            sha = gitops.commit_all(wt, f"report task {tid}: {tasks[tid]['title'][:70]}\n\nReport {report_id}, chain {batch_id}.")
+            gitops.move_branch(project, branch, sha)
+            return sha
+
+        try:
+            res = orch.run(report_mod.task_goal_text(project, settings.state_dir, report_id, tid), project, base_ref=branch, on_pass=commit)
+        except Exception as exc:  # one broken step must not end the night
+            item.status, item.summary = "ERROR", f"{type(exc).__name__}: {exc}"
+            log("item_end", n=n, task=tid, status="ERROR", summary=item.summary)
+            failures += 1
+        else:
+            item.status, item.summary, item.run_id = res.status, res.summary, res.run_id
+            item.attempts, item.commit = res.attempts, res.commit or ""
+            log("item_end", n=n, task=tid, status=res.status, attempts=res.attempts, summary=res.summary, commit=item.commit)
+            if res.status == "PASSED":
+                done_here.add(tid)
+                failures = 0
+            else:
+                failures += 1
+            if res.status in ("BLOCKED_QUOTA", "STOPPED"):
+                stop = {"BLOCKED_QUOTA": "구독 사용 한도에 도달해 멈췄습니다 (API 결제로 넘어가지 않습니다)", "STOPPED": "사용자가 중지했습니다"}[res.status]
+                result.status = res.status
+                break
+            if res.status == "ERROR" and not done_here and "수정하기 전" in res.summary:
+                stop = "수정 전 코드에서도 테스트가 실패해 중단했습니다 (테스트 환경을 먼저 고치세요)"
+                result.status = "ERROR"
+                break
+        if failures >= MAX_CONSECUTIVE_FAILURES:
+            stop = f"{MAX_CONSECUTIVE_FAILURES}단계 연속 실패해 멈췄습니다"
+            break
+    for item in result.items:
+        if item.status == "PENDING":
+            item.status = "SKIPPED"
+            item.summary = item.summary or (stop or "실행하지 않았습니다")
+    passed = sum(1 for i in result.items if i.status == "PASSED")
+    if result.status == "NOTHING":
+        result.status = "DONE" if passed == len(result.items) else "PARTIAL" if passed else "FAILED"
+    result.summary = f"{len(result.items)}단계 중 {passed}단계 통과" + (f" · {stop}" if stop else "") + (f" · {snapshot_note}" if snapshot_note else "")
+    return _finish(result, project, bdir, base, log, tip=branch if passed else None)
+
+
 def _finish(result: BatchResult, project: Path, bdir: Path, base: str, log, tip: Optional[str] = None) -> BatchResult:
     if tip:
         patch = bdir / "combined.patch"

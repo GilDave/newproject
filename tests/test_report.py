@@ -344,3 +344,133 @@ def test_the_report_tab_has_the_task_pipeline():
     from solomon import cli, joblock
     assert "report-tasks" in joblock.JOB_COMMANDS
     assert "report-tasks" in next(a for a in cli.build_parser()._actions if a.dest == "command").choices
+
+
+# ---------------------------------------------------------------- unattended chain of report tasks
+def make_tasks(repo, deps=((), (1,), ())):
+    """A finished report with three tasks (2 needs 1; 3 is independent)."""
+    res = run(repo, providers(claude=[doc(1)]))
+    data = {"report_id": res["report_id"], "created": "2026-11-21 00:00:00", "provider": "claude", "human_steps": [],
+            "tasks": [{"id": i + 1, "title": f"작업 {i + 1}", "goal": f"작업 {i + 1} 을 구현한다. src/t{i + 1}.py 에 함수를 만들고 테스트를 쓴다.", "size": "S",
+                       "files": [f"src/t{i + 1}.py"], "depends_on": list(d), "verify": "테스트 통과"} for i, d in enumerate(deps)]}
+    (repo / ".solomon" / "reports" / res["report_id"] / "tasks.json").write_text(json.dumps(data, ensure_ascii=False))
+    return res["report_id"]
+
+
+def chain_orch(settings, claude, codex):
+    from solomon.orchestrator import Orchestrator
+    return Orchestrator(settings, {"claude": ScriptedProvider("claude", claude), "codex": ScriptedProvider("codex", codex)})
+
+
+def gitout(repo, *a):
+    import subprocess
+    return subprocess.run(["git", *a], cwd=repo, capture_output=True, text=True, check=True).stdout
+
+
+def new_settings(**kw):
+    s = make_settings(**kw)
+    s.test_command = ["python3", "-c", "import pathlib,sys; sys.exit(0 if pathlib.Path('src/new.py').exists() else 1)"]
+    return s
+
+
+def test_the_chain_builds_every_task_on_a_new_branch_each_on_top_of_the_last(repo):
+    from solomon import autofix
+    rid = make_tasks(repo)
+    s = new_settings()
+    ok = [json.dumps({"allowed_paths": ["src/"], "protected_paths": [], "acceptance_criteria": ["ok"], "allowed_deletions": [], "context": "t"}), json.dumps({"verdict": "PASS", "issues": [], "summary": "ok"})]
+    from helpers import write_file as wf
+    o = chain_orch(s, ok * 3, [wf("src/new.py"), wf("src/t2.py"), wf("src/t3.py")])
+    head = gitout(repo, "rev-parse", "HEAD").strip()
+    r = autofix.run_task_chain(s, repo, rid, orchestrator=o)
+    assert r.status == "DONE" and [i.status for i in r.items] == ["PASSED"] * 3 and r.branch.startswith("solomon/chain-")
+    tip = gitout(repo, "ls-tree", "-r", "--name-only", r.branch).split()
+    assert {"src/new.py", "src/t2.py", "src/t3.py"} <= set(tip)  # the last task sees the first one's files: they are stacked
+    assert gitout(repo, "rev-parse", "HEAD").strip() == head and not (repo / "src" / "t2.py").exists() and gitout(repo, "status", "--porcelain").strip() == ""
+    log = gitout(repo, "log", "--format=%s", r.branch).splitlines()
+    assert log[0].startswith("report task 3") and log[1].startswith("report task 2") and log[2].startswith("report task 1")
+    assert "단계 1: 작업 1" == r.items[0].title and "3단계 중 3단계 통과" in r.summary
+    from solomon import report as RR
+    st = RR.task_statuses(repo, ".solomon", rid, RR.load_tasks(repo, ".solomon", rid)["tasks"])
+    assert [st[i]["state"] for i in (1, 2, 3)] == ["passed"] * 3 and all(st[i]["batch_id"] == r.batch_id for i in (1, 2, 3))  # the screen can send you to the chain to apply them
+    goals = [c["prompt"] for c in o.providers["claude"].calls if "USER GOAL" in c["prompt"]]
+    assert f"[보고서 {rid} · 단계 1/3]" in goals[0] and f"[보고서 {rid} · 단계 2/3]" in goals[1]
+
+
+def test_a_failed_task_skips_what_depends_on_it_and_the_independent_one_still_runs(repo):
+    from solomon import autofix
+    rid = make_tasks(repo)
+    s = new_settings(max_attempts=1)
+    plan = json.dumps({"allowed_paths": ["src/"], "protected_paths": [], "acceptance_criteria": ["ok"], "allowed_deletions": [], "context": "t"})
+    fail, ok = json.dumps({"verdict": "FAIL", "issues": ["no"], "summary": "x"}), json.dumps({"verdict": "PASS", "issues": [], "summary": "ok"})
+    from helpers import write_file as wf
+    o = chain_orch(s, [plan, fail, plan, ok], [wf("src/new.py"), wf("src/new.py", "y = 2\n")])
+    r = autofix.run_task_chain(s, repo, rid, orchestrator=o)
+    assert [i.status for i in r.items] == ["FAILED", "SKIPPED", "PASSED"] and r.status == "PARTIAL"
+    assert "먼저 끝나야 할 단계 1" in r.items[1].summary and "3단계 중 1단계 통과" in r.summary
+
+
+def test_the_chain_stops_after_three_failures_in_a_row(repo):
+    from solomon import autofix
+    rid = make_tasks(repo, deps=((), (), (), (), ()))
+    s = new_settings(max_attempts=1)
+    plan = json.dumps({"allowed_paths": ["src/"], "protected_paths": [], "acceptance_criteria": ["ok"], "allowed_deletions": [], "context": "t"})
+    fail = json.dumps({"verdict": "FAIL", "issues": ["no"], "summary": "x"})
+    from helpers import write_file as wf
+    o = chain_orch(s, [plan, fail] * 3, [wf("src/new.py")] * 3)
+    r = autofix.run_task_chain(s, repo, rid, orchestrator=o)
+    assert [i.status for i in r.items] == ["FAILED"] * 3 + ["SKIPPED"] * 2 and "3단계 연속 실패" in r.summary and not r.patch_path
+
+
+def test_the_chain_refuses_without_tasks_without_tests_or_when_nothing_is_left(repo):
+    from solomon import autofix
+    res = run(repo, providers(claude=[doc(1)]))
+    with pytest.raises(autofix.AutofixError, match="작업 목록이 없습니다"):
+        autofix.run_task_chain(new_settings(), repo, res["report_id"])
+    rid = make_tasks(repo)
+    s = new_settings()
+    s.test_command = None
+    with pytest.raises(autofix.AutofixError, match="테스트 명령이 없으면"):
+        autofix.run_task_chain(s, repo, rid)
+    with pytest.raises(autofix.AutofixError, match="실행할 작업이 없습니다"):
+        autofix.run_task_chain(new_settings(), repo, rid, [99])
+
+
+def test_a_phone_message_when_the_night_is_over_only_when_bark_is_set_up(tmp_path):
+    from solomon import alerts as A
+    sent = []
+    fake = lambda u, p: (sent.append(p) or (200, {"code": 200}))
+    lab = tmp_path / "lab"
+    assert A.notify_job_end("t", "b", lab, http=fake) is False and not sent  # no key saved: nothing happens
+    a = A.Alerts(lab, http=fake)
+    a.update({"device_key": "AbCdEfGh12345678XyZ"})
+    assert A.notify_job_end("🏁 Solomon 순차 실행 DONE", "3단계 중 3단계 통과", lab, http=fake) is True
+    assert sent[-1]["title"] == "🏁 Solomon 순차 실행 DONE" and "3단계 중 3단계" in sent[-1]["body"]
+    a.update({"job_done": False})
+    n = len(sent)
+    assert A.notify_job_end("x", "y", lab, http=fake) is False and len(sent) == n  # the person switched it off
+    assert A.notify_job_end("x", "y", lab, http=lambda u, p: (_ for _ in ()).throw(OSError("down"))) is False  # a failing push never raises
+
+
+def test_dashboard_starts_the_chain_as_an_unattended_job_and_validates(env):
+    repo = Path(env.project)
+    rid = make_tasks(repo)
+    st, body, _ = env.call("POST", "/api/report/chain", {"project": env.project, "id": rid, "task_ids": [1, 3], "budget_hours": 2})
+    assert st == 200
+    args = sleeper.calls[-1]
+    assert args[3] == "report-chain" and args[args.index("--tasks") + 1] == "1,3" and args[args.index("--budget-minutes") + 1] == "120" and "--test-command" in args
+    assert body["job"]["kind"] == "autofix"  # shown with the other unattended jobs
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+    for bad in ({"task_ids": []}, {"task_ids": ["a"]}, {"budget_hours": 0}, {"budget_hours": 99}, {"id": "../x"}):
+        assert env.call("POST", "/api/report/chain", {"project": env.project, "id": rid, **bad})[0] == 400, bad
+    assert env.call("POST", "/api/report/chain", {"project": env.project, "id": rid}, token=None)[0] == 401
+    res2 = run(repo, providers(claude=[doc(1)]))
+    assert env.call("POST", "/api/report/chain", {"project": env.project, "id": res2["report_id"]})[0] == 400  # not split yet
+
+
+def test_the_report_tab_has_the_unattended_chain():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    for needle in ('id="rp-chain"', 'id="rp-chain-go"', 'id="rp-chain-h"', '"/api/report/chain"', "자리를 비워도 순서대로 자동 실행", "원본은 바뀌지 않습니다", "아이폰 알림",
+                   'key: t.batch_id && t.state !== "failed" ? "batch:" + t.batch_id'):
+        assert needle in html, needle
+    from solomon import cli, joblock
+    assert "report-chain" in joblock.JOB_COMMANDS and "report-chain" in next(a for a in cli.build_parser()._actions if a.dest == "command").choices

@@ -322,6 +322,47 @@ def _autofix(args: argparse.Namespace) -> int:
     if res.branch and res.patch_path:
         print(f"branch:  {res.branch}")
     print(f"report:  {res.report_path}")
+    try:
+        from . import alerts as alerts_mod
+        alerts_mod.notify_job_end(f"🏁 Solomon 밤샘 수정 {res.status}", res.summary + ("\n관리 탭에서 확인하고 적용하세요." if res.patch_path else ""))
+    except Exception:
+        pass
+    return {"DONE": 0, "NOTHING": 0, "PARTIAL": 1, "FAILED": 1, "STOPPED": 130}.get(res.status, 2)
+
+
+def _report_chain(args: argparse.Namespace) -> int:
+    from . import autofix as autofix_mod, alerts as alerts_mod
+
+    settings = load_settings(args.config)
+    if args.test_command:
+        settings.test_command = shlex.split(args.test_command)
+    for role in ALL_ROLES:
+        chosen = getattr(args, role, None)
+        if chosen:
+            settings.roles[role] = chosen
+    settings.validate()
+    project = Path(args.project or settings.project_path or ".").expanduser()
+
+    def _stop(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        res = autofix_mod.run_task_chain(settings, project, args.id, [int(i) for i in args.tasks.split(",") if i.strip()] if args.tasks else None,
+                                         budget_minutes=args.budget_minutes)
+    except (autofix_mod.AutofixError, ConfigError, gitops.GitError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"chain:   {res.batch_id}\nstatus:  {res.status}\nsummary: {res.summary}")
+    for i, it in enumerate(res.items, 1):
+        print(f"  {i}. {it.status:<13} {it.title}")
+    if res.branch and res.patch_path:
+        print(f"branch:  {res.branch}")
+    print(f"report:  {res.report_path}")
+    try:  # a phone message when the night is over (only when Bark alerts are set up; never fails the job)
+        alerts_mod.notify_job_end(f"🏁 Solomon 순차 실행 {res.status}", res.summary + ("\n관리 탭에서 확인하고 적용하세요." if res.patch_path else ""))
+    except Exception:
+        pass
     return {"DONE": 0, "NOTHING": 0, "PARTIAL": 1, "FAILED": 1, "STOPPED": 130}.get(res.status, 2)
 
 
@@ -596,6 +637,17 @@ def build_parser() -> argparse.ArgumentParser:
     for role in ALL_ROLES:
         af.add_argument(f"--{role}")
     af.set_defaults(func=_autofix)
+
+    rc = sub.add_parser("report-chain", help="build the tasks of a report one after another, unattended (own branch, original untouched)")
+    rc.add_argument("--id", required=True, help="the report number")
+    rc.add_argument("--project")
+    rc.add_argument("--config")
+    rc.add_argument("--tasks", help="only these task numbers, e.g. 1,2,4 (default: every task not applied yet)")
+    rc.add_argument("--budget-minutes", type=float, default=360.0)
+    rc.add_argument("--test-command")
+    for role in ALL_ROLES:
+        rc.add_argument(f"--{role}")
+    rc.set_defaults(func=_report_chain)
 
     rt = sub.add_parser("runtests", help="run the project's test command in its working folder")
     rt.add_argument("--project")

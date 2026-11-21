@@ -14,7 +14,7 @@ try:
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore
 
-JOB_COMMANDS = {"run", "analyze", "autofix", "video", "report", "report-tasks"}
+JOB_COMMANDS = {"run", "analyze", "autofix", "video", "report", "report-tasks", "report-chain"}
 BUSY = "이미 실행 중인 작업이 있습니다 (터미널이나 다른/이전 대시보드에서 시작된 작업). 끝나거나 중지한 뒤 다시 시도하세요."
 
 

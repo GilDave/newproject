@@ -1193,6 +1193,42 @@ class DashboardApp:
             args += ["--config", self.config_path]
         return self._spawn("reporttasks", args, project, "보고서를 작은 작업으로 나누는 중")
 
+    def start_report_chain(self, project: str, body: dict) -> dict:
+        """Build the tasks of a report one after another, unattended, on a new branch (the same machinery as the overnight auto-fix)."""
+        project = self._known(project)
+        rid = str(body.get("id", ""))
+        try:
+            data = report_mod.load_tasks(Path(project), self.settings.state_dir, rid)
+        except report_mod.ReportError as exc:
+            raise ApiError(400, str(exc)) from exc
+        if not data:
+            raise ApiError(400, "작업 목록이 없습니다. 먼저 '작은 작업으로 나누기'를 하세요.")
+        ids = body.get("task_ids")
+        if ids is not None:
+            if not isinstance(ids, list) or not ids or len(ids) > 20 or not all(isinstance(i, int) and not isinstance(i, bool) and i > 0 for i in ids):
+                raise ApiError(400, "실행할 단계 번호 목록이 올바르지 않습니다.")
+        try:
+            hours = float(body.get("budget_hours", 6))
+        except (TypeError, ValueError):
+            raise ApiError(400, "시간 값이 올바르지 않습니다.") from None
+        if not 0.25 <= hours <= 24:
+            raise ApiError(400, "제한 시간은 0.25~24시간이어야 합니다.")
+        if not self.is_git(project):
+            raise ApiError(400, "자동 실행에는 git 저장소가 필요합니다 (커밋이 1개 이상).")
+        cmd, _ = self.effective_test_command(project)
+        if not cmd:
+            raise ApiError(400, "테스트 명령이 없으면 자동 실행을 하지 않습니다. 프로젝트 설정에서 테스트 명령을 정하세요.")
+        role_args = self._role_args(body.get("roles"))
+        self._ensure_idle()
+        args = [sys.executable, "-m", "solomon", "report-chain", "--project", project, "--id", rid, "--budget-minutes", str(int(hours * 60)),
+                "--test-command", shlex.join(cmd)]
+        if ids:
+            args += ["--tasks", ",".join(str(i) for i in ids)]
+        if self.config_path:
+            args += ["--config", self.config_path]
+        args += role_args
+        return self._spawn("autofix", args, project, f"보고서 순차 실행 ({len(ids) if ids else len(data['tasks'])}단계)")
+
     def edit_report_task(self, project: str, body: dict) -> dict:
         project = self._known(project)
         try:
@@ -1465,6 +1501,8 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"job": app.start_report(str(body.get("project", "")), body)})
                 if path == "/api/report/tasks":
                     return self._json(200, {"job": app.start_report_tasks(str(body.get("project", "")), body)})
+                if path == "/api/report/chain":
+                    return self._json(200, {"job": app.start_report_chain(str(body.get("project", "")), body)})
                 if path == "/api/report/task-run":
                     return self._json(200, {"job": app.run_report_task(str(body.get("project", "")), body)})
                 if path == "/api/report/task-edit":

@@ -506,6 +506,14 @@ def task_statuses(project: Path, state_dir: str, rid: str, tasks: list[dict]) ->
 
     runs = load_runs(Path(project), state_dir)
     marks = manage._load_marks(Path(project), state_dir)
+    batch_of: dict[str, str] = {}  # run id -> the chain (batch) that built it, so the screen can send the person to the right place to apply it
+    for f in (Path(project) / state_dir / "batches").glob("*/batch.json"):
+        try:
+            for it in json.loads(f.read_text(encoding="utf-8")).get("items", []):
+                if it.get("run_id"):
+                    batch_of[it["run_id"]] = f.parent.name
+        except (OSError, ValueError):
+            continue
     out: dict[int, dict] = {}
     for t in tasks:
         mk = task_marker(rid, t["id"], len(tasks))
@@ -522,5 +530,5 @@ def task_statuses(project: Path, state_dir: str, rid: str, tasks: list[dict]) ->
             st = "applied" if ms in ("applied", "committed") else "discarded" if ms == "discarded" else "passed"
         else:
             st = "failed"
-        out[t["id"]] = {"state": st, "run_id": r.run_id, "runs": len(mine), "status": r.status}
+        out[t["id"]] = {"state": st, "run_id": r.run_id, "runs": len(mine), "status": r.status, "batch_id": batch_of.get(r.run_id, "")}
     return out

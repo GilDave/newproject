@@ -140,7 +140,7 @@ DEFAULTS = {"enabled": False, "server": DEFAULT_SERVER, "signal": True, "signal_
             "signal_step": 0.10,  # "change" mode: a message when the direction flips or the target exposure moves by at least this much
             "error_gap_min": 30.0, "stale_hours": 9.0, "stale_repeat_hours": 6.0,
             # what a message may contain (all the user's choice)
-            "show_price": True, "show_entry": True, "show_pnl": True, "show_qty": False, "show_equity": True, "show_liq": True,
+            "show_price": True, "show_entry": True, "show_pnl": True, "show_qty": False, "show_equity": True, "show_liq": True, "job_done": True,
             "style": "compact",  # compact: direction, entry, now, profit %, liquidation price. detail: everything the switches allow
             "report": False, "report_minutes": 10.0, "quiet": False, "quiet_from": "23:00", "quiet_to": "07:00",
             "last_event_id": 0, "last_exposure": None, "last_error_alert": 0.0, "last_stale_alert": 0.0, "last_report": 0.0, "last_sent": 0.0, "last_failure": ""}
@@ -208,6 +208,18 @@ def read_monitor(port: int = 8787, get: Callable = _http_get_json) -> Optional[d
                 "exposure": ((d.get("cards") or {}).get("trend") or {}).get("detail", {}).get("target_exposure")}
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def notify_job_end(title: str, body: str, directory: Optional[Path] = None, http: Optional[Callable] = None) -> bool:
+    """A phone message when an unattended Solomon job ends, through the Bark key already saved for the bot alerts. Does nothing (False) when no
+    key is saved or the person switched job messages off; never raises."""
+    try:
+        a = Alerts(directory or (Path.home() / ".solomon" / "botlab"), http=http or _http_post)
+        if not a.config().get("job_done", True) or not a._secrets().get("device_key"):
+            return False
+        return bool(a._push(title, body[:400])[0])
+    except Exception:
+        return False
 
 
 def liquidation_estimate(qty: float, entry: float, balance: Optional[float]) -> Optional[float]:
@@ -286,7 +298,7 @@ class Alerts:
         dk = s.get("device_key", "")
         return {**{k: c[k] for k in ("enabled", "server", "signal", "signal_mode", "error", "stale", "last_sent", "last_failure", "signal_step", "error_gap_min",
                                      "stale_hours", "stale_repeat_hours", "report", "report_minutes", "quiet", "quiet_from", "quiet_to", "last_report",
-                                     "show_price", "show_entry", "show_pnl", "show_qty", "show_equity", "show_liq", "style")},
+                                     "show_price", "show_entry", "show_pnl", "show_qty", "show_equity", "show_liq", "style", "job_done")},
                 "key_set": bool(dk), "key_tail": dk[-4:] if len(dk) >= 8 else "", "enc_set": bool(s.get("enc_key"))}
 
     def update(self, body: dict) -> dict:
@@ -311,7 +323,7 @@ class Alerts:
             if not sv.startswith("https://"):
                 raise AlertError(400, "서버 주소는 https:// 로 시작해야 합니다.")
             c["server"] = sv
-        for k in ("signal", "error", "stale", "report", "quiet", "show_price", "show_entry", "show_pnl", "show_qty", "show_equity", "show_liq"):
+        for k in ("signal", "error", "stale", "report", "quiet", "show_price", "show_entry", "show_pnl", "show_qty", "show_equity", "show_liq", "job_done"):
             if k in body:
                 c[k] = bool(body[k])
         for k, (lo, hi) in LIMITS.items():

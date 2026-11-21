@@ -521,3 +521,9 @@ def test_without_a_liquidation_price_from_the_bot_an_estimate_from_the_account_b
     assert title == "🟢 ENA 숏 +14.3%" and body == "진입 0.113133 → 현재 0.097\n수익률 +14.26% · 청산가 0.28257(추정)"
     exact = A.position_from_monitor({"base": {"qty": -5948.0, "entry": 0.113, "liq": 0.31, "balance": 1007.8}})  # the bot's own number wins and is not marked
     assert exact["liq"] == 0.31 and exact["liq_est"] is False and "(추정)" not in A._compact(c, exact, 0.097)[1]
+
+
+def test_the_alert_card_has_the_job_end_switch():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    assert "순차 실행·밤샘 수정이 끝나면 알림" in html and "job_done: cj.checked" in html
+    assert A.Alerts(Path("/nonexistent-x")).config()["job_done"] is True
