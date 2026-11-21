@@ -129,13 +129,47 @@ def test_second_reviewer_is_skipped_when_the_first_fails(tmp_path):
     assert r.status == "FAILED" and p["agy"].calls == []
 
 
-def test_second_reviewer_without_verdict_is_an_error_never_a_pass(tmp_path):
+def test_an_extra_reviewer_without_a_verdict_is_replaced_by_another_ai(tmp_path):
     repo = make_repo(tmp_path)
     s = make_settings()
+    s.auto_failover = True
+    s.roles["reviewer2"] = "agy"
+    orch, p = three(s, [order_json(), review_json(), review_json()], [write_file("src/new.py")], agy=["junk", "junk", "junk"])
+    r = orch.run("goal", repo)
+    assert r.status == "PASSED" and len(p["agy"].calls) == 3 and len(p["codex"].calls) == 1  # the builder was never asked again
+    ev = events(r)
+    fb = next(e for e in ev if e["event"] == "review_fallback")
+    assert fb["role"] == "reviewer2" and fb["from"] == "agy" and fb["to"] == "claude"
+    assert orch.s.roles["reviewer2"] == "claude"  # for the rest of the run the unavailable AI is not asked again
+
+
+def test_an_extra_reviewer_nobody_can_replace_is_skipped_with_a_note_and_the_first_verdict_stands(tmp_path):
+    repo = make_repo(tmp_path)
+    s = make_settings()  # no automatic plan B
     s.roles["reviewer2"] = "agy"
     orch, p = three(s, [order_json(), review_json()], [write_file("src/new.py")], agy=["junk", "junk", "junk"])
     r = orch.run("goal", repo)
-    assert r.status == "ERROR" and r.patch_path is None and len(p["codex"].calls) == 1
+    assert r.status == "PASSED" and len(p["codex"].calls) == 1
+    assert any("review_skipped_unavailable" == e["event"] for e in events(r))
+    assert any("건너뛰었습니다" in w and "검수 강도가 낮아졌습니다" in w for w in r.warnings), r.warnings
+
+
+def test_the_first_reviewer_without_a_verdict_still_stops_the_run(tmp_path):
+    repo = make_repo(tmp_path)
+    orch, p = three(make_settings(), [order_json(), "junk", "junk", "junk"], [write_file("src/new.py")])
+    r = orch.run("goal", repo)
+    assert r.status == "ERROR" and r.patch_path is None and len(p["codex"].calls) == 1  # nobody checked the work: it is never a pass
+
+
+def test_a_reviewer_that_times_out_is_not_asked_again(tmp_path):
+    from solomon.providers.base import ProviderTimeout
+    repo = make_repo(tmp_path)
+    s = make_settings()
+    s.roles["reviewer2"] = "agy"
+    orch, p = three(s, [order_json(), review_json()], [write_file("src/new.py")], agy=[ProviderTimeout("ollama: 300초 안에 답하지 못했습니다")])
+    r = orch.run("goal", repo)
+    assert len(p["agy"].calls) == 1  # one slow answer is one wait, not three
+    assert r.status == "PASSED" and any("300초" in w for w in r.warnings)
 
 
 def test_second_reviewer_cannot_be_the_builder():

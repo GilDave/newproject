@@ -831,6 +831,7 @@ function fillRoleSelects(cur){
   const reviewers = ["reviewer", "reviewer2", "reviewer3"].map(r => v[r]).filter(Boolean);
   if (v.arbiter && v.arbiter === v.builder) hint.textContent = "⚠ 결정권자(" + pname(v.arbiter) + ")가 구현 AI와 같습니다. 자기 코드를 스스로 채택하지 않도록 다른 AI를 고르세요.";
   else if (reviewers.includes(v.builder)) hint.textContent = "⚠ 검수 AI 중에 구현 AI(" + pname(v.builder) + ")가 있습니다. 교차 검증이 되지 않으니 다르게 고르세요.";
+  else if (reviewers.some(r => (state.providers.find(p => p.name === r) || {}).local)) hint.textContent = "⚠ 로컬 모델(Ollama)을 검수에 쓰면 큰 변경에서 300초를 넘겨 응답하지 못하기 쉽습니다(그러면 다른 AI가 대신 검수합니다). 로컬 모델은 결정권자 역할에 쓰는 것을 권합니다.";
   else {
     const swap = ["builder2", "builder3"].map(r => v[r]).filter(x => x && (state.providers.find(p => p.name === x) || {}).supports_write);
     const bad = swap.find(w => reviewers.every(x => x === w));

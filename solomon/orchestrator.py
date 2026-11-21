@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from . import quota as quota_mod, arbiter as arbiter_mod, context, gitops, policy as policy_mod, prompts, scope_guard, vision as vision_mod, visual as visual_mod
 from .jsonutil import extract_json
 from .providers import Provider, ProviderError, ProviderResult, QuotaExhausted, build_providers
+from .providers.base import ProviderTimeout
 from .runlog import RunLog
 from .schemas import Order, ReviewResult
 from .tokens import estimate_tokens
@@ -363,6 +364,8 @@ class Orchestrator:
                 res = self._call(role, prompt, wt, False, log, images=images)
             except BlockedByQuota:
                 raise
+            except ProviderTimeout as exc:
+                return ReviewResult("FAIL", [f"reviewer did not answer in time: {exc}"], error=True)  # asking again would only cost another full timeout
             except ProviderError as exc:
                 last = ReviewResult("FAIL", [f"reviewer unavailable, treated as FAIL: {exc}"], error=True)
                 continue
@@ -392,6 +395,17 @@ class Orchestrator:
             who = self.s.roles[role]
             one = self._review_role(role, order, wt, verification, warnings, log, attempt, visual)
             log.event("review_role", role=role, provider=who, verdict=one.verdict, error=one.error, issues=one.issues, saw_images=who in self._visual_seers)
+            if one.error and self._switch(role, who, log, "reviewer gave no verdict"):
+                # a reviewer that cannot answer (a slow local model, a crashed CLI) is replaced by the next AI allowed to review, for the rest of the run
+                log.event("review_fallback", role=role, **{"from": who}, to=self.s.roles[role], attempt=attempt)
+                who = self.s.roles[role]
+                one = self._review_role(role, order, wt, verification, warnings, log, attempt, visual)
+                log.event("review_role", role=role, provider=who, verdict=one.verdict, error=one.error, issues=one.issues, saw_images=who in self._visual_seers)
+            if one.error and role != "reviewer":
+                # an extra reviewer that still cannot answer must not stop the run: the first reviewer's verdict stands, and the reduced check is said aloud
+                log.event("review_skipped_unavailable", role=role, provider=who, attempt=attempt, reason=(one.issues[0] if one.issues else "")[:200])
+                agg.notes.append(f"[{who}] {role}가 응답하지 못해 건너뛰었습니다 — 검수 강도가 낮아졌습니다: {(one.issues[0] if one.issues else '')[:120]}")
+                continue
             self._last_reviews.append({"role": role, "provider": who, "verdict": one.verdict, "issues": list(one.issues)})
             if one.error:
                 return ReviewResult("FAIL", [f"[{who}] {i}" for i in one.issues], error=True)

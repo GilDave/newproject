@@ -1,3 +1,4 @@
+from pathlib import Path
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -280,3 +281,8 @@ def test_alias_creation_posts_the_base_and_options_and_the_dashboard_switches_to
         assert load_settings(None).ollama_model == "solomon-arbiter"  # runs started later use it too
     finally:
         e.close(); srv.shutdown()
+
+
+def test_the_role_hint_warns_when_a_local_model_reviews():
+    html = (Path(__file__).parent.parent / "solomon" / "dashboard.html").read_text(encoding="utf-8")
+    assert "로컬 모델(Ollama)을 검수에 쓰면 큰 변경에서 300초를 넘겨 응답하지 못하기 쉽습니다" in html
