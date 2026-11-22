@@ -1,0 +1,326 @@
+diff --git a/ena_bot/hayes_holdings.py b/ena_bot/hayes_holdings.py
+index 83a88c8..55db722 100644
+--- a/ena_bot/hayes_holdings.py
++++ b/ena_bot/hayes_holdings.py
+@@ -269,6 +269,9 @@ def run_loop(conn, cfg: HoldingsConfig, env=None, fetch=None, sleep=time.sleep,
+     runs = 0
+     while max_runs is None or runs < max_runs:
+         collect_once(conn, cfg, env=env, fetch=fetch)
++        if fetch is None:  # 실제 운영 때만 ENA 시세를 함께 기록(실패해도 무시)
++            from .hayes_insight import record_price
++            record_price(conn)
+         runs += 1
+         if max_runs is not None and runs >= max_runs:
+             break
+diff --git a/ena_bot/hayes_insight.py b/ena_bot/hayes_insight.py
+new file mode 100644
+index 0000000..428cea5
+--- /dev/null
++++ b/ena_bot/hayes_insight.py
+@@ -0,0 +1,135 @@
++"""아서 헤이즈 ENA 보유량 '변화 모니터링' 계산. 수집기가 쌓은 SQLite 스냅샷에서 기간별 변화·지갑별 변화·변동 이력·추세를 만든다.
++
++읽기 전용이며 매매 엔진과 무관하다. ENA 가격은 수집기가 best-effort로 따로 기록한 값(hayes_price)만 쓴다.
++"""
++
++from __future__ import annotations
++
++import json
++import sqlite3
++import urllib.request
++from datetime import datetime, timedelta, timezone
++from decimal import Decimal
++from pathlib import Path
++
++from .hayes_holdings import _fmt, _now
++
++WINDOWS = (("24시간", timedelta(hours=24)), ("7일", timedelta(days=7)), ("30일", timedelta(days=30)))
++PRICE_URL = "https://api.bybit.com/v5/market/tickers?category=spot&symbol=ENAUSDT"
++PRICE_SCHEMA = "CREATE TABLE IF NOT EXISTS hayes_price (id INTEGER PRIMARY KEY AUTOINCREMENT, observed_at TEXT NOT NULL, price TEXT NOT NULL)"
++
++
++def _t(raw: str) -> datetime:
++    return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
++
++
++def default_price_fetch() -> str:
++    req = urllib.request.Request(PRICE_URL, headers={"Accept": "application/json"})
++    with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310 - 공개 시세 API(키 없음)
++        return str(json.loads(r.read().decode("utf-8"))["result"]["list"][0]["lastPrice"])
++
++
++def record_price(conn: sqlite3.Connection, fetch=None, now=None) -> str | None:
++    """ENA 현재가를 한 줄 기록한다. 실패해도 수집에는 영향이 없도록 None을 돌려줄 뿐이다."""
++    try:
++        price = str((fetch or default_price_fetch)())
++        if Decimal(price) <= 0:
++            return None
++        with conn:
++            conn.execute(PRICE_SCHEMA)
++            conn.execute("INSERT INTO hayes_price (observed_at, price) VALUES (?,?)", (now or _now(), price))
++        return price
++    except Exception:  # noqa: BLE001
++        return None
++
++
++def _pct(new: Decimal, old: Decimal):
++    return None if old == 0 else float((new - old) / old * 100)
++
++
++def _wallets(entries_json: str) -> dict:
++    out: dict = {}
++    for e in json.loads(entries_json):
++        bal = Decimal(_fmt(int(e["balance_raw"]), int(e["decimals"])))
++        key = e["wallet"]
++        out[key] = {"balance": out.get(key, {}).get("balance", Decimal(0)) + bal, "chain": e["chain"], "url": e.get("attribution_url", "")}
++    return out
++
++
++def summary(db_path, now: datetime | None = None, max_points: int = 60, max_events: int = 10) -> dict:
++    now = now or datetime.now(timezone.utc)
++    out = {"state": "empty", "status": None, "windows": [], "wallets": [], "events": [], "series": [], "price": None}
++    p = Path(db_path)
++    if not p.is_file():
++        return out
++    try:
++        conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
++        conn.row_factory = sqlite3.Row
++    except sqlite3.Error:
++        return out
++    try:
++        st = conn.execute("SELECT checked_at, status, detail FROM hayes_status ORDER BY id DESC LIMIT 1").fetchone()
++        if st:
++            out["status"] = {"checked_at": st["checked_at"], "status": st["status"], "detail": st["detail"]}
++        last = conn.execute("SELECT * FROM hayes_snapshots ORDER BY id DESC LIMIT 1").fetchone()
++        if last is None:
++            return out
++        rows = conn.execute("SELECT id, observed_at, total, delta, entries_json FROM hayes_snapshots WHERE scope=? ORDER BY id ASC",
++                            (last["scope"],)).fetchall()
++        try:
++            pr = conn.execute("SELECT observed_at, price FROM hayes_price ORDER BY id DESC LIMIT 1").fetchone()
++        except sqlite3.Error:
++            pr = None
++    except sqlite3.Error:
++        return out
++    finally:
++        conn.close()
++
++    cur_total = Decimal(last["total"])
++    obs = _t(last["observed_at"])
++    age_h = (now - obs).total_seconds() / 3600
++    out.update({"state": "ok", "total": last["total"], "observed_at": last["observed_at"], "age_hours": round(age_h, 1),
++                "stale": age_h > 3, "snapshots": len(rows), "since": rows[0]["observed_at"]})
++
++    def baseline(delta: timedelta):
++        cut = obs - delta
++        older = [r for r in rows if _t(r["observed_at"]) <= cut]
++        return (older[-1], False) if older else (rows[0], True)
++
++    for label, delta in WINDOWS:
++        base, partial = baseline(delta)
++        if base["id"] == last["id"]:
++            continue
++        diff = cur_total - Decimal(base["total"])
++        out["windows"].append({"label": label, "change": format(diff, "f"), "pct": _pct(cur_total, Decimal(base["total"])),
++                               "partial": partial, "from": base["observed_at"]})
++    first = rows[0]
++    if first["id"] != last["id"]:
++        diff = cur_total - Decimal(first["total"])
++        out["windows"].append({"label": "기록 시작 이후", "change": format(diff, "f"), "pct": _pct(cur_total, Decimal(first["total"])),
++                               "partial": False, "from": first["observed_at"]})
++
++    now_w = _wallets(last["entries_json"])
++    prev_w = _wallets(rows[-2]["entries_json"]) if len(rows) > 1 else {}
++    day_w = _wallets(baseline(timedelta(hours=24))[0]["entries_json"])
++    for addr, info in now_w.items():
++        out["wallets"].append({
++            "wallet": addr, "chain": info["chain"], "url": info["url"], "balance": format(info["balance"], "f"),
++            "share_pct": float(info["balance"] / cur_total * 100) if cur_total else None,
++            "change_24h": format(info["balance"] - day_w.get(addr, {}).get("balance", info["balance"]), "f")})
++    for r in reversed(rows):
++        if r["delta"] is not None and Decimal(r["delta"]) != 0:
++            out["events"].append({"at": r["observed_at"], "delta": r["delta"], "total": r["total"]})
++            if len(out["events"]) >= max_events:
++                break
++    step = max(1, len(rows) // max_points)
++    pts = rows[::step]
++    if pts[-1]["id"] != rows[-1]["id"]:
++        pts.append(rows[-1])
++    out["series"] = [[r["observed_at"], float(Decimal(r["total"]))] for r in pts]
++    if pr is not None:
++        price = Decimal(pr["price"])
++        out["price"] = {"value": pr["price"], "at": pr["observed_at"], "usd_value": format((cur_total * price).quantize(Decimal("1")), "f")}
++        if out["windows"] and Decimal(out["windows"][0]["change"]) != 0:
++            out["price"]["usd_change_first_window"] = format((Decimal(out["windows"][0]["change"]) * price).quantize(Decimal("1")), "f")
++    return out
+diff --git a/tests/test_hayes_insight.py b/tests/test_hayes_insight.py
+new file mode 100644
+index 0000000..3ea7f70
+--- /dev/null
++++ b/tests/test_hayes_insight.py
+@@ -0,0 +1,79 @@
++import subprocess
++import sys
++from datetime import datetime, timezone
++from decimal import Decimal
++from pathlib import Path
++
++from ena_bot import hayes_holdings as hh
++from ena_bot import hayes_insight as hi
++
++W1 = "0x" + "11" * 20
++W2 = "0x" + "22" * 20
++E = lambda w: {"chain": "ethereum", "wallet": w, "contract": "0x" + "33" * 20, "attribution_url": "https://x.example/a"}
++TOOL = Path(__file__).resolve().parents[1] / "tools" / "wire_hayes_insight.py"
++NOW = datetime(2026, 11, 22, 12, 0, 0, tzinfo=timezone.utc)
++
++
++def collect(conn, at, bal):
++    cfg = hh.HoldingsConfig(entries=[E(W1), E(W2)], provider_url="https://p.example/x")
++    f = lambda u, p, h: {"balance": str(bal[p["wallet"]] * 10**18), "decimals": 18}
++    return hh.collect_once(conn, cfg, env={"HAYES_HOLDINGS_API_KEY": "k"}, fetch=f, now=at)
++
++
++def build(tmp_path):
++    db = tmp_path / "h.sqlite"
++    conn = hh.connect(db)
++    collect(conn, "2026-11-14T12:00:00Z", {W1: 1000, W2: 500})   # 8일 전
++    collect(conn, "2026-11-21T10:00:00Z", {W1: 1000, W2: 500})   # 26시간 전
++    collect(conn, "2026-11-22T06:00:00Z", {W1: 1200, W2: 500})   # 6시간 전(+200)
++    collect(conn, "2026-11-22T11:00:00Z", {W1: 1200, W2: 450})   # 1시간 전(-50)
++    return db, conn
++
++
++def test_empty_and_missing(tmp_path):
++    assert hi.summary(tmp_path / "none.sqlite", NOW)["state"] == "empty"
++    conn = hh.connect(tmp_path / "e.sqlite")
++    hh.collect_once(conn, hh.HoldingsConfig(), env={}, now="2026-11-22T11:00:00Z")
++    j = hi.summary(tmp_path / "e.sqlite", NOW)
++    assert j["state"] == "empty" and j["status"]["status"] == "empty_config"
++
++
++def test_windows_wallets_events(tmp_path):
++    db, conn = build(tmp_path)
++    j = hi.summary(db, NOW)
++    assert j["state"] == "ok" and Decimal(j["total"]) == 1650 and not j["stale"]
++    w = {x["label"]: x for x in j["windows"]}
++    assert Decimal(w["24시간"]["change"]) == 150 and abs(w["24시간"]["pct"] - 150 / 1500 * 100) < 1e-9  # 26h 전 기준(1500)
++    assert Decimal(w["7일"]["change"]) == 150          # 8일 전 스냅샷이 아니라 7일 이전 중 가장 최근(8일 전=1500)
++    assert Decimal(w["기록 시작 이후"]["change"]) == 150
++    assert [Decimal(e["delta"]) for e in j["events"]] == [-50, 200]
++    wal = {x["wallet"]: x for x in j["wallets"]}
++    assert Decimal(wal[W1]["balance"]) == 1200 and Decimal(wal[W2]["change_24h"]) == -50
++    assert abs(wal[W1]["share_pct"] - 1200 / 1650 * 100) < 1e-6
++    assert j["series"][-1][1] == 1650.0
++
++
++def test_stale_and_price(tmp_path):
++    db, conn = build(tmp_path)
++    assert hi.record_price(conn, fetch=lambda: "0.5", now="2026-11-22T11:30:00Z") == "0.5"
++    assert hi.record_price(conn, fetch=lambda: 1 / 0) is None
++    later = datetime(2026, 11, 22, 20, 0, 0, tzinfo=timezone.utc)
++    j = hi.summary(db, later)
++    assert j["stale"] and j["price"]["usd_value"] == "825"
++
++
++def test_wire_tool(tmp_path):
++    (tmp_path / "ena_bot/dashboard_static").mkdir(parents=True)
++    (tmp_path / "ena_bot/dashboard.py").write_text(
++        "from . import hayes_lookup\ndef f():\n    class H:\n        def do_GET(self):\n            try:\n                if 0:\n                    pass\n"
++        '                elif url.path == "/api/hayes-lookup":\n                    pass\n            except ValueError:\n                pass\n')
++    (tmp_path / "ena_bot/dashboard_static/index.html").write_text('<body>\n  <details class="panel hayes-lookup" id="hayes-lookup">\n</body>')
++    run = lambda: subprocess.run([sys.executable, str(TOOL), str(tmp_path)], capture_output=True, text=True)
++    assert run().returncode == 0
++    d = (tmp_path / "ena_bot/dashboard.py").read_text()
++    compile(d, "d", "exec")
++    assert "hayes_insight.summary" in d
++    assert "이미 적용됨" in run().stdout
++    assert (tmp_path / "ena_bot/dashboard_static/index.html").read_text().count('id="hayes-ins"') == 1
++    (tmp_path / "ena_bot/dashboard.py").write_text("x=1\n")
++    assert run().returncode != 0 and (tmp_path / "ena_bot/dashboard.py").read_text() == "x=1\n"
+diff --git a/tools/wire_hayes_insight.py b/tools/wire_hayes_insight.py
+new file mode 100644
+index 0000000..ac2164e
+--- /dev/null
++++ b/tools/wire_hayes_insight.py
+@@ -0,0 +1,80 @@
++"""대시보드에 '변화 모니터링' 패널을 연결한다(wire_hayes_lookup.py를 먼저 적용해야 함). 여러 번 실행해도 안전.
++사용: .venv/bin/python tools/wire_hayes_insight.py [프로젝트 폴더]
++"""
++import sys
++from pathlib import Path
++
++root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
++dash = root / "ena_bot/dashboard.py"
++page = root / "ena_bot/dashboard_static/index.html"
++
++IMP_A = "from . import hayes_lookup\n"
++IMP_B = IMP_A + "from . import hayes_insight\n"
++GET_A = '                elif url.path == "/api/hayes-lookup":\n'
++GET_B = '''                elif url.path == "/api/hayes-insight":
++                    self._json(hayes_insight.summary(cfg.data_path / "hayes_holdings.sqlite"))
++''' + GET_A
++UI_A = '  <details class="panel hayes-lookup" id="hayes-lookup">'
++UI_B = '''  <section class="panel hayes-ins" id="hayes-ins"><div class="hi-title">아서 헤이즈 ENA 변화 모니터링</div><div id="hi-body">불러오는 중…</div></section>
++  <style>.hayes-ins{margin-bottom:10px;padding:10px 12px;font-size:12px}.hi-title{font-weight:600;color:var(--mute);margin-bottom:6px}
++  .hi-big{font-size:22px;font-weight:700}.hi-sub{color:var(--mute);margin:2px 0 6px}.hi-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
++  .hi-chip{border:1px solid var(--line,#8884);border-radius:6px;padding:3px 8px}.hi-up{color:#2e9e5b}.hi-down{color:#d6453d}.hi-flat{color:var(--mute)}
++  .hi-sec{font-weight:600;margin:10px 0 3px}.hi-tbl{display:grid;grid-template-columns:max-content 1fr max-content;gap:2px 12px}.hi-tbl .w{overflow-wrap:anywhere}
++  .hi-warn{color:#d6453d;font-weight:600;margin:4px 0}.hi-spark{width:100%;height:56px;display:block}</style>
++  <script>(function(){
++    const body=document.getElementById('hi-body');
++    const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e;};
++    const num=(s,d)=>{const n=Number(s);return isFinite(n)?n.toLocaleString('en-US',{maximumFractionDigits:d==null?2:d}):s;};
++    const sign=(s)=>{const n=Number(s);return n>0?['▲ +','hi-up']:n<0?['▼ ','hi-down']:['― ','hi-flat'];};
++    const kst=(s)=>{const d=new Date(s);return isNaN(d)?s:d.toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});};
++    function spark(series){
++      const NS='http://www.w3.org/2000/svg',w=300,h=56,svg=document.createElementNS(NS,'svg');svg.setAttribute('viewBox','0 0 '+w+' '+h);svg.setAttribute('class','hi-spark');svg.setAttribute('preserveAspectRatio','none');
++      const v=series.map(p=>p[1]),mn=Math.min(...v),mx=Math.max(...v),rg=(mx-mn)||1;
++      const pts=series.map((p,i)=>(series.length<2?w/2:i*w/(series.length-1)).toFixed(1)+','+(h-4-(p[1]-mn)/rg*(h-8)).toFixed(1));
++      const pl=document.createElementNS(NS,'polyline');pl.setAttribute('points',pts.join(' '));pl.setAttribute('fill','none');pl.setAttribute('stroke','currentColor');pl.setAttribute('stroke-width','2');svg.appendChild(pl);return svg;}
++    function render(j){
++      body.textContent='';
++      if(j.status&&j.status.status!=='ok'){const m={empty_config:'등록된 지갑이 없음',missing_provider:'공급자 설정 없음',missing_key:'API 키 없음',invalid_config:'설정 오류',request_failed:'조회 실패',partial_failure:'일부 지갑 조회 실패'};
++        body.appendChild(el('div','hi-warn','최근 수집 상태: '+(m[j.status.status]||j.status.status)+' · '+kst(j.status.checked_at)+(j.status.detail?' · '+j.status.detail.slice(0,160):'')));}
++      if(j.state!=='ok'){body.appendChild(el('div','hi-sub','아직 정상 수집된 기록이 없습니다. 위 패널에서 지갑을 등록하세요.'));return;}
++      body.appendChild(el('div','hi-big',num(j.total,2)+' ENA'));
++      let sub='마지막 확인 '+kst(j.observed_at)+' · 기록 '+j.snapshots+'건 · '+kst(j.since)+'부터';
++      body.appendChild(el('div','hi-sub',sub));
++      if(j.stale)body.appendChild(el('div','hi-warn','⚠ '+Math.floor(j.age_hours)+'시간 전 데이터 — 수집이 멈췄을 수 있습니다'));
++      if(j.price){body.appendChild(el('div','hi-sub','ENA '+num(j.price.value,4)+' USD · 평가액 약 $'+num(j.price.usd_value,0)+(j.price.usd_change_first_window?' (최근 변동 약 $'+num(j.price.usd_change_first_window,0)+')':'')));}
++      const chips=el('div','hi-chips');
++      if(!j.windows.length)chips.appendChild(el('span','hi-chip hi-flat','변화 비교는 기록이 더 쌓이면 표시됩니다'));
++      j.windows.forEach(w=>{const[sg,cl]=sign(w.change);const c=el('span','hi-chip '+cl,w.label+' '+sg+num(w.change,2)+(w.pct==null?'':' ('+(w.pct>0?'+':'')+w.pct.toFixed(2)+'%)')+(w.partial?' *':''));
++        c.title='기준 '+kst(w.from)+(w.partial?' · 기록이 짧아 가장 오래된 값 기준':'');chips.appendChild(c);});
++      body.appendChild(chips);
++      if(j.series.length>1)body.appendChild(spark(j.series));
++      if(j.wallets.length){body.appendChild(el('div','hi-sec','지갑별'));const t=el('div','hi-tbl');
++        j.wallets.forEach(w=>{t.appendChild(el('span','w',w.wallet.slice(0,6)+'…'+w.wallet.slice(-4)));t.appendChild(el('span',null,num(w.balance,2)+' ENA'+(w.share_pct==null?'':' ('+w.share_pct.toFixed(0)+'%)')));
++          const[sg,cl]=sign(w.change_24h);t.appendChild(el('span',cl,'24h '+(Number(w.change_24h)===0?'변화 없음':sg+num(w.change_24h,2))));});body.appendChild(t);}
++      body.appendChild(el('div','hi-sec','최근 변동'));
++      if(!j.events.length)body.appendChild(el('div','hi-sub','아직 보유량이 바뀐 기록이 없습니다'));
++      j.events.forEach(e=>{const[sg,cl]=sign(e.delta);const r=el('div',cl,kst(e.at)+'  '+sg+num(e.delta,2)+' ENA → 합계 '+num(e.total,2));body.appendChild(r);});
++    }
++    async function load(){try{const r=await fetch('/api/hayes-insight');if(r.ok)render(await r.json());}catch(e){}}
++    load();setInterval(load,60000);
++  })();</script>
++''' + UI_A
++
++
++def edit(path, a, b, done):
++    s = path.read_text(encoding="utf-8")
++    if done in s:
++        print("이미 적용됨:", path.name, done)
++        return
++    path.write_text(s.replace(a, b, 1), encoding="utf-8")
++    print("수정:", path.name)
++
++
++ds, ps = dash.read_text(encoding="utf-8"), page.read_text(encoding="utf-8")
++checks = [(ds, IMP_A, "from . import hayes_insight"), (ds, GET_A, "/api/hayes-insight"), (ps, UI_A, 'id="hayes-ins"')]
++for s, a, done in checks:
++    if done not in s and s.count(a) != 1:
++        raise SystemExit(f"연결할 위치를 찾지 못했습니다(조회·등록 패치를 먼저 적용했는지 확인): {a.strip()[:50]} — 수정하지 않았습니다.")
++edit(dash, IMP_A, IMP_B, "from . import hayes_insight")
++edit(dash, GET_A, GET_B, "/api/hayes-insight")
++edit(page, UI_A, UI_B, 'id="hayes-ins"')
