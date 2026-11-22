@@ -1,0 +1,324 @@
+diff --git a/ena_bot/__pycache__/__init__.cpython-313.pyc b/ena_bot/__pycache__/__init__.cpython-313.pyc
+new file mode 100644
+index 0000000..f782d4a
+Binary files /dev/null and b/ena_bot/__pycache__/__init__.cpython-313.pyc differ
+diff --git a/ena_bot/__pycache__/hayes_holdings.cpython-313.pyc b/ena_bot/__pycache__/hayes_holdings.cpython-313.pyc
+new file mode 100644
+index 0000000..f870bed
+Binary files /dev/null and b/ena_bot/__pycache__/hayes_holdings.cpython-313.pyc differ
+diff --git a/ena_bot/__pycache__/hayes_rpc.cpython-313.pyc b/ena_bot/__pycache__/hayes_rpc.cpython-313.pyc
+new file mode 100644
+index 0000000..3b92b72
+Binary files /dev/null and b/ena_bot/__pycache__/hayes_rpc.cpython-313.pyc differ
+diff --git a/ena_bot/hayes_holdings.py b/ena_bot/hayes_holdings.py
+index bfc5198..83a88c8 100644
+--- a/ena_bot/hayes_holdings.py
++++ b/ena_bot/hayes_holdings.py
+@@ -46,6 +46,7 @@ class HoldingsConfig:
+     interval_min: int = DEFAULT_INTERVAL_MIN
+     api_key_env: str = DEFAULT_KEY_ENV
+     db_path: str = ""
++    rpc_urls: dict = field(default_factory=dict)
+ 
+     @classmethod
+     def from_dict(cls, d: dict | None) -> "HoldingsConfig":
+@@ -61,6 +62,7 @@ class HoldingsConfig:
+             interval_min=interval,
+             api_key_env=str(d.get("api_key_env") or DEFAULT_KEY_ENV),
+             db_path=str(d.get("db_path") or ""),
++            rpc_urls=dict(d.get("rpc_urls") or {}),
+         )
+ 
+ 
+@@ -196,7 +198,13 @@ def _record(conn, status: str, detail: str, snapshot_id=None, at: str | None = N
+ def collect_once(conn, cfg: HoldingsConfig, env: dict | None = None, fetch=None, now=None) -> dict:
+     """한 번 수집한다. 실패 시 마지막 정상 스냅샷은 그대로 두고 상태만 기록한다. {'status','detail','snapshot_id'}."""
+     env = os.environ if env is None else env
+-    fetch = fetch or default_fetch
++    use_rpc = cfg.provider_url == "evm_rpc"  # 키 없는 온체인 조회
++    if fetch is None:
++        if use_rpc:
++            from .hayes_rpc import make_fetch
++            fetch = make_fetch(cfg.rpc_urls)
++        else:
++            fetch = default_fetch
+     at = (now() if callable(now) else now) or _now()
+ 
+     def fail(status: str, detail: str = "") -> dict:
+@@ -208,7 +216,7 @@ def collect_once(conn, cfg: HoldingsConfig, env: dict | None = None, fetch=None,
+     if not cfg.provider_url:
+         return fail("missing_provider", "공급자 URL 없음")
+     key = (env.get(cfg.api_key_env) or "").strip()
+-    if not key:
++    if not key and not use_rpc:
+         return fail("missing_key", f"환경 변수 {cfg.api_key_env} 없음")
+     try:
+         entries = normalize_entries(cfg.entries)
+@@ -239,7 +247,7 @@ def collect_once(conn, cfg: HoldingsConfig, env: dict | None = None, fetch=None,
+     total = sum_balances(parts)
+     scope = json.dumps(sorted([e["chain"], e["wallet"], e["contract"]] for e in entries), separators=(",", ":"))
+     parsed = urllib.parse.urlsplit(cfg.provider_url)
+-    source = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
++    source = "evm_rpc" if use_rpc else f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+     wallets = len({(e["chain"], e["wallet"]) for e in entries})
+     with conn:  # 스냅샷과 상태를 한 트랜잭션으로
+         prev = conn.execute("SELECT id, total FROM hayes_snapshots WHERE scope=? ORDER BY id DESC LIMIT 1", (scope,)).fetchone()
+@@ -268,12 +276,82 @@ def run_loop(conn, cfg: HoldingsConfig, env=None, fetch=None, sleep=time.sleep,
+     return runs
+ 
+ 
++def check_entries(cfg: HoldingsConfig, fetch=None) -> list[str]:
++    """DB에 쓰지 않고 지갑마다 결과 한 줄을 만든다(실패 사유 포함)."""
++    if not cfg.entries:
++        return ["등록된 지갑이 없다. --add 지갑주소 출처URL 로 추가하세요."]
++    if cfg.provider_url == "evm_rpc" and fetch is None:
++        from .hayes_rpc import make_fetch
++        fetch = make_fetch(cfg.rpc_urls)
++    if fetch is None:
++        return [f"공급자 {cfg.provider_url or '(없음)'}: --check는 evm_rpc만 지원"]
++    out = []
++    try:
++        entries = normalize_entries(cfg.entries)
++    except HoldingsError as exc:
++        return [f"설정 오류: {exc.detail}"]
++    for e in entries:
++        try:
++            r = fetch(cfg.provider_url, {"chain": e["chain"], "wallet": e["wallet"], "contract": e["contract"]}, {})
++            out.append(f"OK   {e['chain']} {e['wallet']} = {_fmt(_int(r['balance'], 'balance'), _int(r['decimals'], 'decimals'))} ENA")
++        except Exception as exc:
++            out.append(f"FAIL {e['chain']} {e['wallet']}: {type(exc).__name__}: {exc}")
++    return out
++
++
++def add_entry(config_path: str | Path, wallet: str, attribution_url: str, chain: str = "ethereum", contract: str | None = None) -> dict:
++    """config.json에 지갑 한 줄을 추가하고 evm_rpc 공급자로 맞춘다. 주소·출처는 사용자가 직접 확인해 넣는다."""
++    from .hayes_rpc import ENA_ETHEREUM
++    path = Path(config_path)
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    entry = {"chain": chain, "wallet": wallet, "contract": contract or ENA_ETHEREUM, "attribution_url": attribution_url}
++    normalize_entries([entry])  # 형식 검사(잘못되면 HoldingsError)
++    sec = raw.setdefault("hayes_holdings", {})
++    sec.setdefault("interval_min", DEFAULT_INTERVAL_MIN)
++    sec["provider_url"] = "evm_rpc"
++    sec.setdefault("entries", []).append(entry)
++    path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
++    return entry
++
++
++PLIST = """<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0"><dict>
++<key>Label</key><string>com.ena.hayes</string>
++<key>WorkingDirectory</key><string>{cwd}</string>
++<key>ProgramArguments</key><array><string>{py}</string><string>-m</string><string>ena_bot.hayes_holdings</string><string>--config</string><string>{cfg}</string></array>
++<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
++<key>StandardOutPath</key><string>{cwd}/data/hayes.log</string><key>StandardErrorPath</key><string>{cwd}/data/hayes.log</string>
++</dict></plist>
++"""
++
++
+ def main(argv: list[str] | None = None) -> int:
+     ap = argparse.ArgumentParser(description="공개 지갑 ENA 잔액 수집기(대시보드·엔진과 독립)")
+     ap.add_argument("--config", default="config.json")
+     ap.add_argument("--once", action="store_true", help="한 번만 수집하고 종료")
++    ap.add_argument("--check", action="store_true", help="저장 없이 지갑별 잔액·실패 사유를 출력")
++    ap.add_argument("--add", nargs=2, metavar=("WALLET", "ATTRIBUTION_URL"), help="지갑 추가(이더리움 ENA)")
++    ap.add_argument("--install-launchd", action="store_true", help="맥 launchd에 상시 수집 서비스 등록")
+     args = ap.parse_args(argv)
++    if args.add:
++        print(json.dumps(add_entry(args.config, *args.add), ensure_ascii=False))
++        return 0
++    if args.install_launchd:
++        import subprocess
++        import sys
++        plist = Path.home() / "Library/LaunchAgents/com.ena.hayes.plist"
++        plist.write_text(PLIST.format(cwd=os.getcwd(), py=sys.executable, cfg=os.path.abspath(args.config)), encoding="utf-8")
++        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.ena.hayes"], check=False)
++        subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)], check=True)
++        print(f"등록 완료: {plist}")
++        return 0
+     cfg, data_dir = load_config(args.config)
++    if args.check:
++        res = check_entries(cfg)
++        for line in res:
++            print(line)
++        return 0
+     conn = connect(cfg.db_path or Path(data_dir) / "hayes_holdings.sqlite")
+     if args.once:
+         print(json.dumps(collect_once(conn, cfg), ensure_ascii=False))
+diff --git a/ena_bot/hayes_rpc.py b/ena_bot/hayes_rpc.py
+new file mode 100644
+index 0000000..4160f94
+--- /dev/null
++++ b/ena_bot/hayes_rpc.py
+@@ -0,0 +1,80 @@
++"""키 없는 EVM JSON-RPC 공급자. 지갑의 ENA(ERC-20) 직접 보유량만 온체인에서 읽는다.
++
++`hayes_holdings.provider_url`을 "evm_rpc"로 두면 수집기가 이 모듈을 쓴다(API 키 불필요).
++계약 주소가 실제 ENA가 맞는지 `symbol()`로 확인하고, 소수 자릿수도 `decimals()`로 직접 읽는다.
++"""
++
++from __future__ import annotations
++
++import json
++import urllib.request
++
++PROVIDER_NAME = "evm_rpc"
++EXPECTED_SYMBOL = "ENA"
++# 이더리움 메인넷 ENA. 반드시 Etherscan에서 한 번 더 확인할 것(틀려도 symbol 검사가 막는다).
++ENA_ETHEREUM = "0x57e114b691db790c35207b2e685d4a43181e6061"
++
++DEFAULT_RPC_URLS = {
++    "ethereum": ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"],
++}
++
++SEL_BALANCE_OF = "0x70a08231"
++SEL_SYMBOL = "0x95d89b41"
++SEL_DECIMALS = "0x313ce567"
++
++
++def default_rpc(url: str, method: str, params: list):
++    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
++    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "Accept": "application/json"})
++    with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310 - 설정된 RPC URL
++        out = json.loads(r.read().decode("utf-8"))
++    if out.get("error"):
++        raise RuntimeError(f"RPC 오류: {out['error']}")
++    return out["result"]
++
++
++def _call(rpc, urls: list, to: str, data: str) -> str:
++    last = None
++    for u in urls:
++        try:
++            res = rpc(u, "eth_call", [{"to": to, "data": data}, "latest"])
++            if isinstance(res, str) and res.startswith("0x") and len(res) > 2:
++                return res
++            last = RuntimeError(f"빈 응답: {res!r}")
++        except Exception as exc:  # 다음 RPC로 넘어간다
++            last = exc
++    raise RuntimeError(f"모든 RPC 실패: {type(last).__name__}: {last}")
++
++
++def decode_string(hexstr: str) -> str:
++    raw = bytes.fromhex(hexstr[2:])
++    if len(raw) == 32:  # bytes32 형식 심볼
++        return raw.rstrip(b"\x00").decode("utf-8", "replace")
++    if len(raw) < 64:
++        raise ValueError("문자열 응답 형식 오류")
++    off = int.from_bytes(raw[:32], "big")
++    n = int.from_bytes(raw[off:off + 32], "big")
++    return raw[off + 32:off + 32 + n].decode("utf-8", "replace")
++
++
++def make_fetch(rpc_urls: dict | None = None, rpc=None):
++    """수집기의 fetch 계약((url, params, headers) -> {'balance','decimals'})을 만족하는 함수."""
++    rpc = rpc or default_rpc
++    urls_by_chain = {**DEFAULT_RPC_URLS, **{k: list(v) for k, v in (rpc_urls or {}).items()}}
++    verified: dict = {}
++
++    def fetch(_url: str, params: dict, _headers: dict) -> dict:
++        chain, wallet, contract = params["chain"], params["wallet"], params["contract"]
++        urls = urls_by_chain.get(chain)
++        if not urls:
++            raise ValueError(f"{chain}용 RPC URL이 없다(config의 hayes_holdings.rpc_urls에 추가)")
++        key = (chain, contract)
++        if key not in verified:
++            sym = decode_string(_call(rpc, urls, contract, SEL_SYMBOL))
++            if sym != EXPECTED_SYMBOL:
++                raise ValueError(f"계약 {contract}의 심볼이 {sym!r}이다(ENA 아님)")
++            verified[key] = int(_call(rpc, urls, contract, SEL_DECIMALS), 16)
++        data = SEL_BALANCE_OF + wallet[2:].rjust(64, "0")
++        return {"balance": str(int(_call(rpc, urls, contract, data), 16)), "decimals": verified[key]}
++
++    return fetch
+diff --git a/tests/__pycache__/test_hayes_rpc.cpython-313-pytest-9.1.1.pyc b/tests/__pycache__/test_hayes_rpc.cpython-313-pytest-9.1.1.pyc
+new file mode 100644
+index 0000000..2c5f139
+Binary files /dev/null and b/tests/__pycache__/test_hayes_rpc.cpython-313-pytest-9.1.1.pyc differ
+diff --git a/tests/test_hayes_rpc.py b/tests/test_hayes_rpc.py
+new file mode 100644
+index 0000000..103293e
+--- /dev/null
++++ b/tests/test_hayes_rpc.py
+@@ -0,0 +1,80 @@
++import json
++from ena_bot import hayes_holdings as h
++from ena_bot.hayes_rpc import make_fetch, ENA_ETHEREUM, SEL_SYMBOL, SEL_DECIMALS, SEL_BALANCE_OF
++
++W1 = "0x" + "11" * 20
++W2 = "0x" + "22" * 20
++
++
++def _str(s):
++    b = s.encode()
++    return "0x" + (32).to_bytes(32, "big").hex() + len(b).to_bytes(32, "big").hex() + b.ljust(32, b"\0").hex()
++
++
++def fake_rpc(symbol="ENA", balances=None, fail_urls=()):
++    balances = balances or {}
++
++    def rpc(url, method, params):
++        if url in fail_urls:
++            raise OSError("down")
++        data = params[0]["data"]
++        if data == SEL_SYMBOL:
++            return _str(symbol)
++        if data == SEL_DECIMALS:
++            return hex(18)
++        assert data.startswith(SEL_BALANCE_OF)
++        return hex(balances.get("0x" + data[-40:], 0))
++    return rpc
++
++
++def cfg(entries):
++    return h.HoldingsConfig(entries=entries, provider_url="evm_rpc")
++
++
++def ent(w):
++    return {"chain": "ethereum", "wallet": w, "contract": ENA_ETHEREUM, "attribution_url": "https://x.example/a"}
++
++
++def test_collect_ok_without_key(tmp_path):
++    conn = h.connect(tmp_path / "d.sqlite")
++    f = make_fetch(rpc=fake_rpc(balances={W1: 5 * 10**18, W2: 10**18 // 2}))
++    r = h.collect_once(conn, cfg([ent(W1), ent(W2)]), env={}, fetch=f)
++    assert r["status"] == "ok"
++    assert h.latest_snapshot(conn)["total"] == "5.500000000000000000"
++    assert h.latest_snapshot(conn)["source"] == "evm_rpc"
++
++
++def test_wrong_symbol_rejected(tmp_path):
++    conn = h.connect(tmp_path / "d.sqlite")
++    f = make_fetch(rpc=fake_rpc(symbol="SCAM", balances={W1: 1}))
++    r = h.collect_once(conn, cfg([ent(W1)]), env={}, fetch=f)
++    assert r["status"] == "request_failed" and "ENA 아님" in r["detail"]
++    assert h.latest_snapshot(conn) is None
++
++
++def test_rpc_fallback(tmp_path):
++    f = make_fetch(rpc_urls={"ethereum": ["https://bad", "https://good"]}, rpc=fake_rpc(balances={W1: 10**18}, fail_urls=("https://bad",)))
++    assert f("", {"chain": "ethereum", "wallet": W1, "contract": ENA_ETHEREUM}, {})["balance"] == str(10**18)
++
++
++def test_empty_and_legacy_behaviour_kept(tmp_path):
++    conn = h.connect(tmp_path / "d.sqlite")
++    assert h.collect_once(conn, h.HoldingsConfig(), env={})["status"] == "empty_config"
++    assert h.collect_once(conn, h.HoldingsConfig(entries=[ent(W1)]), env={})["status"] == "missing_provider"
++    c = h.HoldingsConfig(entries=[ent(W1)], provider_url="https://p.example/x")
++    assert h.collect_once(conn, c, env={})["status"] == "missing_key"
++
++
++def test_add_and_check(tmp_path):
++    p = tmp_path / "config.json"
++    p.write_text(json.dumps({"data_dir": "data"}))
++    h.add_entry(p, W1, "https://arkham.example/a")
++    c, _ = h.load_config(p)
++    assert c.provider_url == "evm_rpc" and len(c.entries) == 1
++    lines = h.check_entries(c, fetch=make_fetch(rpc=fake_rpc(balances={W1: 2 * 10**18})))
++    assert lines[0].startswith("OK") and "2.000000000000000000" in lines[0]
++    try:
++        h.add_entry(p, "0xbad", "https://x.example")
++        assert False
++    except h.HoldingsError:
++        pass
