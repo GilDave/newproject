@@ -1,15 +1,3 @@
-diff --git a/ena_bot/__pycache__/__init__.cpython-313.pyc b/ena_bot/__pycache__/__init__.cpython-313.pyc
-new file mode 100644
-index 0000000..f782d4a
-Binary files /dev/null and b/ena_bot/__pycache__/__init__.cpython-313.pyc differ
-diff --git a/ena_bot/__pycache__/hayes_holdings.cpython-313.pyc b/ena_bot/__pycache__/hayes_holdings.cpython-313.pyc
-new file mode 100644
-index 0000000..f870bed
-Binary files /dev/null and b/ena_bot/__pycache__/hayes_holdings.cpython-313.pyc differ
-diff --git a/ena_bot/__pycache__/hayes_rpc.cpython-313.pyc b/ena_bot/__pycache__/hayes_rpc.cpython-313.pyc
-new file mode 100644
-index 0000000..3b92b72
-Binary files /dev/null and b/ena_bot/__pycache__/hayes_rpc.cpython-313.pyc differ
 diff --git a/ena_bot/hayes_holdings.py b/ena_bot/hayes_holdings.py
 index bfc5198..83a88c8 100644
 --- a/ena_bot/hayes_holdings.py
@@ -232,10 +220,6 @@ index 0000000..4160f94
 +        return {"balance": str(int(_call(rpc, urls, contract, data), 16)), "decimals": verified[key]}
 +
 +    return fetch
-diff --git a/tests/__pycache__/test_hayes_rpc.cpython-313-pytest-9.1.1.pyc b/tests/__pycache__/test_hayes_rpc.cpython-313-pytest-9.1.1.pyc
-new file mode 100644
-index 0000000..2c5f139
-Binary files /dev/null and b/tests/__pycache__/test_hayes_rpc.cpython-313-pytest-9.1.1.pyc differ
 diff --git a/tests/test_hayes_rpc.py b/tests/test_hayes_rpc.py
 new file mode 100644
 index 0000000..103293e
