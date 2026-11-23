@@ -217,6 +217,114 @@ index 0000000..3b0595a
 +        self.path.parent.mkdir(parents=True, exist_ok=True)
 +        self.path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
 +        return row
+diff --git a/ena_bot/shock_study.py b/ena_bot/shock_study.py
+new file mode 100644
+index 0000000..a61fc40
+--- /dev/null
++++ b/ena_bot/shock_study.py
+@@ -0,0 +1,102 @@
++"""18개 코인 학습 캐시로 '이상 변동 봉 뒤에 가격이 어떻게 움직였는지'를 통계로 확인한다. 읽기 전용이며 매매·모델에 영향이 없다.
++
++실행: python -m ena_bot.shock_study [--config config.json] [--factor 4] [--symbols ADAUSDT,...]
++결과는 화면에 출력하고 <data_dir>/shock_study.json 에 저장한다. 기준(독립 사건 30개·코인 5개 이상, 신뢰구간이 0을 포함하지 않음)을 넘지 못하면
++'반영하지 않음'이라고 나온다 — 한 번의 사건으로 규칙을 만들지 않는다.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import time
++from pathlib import Path
++
++import numpy as np
++
++from . import shock
++
++HORIZONS = (1, 6, 18, 42)
++
++
++def resample_ohlcv(ts, o, h, l, c, v, factor: int):
++    """1시간봉(등) → factor배 봉. 시각을 factor×봉 길이로 나눈 칸마다 묶고, 다 차지 않은 마지막 칸은 버린다."""
++    ts = np.asarray(ts, dtype=np.int64)
++    if factor <= 1 or len(ts) < 2:
++        return ts, *(np.asarray(a, dtype=float) for a in (o, h, l, c, v))
++    bar = int(np.median(np.diff(ts)))
++    key = ts // (bar * factor)
++    uniq, first, count = np.unique(key, return_index=True, return_counts=True)
++    full = count == factor
++    o, h, l, c, v = (np.asarray(a, dtype=float) for a in (o, h, l, c, v))
++    out_ts, oo, hh, ll, cc, vv = [], [], [], [], [], []
++    for f, k in zip(first[full], count[full]):
++        sl = slice(f, f + k)
++        out_ts.append(ts[f])
++        oo.append(o[f]); hh.append(h[sl].max()); ll.append(l[sl].min()); cc.append(c[f + k - 1]); vv.append(v[sl].sum())
++    return np.array(out_ts), np.array(oo), np.array(hh), np.array(ll), np.array(cc), np.array(vv)
++
++
++def run(pool: dict, factor: int = 4, horizons=HORIZONS, recent_symbol: str | None = None) -> dict:
++    """pool: {심볼: ts·open·high·low·close·volume 배열을 가진 객체}. 통계와 반영 여부 판정을 돌려준다."""
++    per = {}
++    series = {}
++    for sym, coin in pool.items():
++        ts, o, h, l, c, v = resample_ohlcv(coin.ts, coin.open, coin.high, coin.low, coin.close, coin.volume, factor)
++        if len(c) < 400:
++            continue
++        per[sym] = (o, h, l, c, v)
++        series[sym] = ts
++    study = shock.event_study(per, horizons)
++    verdicts = {h: shock.verdict(study, h) for h in horizons}
++    recent = []
++    sym = recent_symbol if recent_symbol in per else None
++    if sym:
++        o, h_, l, c, v = per[sym]
++        for ev in shock.detect_shocks(o, h_, l, c, v)[-10:]:
++            recent.append({"ts": int(series[sym][ev["i"]]), "text": shock.describe(ev), "ret": ev["ret"], "kind": ev["kind"]})
++    return {"factor": factor, "coins": sorted(per), "study": study, "verdicts": verdicts, "recent": recent, "generated": int(time.time())}
++
++
++def render(res: dict) -> str:
++    st = res["study"]
++    lines = [f"이상 변동 봉 사후 통계 — {res['factor']}배 봉 · 코인 {len(res['coins'])}개 · 사건 {st['events']}개(코인 {st['coins_with_events']}개에서 발생)", ""]
++    lines.append("봉 수 | 독립 사건 | 평균 | 중앙값 | 충격 방향 지속 비율 | 95% 신뢰구간 | 판정")
++    for h, s in st["horizons"].items():
++        if not s["n"]:
++            lines.append(f"{h:>4} | 0 | - | - | - | - | {res['verdicts'][h]['why']}")
++            continue
++        lines.append(f"{h:>4} | {s['n']:>4} | {s['mean']:+.2%} | {s['median']:+.2%} | {s['continue_rate']:.0%} | {s['ci'][0]:+.2%} ~ {s['ci'][1]:+.2%} | {res['verdicts'][h]['why']}")
++    lines += ["", "(+ = 충격 방향으로 이어짐, - = 되돌림. 기준: 독립 사건 %d개·코인 %d개 이상이고 신뢰구간이 0을 포함하지 않을 때만 반영)" % (shock.MIN_EVENTS, shock.MIN_COINS)]
++    if res["recent"]:
++        lines += ["", "최근 이상 변동 봉:"] + [f"  {time.strftime('%Y-%m-%d %H:%M', time.gmtime(r['ts'] / 1000))} UTC  {r['text']}" for r in res["recent"]]
++    return "\n".join(lines)
++
++
++def main(argv: list[str] | None = None) -> int:
++    from .config import load_config
++    from .learn_data import DEFAULT_SYMBOLS, load_coin
++
++    ap = argparse.ArgumentParser(description="이상 변동 봉 사후 통계(읽기 전용)")
++    ap.add_argument("--config", default="config.json")
++    ap.add_argument("--factor", type=int, default=4, help="1시간봉을 몇 배로 묶을지(기본 4 = 4시간봉)")
++    ap.add_argument("--symbols", default="")
++    ap.add_argument("--recent", default="ENAUSDT", help="최근 이상 봉을 보여줄 코인")
++    args = ap.parse_args(argv)
++    cfg = load_config(args.config)
++    cache = cfg.data_path / "learn_cache"
++    symbols = [x.strip() for x in args.symbols.split(",") if x.strip()] or DEFAULT_SYMBOLS
++    pool = {s: c for s in symbols if (c := load_coin(s, cache)) is not None}
++    if not pool:
++        print(f"학습 캐시가 없습니다: {cache}  (먼저 learn-train 으로 데이터를 받으세요)")
++        return 2
++    res = run(pool, args.factor, recent_symbol=args.recent)
++    print(render(res))
++    out = cfg.data_path / "shock_study.json"
++    out.write_text(json.dumps(res, ensure_ascii=False, indent=2, default=lambda o: o.item() if hasattr(o, "item") else str(o)), encoding="utf-8")
++    print(f"\n저장: {out}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
 diff --git a/tests/test_shock.py b/tests/test_shock.py
 new file mode 100644
 index 0000000..62cf248
@@ -367,3 +475,60 @@ index 0000000..62cf248
 +    assert [n["note"] for n in store.load()] == ["수정한 메모"]
 +    (tmp_path / "notes.json").write_text("{broken")
 +    assert store.load() == []
+diff --git a/tests/test_shock_study.py b/tests/test_shock_study.py
+new file mode 100644
+index 0000000..e4ead14
+--- /dev/null
++++ b/tests/test_shock_study.py
+@@ -0,0 +1,51 @@
++from types import SimpleNamespace
++
++import numpy as np
++
++from ena_bot import shock_study as ss
++
++H = 3_600_000
++
++
++def hourly(seed, n=4000, at=(2000, 2400, 2800, 3200), up=0.30, drift=-0.004, back=40):
++    rng = np.random.default_rng(seed)
++    r = rng.normal(0, 0.004, n)
++    for i in at:
++        r[i + 1] = up                                    # 4시간 칸 안의 한 시간에서 튄다
++        r[i + 2:i + 2 + back] = drift                    # 이후 40시간 동안 되돌린다
++    c = 0.5 * np.exp(np.cumsum(r))
++    o = np.concatenate([[0.5], c[:-1]])
++    sp = np.abs(rng.normal(0, 0.003, n))
++    h = np.maximum(o, c) * np.exp(sp)
++    l = np.minimum(o, c) * np.exp(-sp)
++    return SimpleNamespace(ts=np.arange(n, dtype=np.int64) * H, open=o, high=h, low=l, close=c, volume=np.exp(rng.normal(8, 0.3, n)))
++
++
++def test_resample_groups_complete_buckets_only():
++    ts = np.arange(10) * H
++    o = np.arange(10) + 1.0
++    h, l, c, v = o + 0.5, o - 0.5, o + 0.25, np.ones(10)
++    t4, o4, h4, l4, c4, v4 = ss.resample_ohlcv(ts, o, h, l, c, v, 4)
++    assert list(t4) == [0, 4 * H] and list(o4) == [1.0, 5.0] and list(h4) == [4.5, 8.5] and list(l4) == [0.5, 4.5]
++    assert list(c4) == [4.25, 8.25] and list(v4) == [4.0, 4.0]               # 마지막 불완전한 칸(8,9번 시각)은 버린다
++    assert len(ss.resample_ohlcv(ts, o, h, l, c, v, 1)[0]) == 10
++
++
++def test_study_over_a_pool_reports_reversals_and_renders_the_verdict():
++    pool = {f"C{k}": hourly(k) for k in range(1, 10)}
++    res = ss.run(pool, 4, recent_symbol="C1")
++    assert len(res["coins"]) == 9 and res["study"]["events"] >= 36          # 주입한 36개 + 무작위 꼬리에서 우연히 잡히는 것이 있을 수 있다
++    s6 = res["study"]["horizons"][6]
++    assert s6["n"] >= 36 and s6["mean"] < -0.05 and s6["continue_rate"] < 0.1
++    assert res["verdicts"][6]["use"] is True and "되돌리는" in res["verdicts"][6]["why"]
++    assert len(res["recent"]) >= 4 and all(r["kind"] == "body_run" for r in res["recent"])
++    text = ss.render(res)
++    assert "독립 사건" in text and "되돌리는" in text and "최근 이상 변동 봉" in text and "원인 미확인" in text
++
++
++def test_a_short_history_or_too_few_coins_is_never_used():
++    res = ss.run({"ENAUSDT": hourly(1, at=(3000,))}, 4)
++    assert not res["verdicts"][6]["use"] and "표본 부족" in res["verdicts"][6]["why"]
++    tiny = SimpleNamespace(ts=np.arange(100) * H, open=np.ones(100), high=np.ones(100), low=np.ones(100), close=np.ones(100), volume=np.ones(100))
++    assert ss.run({"X": tiny}, 4)["coins"] == []                                # 이력이 짧은 코인은 건너뛴다
++    assert "표본 부족" in ss.render(ss.run({"X": tiny}, 4))
