@@ -379,7 +379,7 @@ def _report(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, _stop)
     try:
         project = Path(args.project or settings.project_path or ".").expanduser()
-        res = report_mod.run_report(settings, project, args.question, ais, use_project_context=args.context, merger=args.merger)
+        res = report_mod.run_report(settings, project, args.question, ais, use_project_context=args.context, merger=args.merger, read_code=args.code)
     except (report_mod.ReportError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -570,6 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--project", help="where the report is stored (default: `project` in solomon.toml, else the current folder)")
     rp.add_argument("--ais", help="comma-separated AIs to use (default: every installed one)")
     rp.add_argument("--context", action="store_true", help="also send the project's file list and README start so the plan is concrete")
+    rp.add_argument("--code", action="store_true", help="also let the AIs read the project files that match the question (secrets removed); their file:line citations are checked")
     rp.add_argument("--merger", help="the AI that merges the drafts into one report (default: the first of claude, codex, antigravity that wrote a draft)")
     rp.add_argument("--config", help="path to solomon.toml")
     rp.set_defaults(func=_report)

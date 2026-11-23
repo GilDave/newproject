@@ -585,6 +585,7 @@ textarea{min-height:84px}
       <datalist id="rp-projects"></datalist>
       <div class="hint" id="rp-where"></div>
       <label class="chk"><input type="checkbox" id="rp-ctx" checked> 프로젝트의 파일 목록과 README 앞부분을 AI에게 보내 구체적인 계획 받기 (비밀 값은 가립니다)</label>
+      <label class="chk"><input type="checkbox" id="rp-code" checked> <b>관련 코드 읽기</b> — 질문과 관련된 파일을 골라 AI가 실제 코드를 읽고 답합니다 (비밀 파일은 보내지 않고 값은 가립니다 · 토큰을 더 씁니다). 「코드가 어떻게 동작하는가」를 묻는 질문에 꼭 켜세요</label>
       <label>① 보고서를 쓸 AI — 각자 독립적으로 따로 씁니다 (2개 이상 권장)</label>
       <div class="aichecks" id="rp-ais"></div>
       <label for="rp-merger">② 쓴 글을 하나로 합칠 AI</label>
@@ -3047,7 +3048,16 @@ function rpRenderDoc(){
   meta.appendChild(el("div", "", "질문: " + r.question));
   meta.appendChild(el("div", "", "저장 위치: " + (r.report_dir || "")));
   meta.appendChild(el("div", "", "작성: " + Object.entries(r.ais).map(([n, a]) => pname(n) + (a.state === "done" ? " ✓" : a.state === "running" ? " …" : a.state === "waiting" ? " (대기)" : " ✗")).join(" · ")
-    + (r.synthesizer ? " · 통합: " + pname(r.synthesizer) : "") + (r.context ? " · 프로젝트 맥락 포함" : "")));
+    + (r.synthesizer ? " · 통합: " + pname(r.synthesizer) : "") + (r.context ? " · 프로젝트 맥락 포함" : "") + (r.read_code ? " · 코드 읽음" : "")));
+  if (r.read_code && r.code && r.code.files){
+    const c = r.code, cc = c.citations;
+    const row = el("details", "rp-code"); row.appendChild(el("summary", "", "읽은 코드 " + c.files.length + "개 파일" + (cc ? " · 인용 " + cc.total + "건 중 " + cc.valid + "건 일치" + (cc.invalid.length ? " ⚠ 불일치 " + cc.invalid.length + "건" : "") : "")));
+    row.appendChild(el("div", "hint", c.files.map(f => f.path + " (" + f.lines + "줄" + (f.truncated ? ", 앞부분만" : "") + ")").join("\n")));
+    row.lastChild.style.whiteSpace = "pre-wrap";
+    if (c.skipped && c.skipped.length) row.appendChild(el("div", "hint", "관련 있지만 읽지 못한 파일: " + c.skipped.join(", ")));
+    if (cc && cc.invalid.length) row.appendChild(el("div", "hint", "일치하지 않는 인용(AI가 지어냈을 수 있음): " + cc.invalid.join(", ")));
+    meta.appendChild(row);
+  }
   const body = $("rp-body");
   rpRenderTasks();
   if (!r.finished){ body.innerHTML = ""; body.appendChild(el("div", "hint", r.stage + " — 보통 3~8분 걸립니다. 이 화면은 저절로 갱신됩니다.")); return; }
@@ -3138,7 +3148,7 @@ $("rp-go").onclick = async () => {
   if (!ais.length) return toast("보고서를 쓸 AI를 하나 이상 고르세요.", true);
   $("rp-go").disabled = true;
   try {
-    await api("/api/report", {project, question, ais, context: $("rp-ctx").checked, merger: $("rp-merger").value || undefined});
+    await api("/api/report", {project, question, ais, context: $("rp-ctx").checked, read_code: $("rp-code").checked, merger: $("rp-merger").value || undefined});
     toast("보고서 작성을 시작했습니다."); rp.id = null; rp.cur = null; rp.listKey = null; await poll(); setTimeout(rpTick, 1200);
   } catch (e) { toast(e.message, true); }
   $("rp-go").disabled = false; rpProgress();

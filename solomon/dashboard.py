@@ -1171,6 +1171,8 @@ class DashboardApp:
             args += ["--merger", merger]
         if body.get("context"):
             args += ["--context"]
+        if body.get("read_code"):
+            args += ["--code"]
         if self.config_path:
             args += ["--config", self.config_path]
         return self._spawn("report", args, project, "보고서: " + question[:40])

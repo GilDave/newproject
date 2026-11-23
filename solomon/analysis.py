@@ -156,6 +156,32 @@ def _list_files(project: Path) -> tuple[list[str], str, list[str]]:
     return sorted(files), "folder", skipped
 
 
+def eligible_files(project: Path, tracked: list[str], excluded: list[tuple[str, str]]) -> list[tuple[str, int]]:
+    """The files whose text may be shown to an AI: never secret-looking names, dependency/build folders, binaries, lock files or huge files.
+    What is left out is appended to `excluded` with the reason. Shared by the analysis and by reports that read code."""
+    keep: list[tuple[str, int]] = []
+    for rel in tracked:
+        parts = rel.split("/")
+        base = parts[-1]
+        if SECRET_NAME.search(rel) and not base.lower().endswith(SECRET_SAFE_SUFFIX):
+            excluded.append((rel, "비밀 파일로 의심돼 내용을 보내지 않음"))
+        elif any(p in SKIP_DIRS for p in parts[:-1]):
+            excluded.append((rel, "제외 폴더 (의존성·빌드 산출물 등)"))
+        elif os.path.splitext(base)[1].lower() in BINARY_EXT or base.lower() in LOCKFILES or ".min." in base:
+            excluded.append((rel, "바이너리·잠금·압축 파일"))
+        else:
+            try:
+                size = (project / rel).stat().st_size
+            except OSError:
+                excluded.append((rel, "읽을 수 없음"))
+                continue
+            if size > MAX_FILE_BYTES:
+                excluded.append((rel, "파일이 너무 큼"))
+                continue
+            keep.append((rel, size))
+    return keep
+
+
 def collect_project(project: Path, budget_chars: int = 150_000, max_file_chars: int = 24_000) -> Collected:
     if not project.is_dir():
         raise ValueError(f"project folder does not exist: {project}")
@@ -165,26 +191,7 @@ def collect_project(project: Path, budget_chars: int = 150_000, max_file_chars: 
     shown = tracked[:400]
     out.tree = "\n".join(shown) + (f"\n... ({len(tracked) - 400} more files)" if len(tracked) > 400 else "")
 
-    candidates: list[tuple[tuple, str, str]] = []
-    for rel in tracked:
-        parts = rel.split("/")
-        base = parts[-1]
-        if SECRET_NAME.search(rel) and not base.lower().endswith(SECRET_SAFE_SUFFIX):
-            out.excluded.append((rel, "비밀 파일로 의심돼 내용을 보내지 않음"))
-        elif any(p in SKIP_DIRS for p in parts[:-1]):
-            out.excluded.append((rel, "제외 폴더 (의존성·빌드 산출물 등)"))
-        elif os.path.splitext(base)[1].lower() in BINARY_EXT or base.lower() in LOCKFILES or ".min." in base:
-            out.excluded.append((rel, "바이너리·잠금·압축 파일"))
-        else:
-            try:
-                size = (project / rel).stat().st_size
-            except OSError:
-                out.excluded.append((rel, "읽을 수 없음"))
-                continue
-            if size > MAX_FILE_BYTES:
-                out.excluded.append((rel, "파일이 너무 큼"))
-                continue
-            candidates.append((_rank(rel, size), rel, ""))
+    candidates: list[tuple[tuple, str, str]] = [(_rank(rel, size), rel, "") for rel, size in eligible_files(project, tracked, out.excluded)]
 
     used = 0
     for _, rel, _ in sorted(candidates):

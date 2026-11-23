@@ -116,7 +116,7 @@ def test_cli_command_exists_and_is_a_job_command():
     from solomon import joblock
     parser = cli.build_parser()
     rp = next(a for a in parser._actions if a.dest == "command").choices["report"]
-    assert {"--project", "--ais", "--context"} <= {o for a in rp._actions for o in a.option_strings}
+    assert {"--project", "--ais", "--context", "--code"} <= {o for a in rp._actions for o in a.option_strings}
     assert "report" in joblock.JOB_COMMANDS
 
 
@@ -127,6 +127,15 @@ def env(tmp_path):
     e = Env(tmp_path)
     yield e
     e.close()
+
+
+def test_dashboard_passes_the_read_code_choice_to_the_report_job(env):
+    st, _, _ = env.call("POST", "/api/report", {"project": env.project, "question": "학습 방식을 설명해줘", "ais": ["claude"], "read_code": True})
+    assert st == 200 and "--code" in sleeper.calls[-1] and "--context" not in sleeper.calls[-1]
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
+    st, _, _ = env.call("POST", "/api/report", {"project": env.project, "question": "학습 방식을 설명해줘", "ais": ["claude"]})
+    assert st == 200 and "--code" not in sleeper.calls[-1]
+    env.app.job["popen"].kill(); env.app.job["popen"].wait()
 
 
 def test_dashboard_starts_a_report_job_and_validates(env):
@@ -580,3 +589,63 @@ def test_the_ai_menus_are_numbered_and_the_roles_are_remembered():
     for needle in ("① 보고서를 쓸 AI", "② 쓴 글을 하나로 합칠 AI", 'id="rp-merger"', "④ 단계를 실행할 때의 AI (역할)", 'id="rp-roles-grid"', "RP_ROLES", "rpFillRoles()",
                    'merger: $("rp-merger").value || undefined', "ROLE_SAVE_KEY", "savedRoles()", "saveRoles();", "Object.prototype.hasOwnProperty.call(saved, role)", "the person's setting for the NEXT run"):
         assert needle in html, needle
+
+
+# ---------------------------------------------------------------- reports that read the code
+def _code_project(tmp_path):
+    from helpers import make_repo
+    repo = make_repo(tmp_path)
+    (repo / "ena_bot").mkdir(exist_ok=True)
+    (repo / "ena_bot" / "learn2.py").write_text(
+        "import numpy as np\n\nclass LogitModel:\n    def __init__(self, l2=5.0):\n        self.l2 = l2\n\n    def fit(self, X, y, iters=30):\n        return self\n\n"
+        "def walk_forward(ds, min_train_years=3.0):\n    return {}\n", encoding="utf-8")
+    (repo / "ena_bot" / "dashboard.py").write_text("def card():\n    return 'x'\n", encoding="utf-8")
+    (repo / "ena_bot" / ".env").write_text("TOKEN=abc12345\n", encoding="utf-8")
+    (repo / "ena_bot" / "feeds.py").write_text("API_SECRET = 'sk-live-abcdefghijklmnop'\nfrom .learn2 import LogitModel\n", encoding="utf-8")
+    from solomon.gitops import git
+    git(["add", "-A"], repo)
+    git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "code"], repo)
+    return repo
+
+
+def test_code_selection_follows_the_question_and_hides_secrets(tmp_path):
+    from solomon import coderead
+    repo = _code_project(tmp_path)
+    ctx = coderead.select(repo, "현재 인공지능 모델의 학습 방식을 설명해주세요")
+    paths = [f.path for f in ctx.files]
+    assert paths[0] == "ena_bot/learn2.py" and "ena_bot/.env" not in paths
+    assert "learn" in ctx.keywords and "model" in ctx.keywords
+    text = coderead.render(ctx)
+    assert "   3| class LogitModel:" in text and "sk-live-abcdefghijklmnop" not in text and "abc12345" not in text
+
+
+def test_citations_are_checked_against_what_was_shown(tmp_path):
+    from solomon import coderead
+    ctx = coderead.select(_code_project(tmp_path), "learn2 학습")
+    c = coderead.verify_citations("L2는 `ena_bot/learn2.py:4` 에서 받고, 폴드는 ena_bot/learn2.py:10 이며 `ena_bot/learn2.py:99` 와 `ena_bot/ghost.py:3` 도 있다. 또 learn2.py:4", ctx)
+    assert c["total"] == 4 and c["valid"] == 2 and sorted(c["invalid"]) == ["ena_bot/ghost.py:3", "ena_bot/learn2.py:99"]
+
+
+def test_report_with_read_code_gives_the_ais_the_code_and_flags_an_invented_citation(tmp_path):
+    repo = _code_project(tmp_path)
+    seen: list[str] = []
+
+    class Spy(ScriptedProvider):
+        supports_write = False
+
+        def run(self, prompt, *a, **kw):
+            seen.append(prompt)
+            return super().run(prompt, *a, **kw)
+
+    doc = "# 학습 방식\n## 한 줄 결론\nL2 로지스틱입니다 (`ena_bot/learn2.py:4`). 라벨은 `ena_bot/ghost.py:7` 에 있습니다.\n" + "설명 " * 80
+    ps = {"claude": Spy("claude", [doc, doc]), "codex": Spy("codex", [doc])}
+    res = R.run_report(make_settings(), repo, "인공지능 모델의 학습 방식", ["claude", "codex"], read_code=True, providers=ps)
+    assert res["status"] == "DONE"
+    drafts = [p for p in seen if "QUESTION:" in p and "DRAFT" not in p]
+    assert drafts and all("ena_bot/learn2.py ===" in p and "   3| class LogitModel:" in p and "abc12345" not in p for p in drafts)
+    cites = res["code"]["citations"]
+    assert cites["total"] == 2 and cites["valid"] == 1 and cites["invalid"] == ["ena_bot/ghost.py:7"]
+    md = (repo / ".solomon" / "reports" / res["report_id"] / "report.md").read_text(encoding="utf-8")
+    assert "코드 인용 2건 중 1건이 AI가 읽은 코드와 일치합니다" in md and "ena_bot/ghost.py:7" in md.split("코드 인용")[1]
+    view = R.load_report(repo, ".solomon", res["report_id"])
+    assert view["read_code"] and view["code"]["files"][0]["path"] == "ena_bot/learn2.py"

@@ -23,6 +23,7 @@ from .providers.base import Provider, ProviderError, QuotaExhausted
 from .runner import kill_active
 from .settings import Settings
 from .tokens import estimate_tokens
+from . import coderead
 from .video import project_context
 
 MAX_QUESTION = 6000
@@ -34,7 +35,7 @@ class ReportError(ValueError):
     pass
 
 
-def draft_prompt(question: str, context: str = "") -> str:
+def draft_prompt(question: str, context: str = "", code: str = "") -> str:
     return (
         "You are an expert analyst writing a report for a developer who runs a crypto trading bot project and several AI helpers.\n"
         "Answer the QUESTION below as a complete REPORT written in KOREAN, in Markdown. Use exactly this structure:\n"
@@ -48,6 +49,12 @@ def draft_prompt(question: str, context: str = "") -> str:
         "## 근거와 불확실한 점  (mark every claim you are not sure about as 추측; never invent sources, numbers or quotes)\n"
         "Rules: be specific and practical, no filler. Do not claim you ran or tested anything. Output ONLY the Markdown report.\n"
         + (f"\nPROJECT CONTEXT (the user's project folder; use it to make the plan concrete):\n{context}\n" if context else "")
+        + (
+            "\nCODE (read-only copies of the user's REAL files, line-numbered as `  N| text`, secrets removed). Rules for using it:\n"
+            "- Base every statement about HOW THE CODE WORKS on this code, and cite it as `path:line` (for example `ena_bot/learn2.py:41`).\n"
+            "- Never cite a line you cannot see here. If the answer is not visible in this code, write 코드에서 확인되지 않음 and say which file would show it; do not guess.\n"
+            "- Keep 확인된 사실(코드 인용) and 추측 clearly apart.\n"
+            f"{code}\n" if code else "")
         + f"\nQUESTION:\n{question}\n"
     )
 
@@ -61,6 +68,7 @@ def merge_prompt(question: str, drafts: dict[str, str]) -> str:
         "Rules:\n"
         "- What several drafts agree on is stated as settled. Where they disagree, put it in the table and say which view you would follow and why.\n"
         "- A claim only ONE draft makes is marked (단독 주장 · 검증 필요).\n"
+        "- Keep every `path:line` citation exactly as the drafts wrote it, next to the claim it supports. Never add a citation that is in none of the drafts.\n"
         "- Do not add facts, numbers, sources or quotes that are in none of the drafts. Remove anything that looks invented.\n"
         "- Keep the best concrete implementation steps; merge duplicates; keep the checklist short and ordered.\n"
         "- Output ONLY the final Markdown report.\n"
@@ -95,7 +103,7 @@ class _Log:
 
 
 def run_report(settings: Settings, project: Path, question: str, ais: Optional[list[str]] = None, *, use_project_context: bool = False,
-               providers: Optional[dict[str, Provider]] = None, merger: Optional[str] = None) -> dict:
+               providers: Optional[dict[str, Provider]] = None, merger: Optional[str] = None, read_code: bool = False) -> dict:
     from .providers import build_providers, default_ais
 
     question = (question or "").strip()
@@ -121,8 +129,8 @@ def run_report(settings: Settings, project: Path, question: str, ais: Optional[l
         gitops.exclude_from_git(project, settings.state_dir)
     log = _Log(rdir / "events.jsonl")
     result: dict = {"report_id": rid, "status": "FAILED", "question": question, "project": str(project), "ais": {}, "synthesizer": "", "title": "", "merger_choice": merger or "",
-                    "created": time.strftime("%Y-%m-%d %H:%M:%S"), "context": bool(use_project_context)}
-    log.event("report_start", project=str(project), question=question, ais=chosen, context=bool(use_project_context))
+                    "created": time.strftime("%Y-%m-%d %H:%M:%S"), "context": bool(use_project_context), "read_code": bool(read_code)}
+    log.event("report_start", project=str(project), question=question, ais=chosen, context=bool(use_project_context), read_code=bool(read_code))
 
     ctx = ""
     if use_project_context:
@@ -130,12 +138,24 @@ def run_report(settings: Settings, project: Path, question: str, ais: Optional[l
             ctx = project_context(project)
         except Exception as exc:  # the report is still worth writing without it
             log.event("context_failed", error=str(exc)[:200])
+    code_ctx = None
+    code_text = ""
+    if read_code:
+        try:
+            code_ctx = coderead.select(project, question)
+            code_text = coderead.render(code_ctx)
+            result["code"] = coderead.summary(code_ctx)
+            log.event("code_read", files=len(code_ctx.files), chars=code_ctx.chars, redactions=code_ctx.redactions, skipped=len(code_ctx.skipped),
+                      keywords=code_ctx.keywords[:15], paths=[f.path for f in code_ctx.files])
+        except Exception as exc:  # the report is still worth writing from the README and file list
+            log.event("code_read_failed", error=str(exc)[:200])
+            code_ctx, code_text = None, ""
     timeout = float(settings.timeouts.get("analysis", 900.0))
     sandbox = tempfile.TemporaryDirectory(prefix="solomon-report-")
     gitops.git(["init", "-q"], sandbox.name)
 
     def ask(name: str) -> dict:
-        prompt = draft_prompt(question, ctx)
+        prompt = draft_prompt(question, ctx, code_text)
         log.event("ai_start", provider=name, role="draft", prompt_chars=len(prompt))
         started = time.time()
         try:
@@ -217,6 +237,16 @@ def run_report(settings: Settings, project: Path, question: str, ais: Optional[l
         final, result["synthesizer"] = drafts[who], who
         if len(drafts) == 1:
             notes.append(f"{who} 한 개만 응답해 교차 검증이 되지 않았습니다 — 다른 AI의 의견이 없는 초안입니다")
+    if code_ctx is not None and code_ctx.files:
+        cites = coderead.verify_citations(final, code_ctx)
+        result["code"]["citations"] = cites
+        log.event("citations_checked", **cites)
+        line = f"코드 인용 {cites['total']}건 중 {cites['valid']}건이 AI가 읽은 코드와 일치합니다"
+        if cites["invalid"]:
+            line += " — 일치하지 않는 인용(AI가 지어냈을 수 있음): " + ", ".join(f"`{c}`" for c in cites["invalid"])
+        elif not cites["total"]:
+            line = "코드를 읽게 했지만 보고서에 `파일:줄` 인용이 없습니다 — 코드에 근거한 설명인지 직접 확인하세요"
+        notes.append(line)
     if notes:
         final += "\n\n> ⚠ " + " / ".join(notes) + "\n"
     sandbox.cleanup()
@@ -347,7 +377,7 @@ def load_report(project: Path, state_dir: str, rid: str) -> Optional[dict]:
     for f in sorted(rdir.glob("draft-*.md")):
         drafts[f.stem[len("draft-"):]] = f.read_text(encoding="utf-8", errors="replace")
     view.update(report_id=rid, report_dir=str(rdir), markdown=md, drafts=drafts, title=meta.get("title", ""), synthesizer=meta.get("synthesizer", ""),
-                project=meta.get("project", str(project)), context=meta.get("context", False), created=meta.get("created", view["started"]))
+                project=meta.get("project", str(project)), context=meta.get("context", False), read_code=meta.get("read_code", False), code=meta.get("code") or {}, created=meta.get("created", view["started"]))
     view["interrupted"] = bool(not view["finished"] and not meta)
     return view
 
