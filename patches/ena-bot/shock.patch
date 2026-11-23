@@ -1,9 +1,9 @@
 diff --git a/ena_bot/shock.py b/ena_bot/shock.py
 new file mode 100644
-index 0000000..3b0595a
+index 0000000..0ba6ce8
 --- /dev/null
 +++ b/ena_bot/shock.py
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,241 @@
 +"""이상 변동 봉(충격 봉) 탐지 · 보정 · 사후 통계. 순수 계산(파일·네트워크 접근 없음, 미래 데이터를 쓰지 않는다).
 +
 +원칙
@@ -24,6 +24,7 @@ index 0000000..3b0595a
 +
 +MIN_EVENTS = 30
 +MIN_COINS = 5
++CLUSTER_MS = 24 * 3600_000   # 같은 날의 사건은 한 묶음(여러 코인이 같은 날 함께 움직인 사건은 하나의 시장 사건이다)
 +WICK_SHARE = 0.6          # 윗·아랫꼬리가 전체 범위의 이만큼 이상이면 '꼬리 급등락'(체결 오류·얇은 호가 가능성)
 +MAD_SCALE = 1.4826
 +
@@ -116,52 +117,79 @@ index 0000000..3b0595a
 +    return kept
 +
 +
-+def forward_returns(c, shocks: list[dict], horizons=(1, 6, 18, 42), *, min_gap: int = 12) -> dict[int, list[float]]:
++def forward_returns(c, shocks: list[dict], horizons=(1, 6, 18, 42), *, min_gap: int = 12, ts=None, cluster_ms: int = CLUSTER_MS):
 +    """충격 봉이 닫힌 뒤(종가 기준) h봉 뒤까지의 로그수익률. 방향을 맞춰 '충격 방향으로 이어지면 +, 되돌리면 -'로 돌려준다.
-+    서로 min_gap봉 안의 사건은 하나만 쓴다(같은 움직임을 여러 번 세지 않도록)."""
++    서로 min_gap봉 안의 사건은 하나만 쓴다(같은 움직임을 여러 번 세지 않도록).
++    ts를 주면 (값 목록, 묶음 번호 목록) 쌍을 돌려준다: 묶음 번호 = 사건 시각 // cluster_ms."""
 +    c = np.asarray(c, dtype=float)
 +    keep = set(_spaced([e["i"] for e in shocks], min_gap))
 +    sign = {e["i"]: (1.0 if e["direction"] == "up" else -1.0) for e in shocks}
-+    out: dict[int, list[float]] = {h: [] for h in horizons}
-+    for i in keep:
++    out: dict = {h: [] for h in horizons}
++    groups: dict = {h: [] for h in horizons}
++    for i in sorted(keep):
 +        for h in horizons:
 +            if i + h < len(c):
 +                out[h].append(sign[i] * math.log(c[i + h] / c[i]))
-+    return out
++                if ts is not None:
++                    groups[h].append(int(ts[i]) // cluster_ms)
++    return out if ts is None else (out, groups)
 +
 +
-+def _summarize(vals: list[float], n_coins: int, iters: int = 2000, seed: int = 11) -> dict:
++def _summarize(vals: list[float], n_coins: int, groups: list | None = None, alpha: float = 0.05, iters: int = 4000, seed: int = 11) -> dict:
++    """평균과 신뢰구간. groups(같은 날 사건 묶음)가 있으면 묶음째로 뽑아 계산해서, 같은 날 함께 움직인 코인들을 독립 사건으로 세지 않는다."""
 +    a = np.asarray(vals, dtype=float)
 +    if len(a) == 0:
-+        return {"n": 0, "n_coins": n_coins, "mean": None, "median": None, "continue_rate": None, "ci": None}
++        return {"n": 0, "n_clusters": 0, "n_coins": n_coins, "mean": None, "median": None, "continue_rate": None, "ci": None, "alpha": alpha}
 +    rng = np.random.default_rng(seed)
-+    boots = a[rng.integers(0, len(a), (iters, len(a)))].mean(axis=1)
-+    return {"n": int(len(a)), "n_coins": n_coins, "mean": float(a.mean()), "median": float(np.median(a)), "continue_rate": float((a > 0).mean()),
-+            "ci": [float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))]}
++    if groups is not None and len(groups) == len(a):
++        ids, inv = np.unique(np.asarray(groups), return_inverse=True)
++        sums = np.bincount(inv, weights=a)
++        cnts = np.bincount(inv).astype(float)
++        pick = rng.integers(0, len(ids), (iters, len(ids)))
++        boots = sums[pick].sum(axis=1) / cnts[pick].sum(axis=1)
++        k = int(len(ids))
++    else:
++        boots = a[rng.integers(0, len(a), (iters, len(a)))].mean(axis=1)
++        k = int(len(a))
++    return {"n": int(len(a)), "n_clusters": k, "n_coins": n_coins, "mean": float(a.mean()), "median": float(np.median(a)), "continue_rate": float((a > 0).mean()),
++            "ci": [float(np.percentile(boots, 100 * alpha / 2)), float(np.percentile(boots, 100 * (1 - alpha / 2)))], "alpha": alpha}
 +
 +
-+def event_study(per_coin: dict, horizons=(1, 6, 18, 42), *, min_gap: int = 12, **detect_kw) -> dict:
-+    """코인별 OHLC(v는 선택)에서 충격 봉을 찾아 모은 뒤의 통계. per_coin: {심볼: (o, h, l, c) 또는 (o, h, l, c, v)}."""
-+    pooled: dict[int, list[float]] = {h: [] for h in horizons}
++def event_study(per_coin: dict, horizons=(1, 6, 18, 42), *, min_gap: int = 12, cluster_ms: int = CLUSTER_MS, **detect_kw) -> dict:
++    """코인별 OHLC(v, ts는 선택)에서 충격 봉을 찾아 모은 뒤의 통계. per_coin: {심볼: (o, h, l, c[, v[, ts]])}.
++    ts가 있으면 같은 날 사건을 한 묶음으로 계산하고, 지평 여러 개를 함께 보는 만큼 유의수준을 나눈다(다중 비교 보정)."""
++    pooled: dict = {h: [] for h in horizons}
++    groups: dict = {h: [] for h in horizons}
 +    coins = 0
 +    events = []
++    clustered = True
 +    for sym, arrs in per_coin.items():
 +        o, h_, l, c = arrs[:4]
 +        v = arrs[4] if len(arrs) > 4 else None
++        ts = arrs[5] if len(arrs) > 5 else None
++        clustered = clustered and ts is not None
 +        shocks = detect_shocks(o, h_, l, c, v, **detect_kw)
 +        if shocks:
 +            coins += 1
 +        events += [{**e, "symbol": sym} for e in shocks]
-+        for h, vals in forward_returns(c, shocks, horizons, min_gap=min_gap).items():
-+            pooled[h] += vals
-+    return {"horizons": {h: _summarize(pooled[h], coins) for h in horizons}, "events": len(events), "coins_with_events": coins}
++        res = forward_returns(c, shocks, horizons, min_gap=min_gap, ts=ts, cluster_ms=cluster_ms)
++        vals, grp = res if ts is not None else (res, None)
++        for h in horizons:
++            pooled[h] += vals[h]
++            if grp is not None:
++                groups[h] += grp[h]
++    alpha = 0.05 / max(1, len(horizons))
++    return {"horizons": {h: _summarize(pooled[h], coins, groups[h] if clustered else None, alpha) for h in horizons}, "events": len(events),
++            "coins_with_events": coins, "clustered": clustered, "alpha": alpha}
 +
 +
 +def verdict(study: dict, horizon: int) -> dict:
 +    """사건 뒤의 움직임을 차트 분석에 반영해도 되는지. 기준을 못 넘으면 반영하지 않는다."""
 +    s = study["horizons"].get(horizon) or {}
-+    if s.get("n", 0) < MIN_EVENTS or s.get("n_coins", 0) < MIN_COINS:
-+        return {"use": False, "why": f"표본 부족(독립 사건 {s.get('n', 0)}개·코인 {s.get('n_coins', 0)}개, 필요 {MIN_EVENTS}개·{MIN_COINS}개) — 반영하지 않음"}
++    k = s.get("n_clusters", s.get("n", 0))
++    if k < MIN_EVENTS or s.get("n_coins", 0) < MIN_COINS:
++        unit = "서로 다른 날의 사건" if study.get("clustered") else "독립 사건"
++        return {"use": False, "why": f"표본 부족({unit} {k}개·코인 {s.get('n_coins', 0)}개, 필요 {MIN_EVENTS}개·{MIN_COINS}개) — 반영하지 않음"}
 +    lo, hi = s["ci"]
 +    if lo <= 0 <= hi:
 +        return {"use": False, "why": "충격 뒤 움직임의 방향이 통계적으로 불분명(신뢰구간이 0을 포함) — 반영하지 않음"}
@@ -219,10 +247,10 @@ index 0000000..3b0595a
 +        return row
 diff --git a/ena_bot/shock_study.py b/ena_bot/shock_study.py
 new file mode 100644
-index 0000000..a0934a4
+index 0000000..d64488b
 --- /dev/null
 +++ b/ena_bot/shock_study.py
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,137 @@
 +"""18개 코인 학습 캐시로 '이상 변동 봉 뒤에 가격이 어떻게 움직였는지'를 통계로 확인한다. 읽기 전용이며 매매·모델에 영향이 없다.
 +
 +실행: python -m ena_bot.shock_study [--config config.json] [--factor 4] [--symbols ADAUSDT,...]
@@ -289,14 +317,14 @@ index 0000000..a0934a4
 +        ts, o, h, l, c, v = resample_ohlcv(*coin_arrays(coin), factor)
 +        if len(c) < 400:
 +            continue
-+        per[sym] = (o, h, l, c, v)
++        per[sym] = (o, h, l, c, v, ts)
 +        series[sym] = ts
 +    study = shock.event_study(per, horizons)
 +    verdicts = {h: shock.verdict(study, h) for h in horizons}
 +    recent = []
 +    sym = recent_symbol if recent_symbol in per else None
 +    if sym:
-+        o, h_, l, c, v = per[sym]
++        o, h_, l, c, v = per[sym][:5]
 +        for ev in shock.detect_shocks(o, h_, l, c, v)[-10:]:
 +            recent.append({"ts": int(series[sym][ev["i"]]), "text": shock.describe(ev), "ret": ev["ret"], "kind": ev["kind"]})
 +    return {"factor": factor, "coins": sorted(per), "study": study, "verdicts": verdicts, "recent": recent, "generated": int(time.time())}
@@ -305,16 +333,32 @@ index 0000000..a0934a4
 +def render(res: dict) -> str:
 +    st = res["study"]
 +    lines = [f"이상 변동 봉 사후 통계 — {res['factor']}배 봉 · 코인 {len(res['coins'])}개 · 사건 {st['events']}개(코인 {st['coins_with_events']}개에서 발생)", ""]
-+    lines.append("봉 수 | 독립 사건 | 평균 | 중앙값 | 충격 방향 지속 비율 | 95% 신뢰구간 | 판정")
++    conf = (1 - st["alpha"]) * 100
++    lines.append(f"봉 수 | 사건 | 서로 다른 날 | 평균 | 중앙값 | 충격 방향 지속 비율 | {conf:.2f}% 신뢰구간(날 단위 묶음·다중 비교 보정) | 판정")
 +    for h, s in st["horizons"].items():
 +        if not s["n"]:
-+            lines.append(f"{h:>4} | 0 | - | - | - | - | {res['verdicts'][h]['why']}")
++            lines.append(f"{h:>4} | 0 | 0 | - | - | - | - | {res['verdicts'][h]['why']}")
 +            continue
-+        lines.append(f"{h:>4} | {s['n']:>4} | {s['mean']:+.2%} | {s['median']:+.2%} | {s['continue_rate']:.0%} | {s['ci'][0]:+.2%} ~ {s['ci'][1]:+.2%} | {res['verdicts'][h]['why']}")
-+    lines += ["", "(+ = 충격 방향으로 이어짐, - = 되돌림. 기준: 독립 사건 %d개·코인 %d개 이상이고 신뢰구간이 0을 포함하지 않을 때만 반영)" % (shock.MIN_EVENTS, shock.MIN_COINS)]
++        lines.append(f"{h:>4} | {s['n']:>4} | {s['n_clusters']:>4} | {s['mean']:+.2%} | {s['median']:+.2%} | {s['continue_rate']:.0%} | {s['ci'][0]:+.2%} ~ {s['ci'][1]:+.2%} | {res['verdicts'][h]['why']}")
++    lines += ["", "(+ = 충격 방향으로 이어짐, - = 되돌림. 같은 날 여러 코인에서 생긴 사건은 한 묶음으로 계산합니다. 기준: 서로 다른 날 %d개·코인 %d개 이상이고 "
++              "보정한 신뢰구간이 0을 포함하지 않을 때만 반영. 수수료·슬리피지 차감 전 수치이고, 상장 이력이 긴 코인만 있어 생존 편향이 있을 수 있습니다.)" % (shock.MIN_EVENTS, shock.MIN_COINS)]
 +    if res["recent"]:
 +        lines += ["", "최근 이상 변동 봉:"] + [f"  {time.strftime('%Y-%m-%d %H:%M', time.gmtime(r['ts'] / 1000))} UTC  {r['text']}" for r in res["recent"]]
 +    return "\n".join(lines)
++
++
++def load_saved(data_path) -> dict:
++    """대시보드가 읽는 요약: 저장된 shock_study.json 에서 화면에 필요한 것만. 없거나 깨졌으면 {"ok": False}."""
++    try:
++        d = json.loads((Path(data_path) / "shock_study.json").read_text(encoding="utf-8"))
++        st = d.get("study") or {}
++        horizons = {str(h): {k: s.get(k) for k in ("n", "n_clusters", "n_coins", "mean", "median", "continue_rate", "ci")} for h, s in (st.get("horizons") or {}).items()}
++        verdicts = {str(h): {"use": bool(v.get("use")), "why": str(v.get("why", ""))} for h, v in (d.get("verdicts") or {}).items()}
++        age = (time.time() - float(d.get("generated", 0))) / 86400
++    except (OSError, ValueError, TypeError, AttributeError):
++        return {"ok": False}
++    return {"ok": True, "factor": d.get("factor"), "coins": len(d.get("coins") or []), "events": st.get("events"), "horizons": horizons, "verdicts": verdicts,
++            "alpha": st.get("alpha"), "age_days": round(age, 1)}
 +
 +
 +def main(argv: list[str] | None = None) -> int:
@@ -496,10 +540,10 @@ index 0000000..62cf248
 +    assert store.load() == []
 diff --git a/tests/test_shock_chart.py b/tests/test_shock_chart.py
 new file mode 100644
-index 0000000..a5affbd
+index 0000000..5556cfe
 --- /dev/null
 +++ b/tests/test_shock_chart.py
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,151 @@
 +import json
 +import shutil
 +import subprocess
@@ -587,12 +631,76 @@ index 0000000..a5affbd
 +    page.write_text(html.replace("TRNC.tip(hoverTime)", "TRNC.tip2(hoverTime)"))
 +    before = page.read_text()
 +    assert run().returncode != 0 and page.read_text() == before
++
++
++# ---------------------------------------------------------------- 과거 통계 한 줄 + 엔드포인트
++def saved(tmp_path, h6_use=True, h1_use=True, generated=None):
++    import time as _t
++    from ena_bot import shock_study as ss
++    hz = {1: {"n": 501, "n_clusters": 210, "n_coins": 18, "mean": -0.0122, "median": -0.01, "continue_rate": 0.4, "ci": [-0.02, -0.004]},
++          6: {"n": 496, "n_clusters": 205, "n_coins": 18, "mean": -0.0196, "median": -0.02, "continue_rate": 0.4, "ci": [-0.03, -0.008]},
++          18: {"n": 490, "n_clusters": 200, "n_coins": 18, "mean": -0.01, "median": -0.01, "continue_rate": 0.47, "ci": [-0.03, 0.01]}}
++    res = {"factor": 4, "coins": [f"C{i}" for i in range(18)], "study": {"events": 675, "alpha": 0.0125, "horizons": hz},
++           "verdicts": {1: {"use": h1_use, "why": "x"}, 6: {"use": h6_use, "why": "y"}, 18: {"use": False, "why": "z"}}, "generated": int(generated or _t.time())}
++    (tmp_path / "shock_study.json").write_text(json.dumps(res))
++    return ss.load_saved(tmp_path)
++
++
++def test_saved_study_is_summarised_for_the_page_and_broken_files_are_harmless(tmp_path):
++    from ena_bot import shock_study as ss
++    assert ss.load_saved(tmp_path) == {"ok": False}
++    j = saved(tmp_path)
++    assert j["ok"] and j["coins"] == 18 and j["events"] == 675 and j["verdicts"]["6"]["use"] is True and j["horizons"]["6"]["n_clusters"] == 205 and j["age_days"] < 1
++    (tmp_path / "shock_study.json").write_text("{broken")
++    assert ss.load_saved(tmp_path) == {"ok": False}
++
++
++@pytest.mark.skipif(NODE is None, reason="node 가 없어 JS 대조를 건너뜀")
++def test_the_stats_line_only_shows_what_passed_the_bar_and_only_on_4h_charts(tmp_path):
++    def line(stats, iv):
++        src = ("globalThis.fetch = () => new Promise(() => {});\n" + (TOOLS / "shock_stats.js").read_text(encoding="utf-8")
++               + f"\nglobalThis.apiIv = () => '{iv}';\nSHK_STATS = {json.dumps(stats)};\nconsole.log(JSON.stringify(shockStatsLine()));")
++        f = tmp_path / "s.js"
++        f.write_text(src, encoding="utf-8")
++        return json.loads(subprocess.run([NODE, str(f)], capture_output=True, text=True, check=True).stdout)
++    both = line(saved(tmp_path), "240")
++    assert "1봉 뒤 평균 -1.2%" in both and "6봉 뒤 평균 -2.0%" in both and "되돌리는 경향" in both and "서로 다른 날 205개" in both and "참고용 · 확정 아님" in both
++    only6 = line(saved(tmp_path, h1_use=False), "240")
++    assert "1봉 뒤" not in only6 and "6봉 뒤 평균 -2.0%" in only6
++    none = line(saved(tmp_path, h1_use=False, h6_use=False), "240")
++    assert "반영하지 않음" in none and "봉 뒤 평균" not in none
++    assert line(saved(tmp_path), "60") == "" and line({"ok": False}, "240") == ""             # 다른 시간 단위·통계 없음: 아무것도 붙이지 않는다
++
++
++def test_stats_wire_tool_needs_the_chart_wire_first_and_is_atomic(tmp_path):
++    (tmp_path / "ena_bot/dashboard_static").mkdir(parents=True)
++    dash, page = tmp_path / "ena_bot/dashboard.py", tmp_path / "ena_bot/dashboard_static/index.html"
++    dash.write_text("from .hayes_holdings import DEFAULT_INTERVAL_MIN\nfrom . import hayes_lookup\nclass H:\n    def do_GET(self):\n        try:\n            if 0:\n                pass\n"
++                    '                elif url.path == "/healthz":\n                pass\n        except ValueError:\n            pass\n')
++    html = ("<script>\nfunction trackCrosshair(p) {\n  const tp = $('#trntip'), h = (TRNC && hoverTime != null) ? TRNC.tip(hoverTime) : '';\n}\n"
++            "let TRNC = null;   // makeTrnChart 인스턴스(스크립트 끝에서 생성)\nfunction paintMarkers() {\n  const ms = [];\n  if (TRNC) ms.push(...TRNC.markers());\n"
++            "  ms.sort((a, b) => a.time - b.time); candle.setMarkers(ms);\n}\n</script>")
++    page.write_text(html)
++    run = lambda name: subprocess.run([sys.executable, str(TOOLS / name), str(tmp_path)], capture_output=True, text=True)
++    first = run("wire_shock_stats.py")
++    assert first.returncode != 0 and "wire_shock_chart.py" in first.stderr and page.read_text() == html      # 차트 연결이 먼저
++    assert run("wire_shock_chart.py").returncode == 0
++    d0, p0 = dash.read_text(), page.read_text()
++    r = run("wire_shock_stats.py")
++    assert r.returncode == 0, r.stderr
++    d1, p1 = dash.read_text(), page.read_text()
++    assert "from . import shock_study" in d1 and "shock_study.load_saved(cfg.data_path)" in d1 and "+ shockStatsLine() : ''" in p1 and p1.count("function shockStatsLine") == 1
++    assert "이미 적용됨" in run("wire_shock_stats.py").stdout and dash.read_text() == d1 and page.read_text() == p1
++    dash.write_text(d0.replace('"/healthz"', '"/health"'))
++    page.write_text(p0)
++    r2 = run("wire_shock_stats.py")
++    assert r2.returncode != 0 and page.read_text() == p0                                                       # 한 곳이라도 못 찾으면 둘 다 그대로
 diff --git a/tests/test_shock_study.py b/tests/test_shock_study.py
 new file mode 100644
-index 0000000..32e79cc
+index 0000000..fe9b5bd
 --- /dev/null
 +++ b/tests/test_shock_study.py
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,78 @@
 +from types import SimpleNamespace
 +
 +import numpy as np
@@ -626,16 +734,30 @@ index 0000000..32e79cc
 +    assert len(ss.resample_ohlcv(ts, o, h, l, c, v, 1)[0]) == 10
 +
 +
++def spread_pool(n_coins=9):
++    """코인마다 다른 날에 충격이 오는 풀(서로 다른 날의 사건이 충분하다)."""
++    return {f"C{k}": hourly(k, at=tuple(1700 + 31 * k + 400 * j for j in range(4))) for k in range(1, n_coins + 1)}
++
++
 +def test_study_over_a_pool_reports_reversals_and_renders_the_verdict():
-+    pool = {f"C{k}": hourly(k) for k in range(1, 10)}
-+    res = ss.run(pool, 4, recent_symbol="C1")
-+    assert len(res["coins"]) == 9 and res["study"]["events"] >= 36          # 주입한 36개 + 무작위 꼬리에서 우연히 잡히는 것이 있을 수 있다
++    res = ss.run(spread_pool(), 4, recent_symbol="C1")
++    assert len(res["coins"]) == 9 and res["study"]["events"] >= 36 and res["study"]["clustered"] is True
 +    s6 = res["study"]["horizons"][6]
-+    assert s6["n"] >= 36 and s6["mean"] < -0.05 and s6["continue_rate"] < 0.1
++    assert s6["n"] >= 36 and s6["n_clusters"] >= 30 and s6["mean"] < -0.05 and s6["continue_rate"] < 0.1
++    assert res["study"]["alpha"] == 0.05 / 4 and s6["alpha"] == 0.05 / 4                  # 지평 4개를 함께 보는 다중 비교 보정
 +    assert res["verdicts"][6]["use"] is True and "되돌리는" in res["verdicts"][6]["why"]
 +    assert len(res["recent"]) >= 4 and all(r["kind"] == "body_run" for r in res["recent"])
 +    text = ss.render(res)
-+    assert "독립 사건" in text and "되돌리는" in text and "최근 이상 변동 봉" in text and "원인 미확인" in text
++    assert "서로 다른 날" in text and "다중 비교 보정" in text and "되돌리는" in text and "최근 이상 변동 봉" in text and "원인 미확인" in text and "생존 편향" in text
++
++
++def test_events_on_the_same_days_across_coins_count_as_one_market_event_each():
++    same = {f"C{k}": hourly(k) for k in range(1, 10)}                                       # 9개 코인이 같은 4개 시점에 함께 충격을 받는다
++    res = ss.run(same, 4)
++    s6 = res["study"]["horizons"][6]
++    assert s6["n"] >= 36 and s6["n_clusters"] <= 6                                           # 사건은 36개여도 서로 다른 날은 4개 안팎
++    v = res["verdicts"][6]
++    assert v["use"] is False and "서로 다른 날의 사건" in v["why"] and "표본 부족" in v["why"]
 +
 +
 +def test_a_short_history_or_too_few_coins_is_never_used():
@@ -714,6 +836,29 @@ index 0000000..f2ca626
 +  const e = t == null ? null : shockEvents().find(x => x.time === t);
 +  return e ? '<div style="margin-top:4px"><b>⚡ ' + shockText(e) + '</b></div>' : '';
 +}
+diff --git a/tools/shock_stats.js b/tools/shock_stats.js
+new file mode 100644
+index 0000000..c6f1ef8
+--- /dev/null
++++ b/tools/shock_stats.js
+@@ -0,0 +1,17 @@
++// ---- 충격 봉 툴팁의 '과거 통계' 한 줄: 저장된 사후 통계(shock_study.json)가 반영 기준을 넘은 지평만 보여 준다. 4시간봉 차트에서만 ----
++let SHK_STATS = null;
++fetch('/api/shock-study').then(r => r.ok ? r.json() : null).then(j => { SHK_STATS = j && j.ok ? j : null; }).catch(() => {});
++function shockStatsLine() {
++  if (!SHK_STATS || !SHK_STATS.ok || !SHK_STATS.verdicts || !SHK_STATS.horizons || (typeof apiIv === 'function' && apiIv() !== '240')) return '';
++  const parts = [];
++  let sample = 0;
++  for (const h of ['1', '6']) {
++    const v = SHK_STATS.verdicts[h], s = SHK_STATS.horizons[h];
++    if (v && v.use && s && s.mean != null) { parts.push(h + '봉 뒤 평균 ' + (s.mean >= 0 ? '+' : '') + (s.mean * 100).toFixed(1) + '%'); sample = sample ? Math.min(sample, s.n_clusters || 0) : (s.n_clusters || 0); }   // 표본 수는 보수적으로 작은 쪽
++  }
++  const base = '과거 통계(' + SHK_STATS.coins + '개 코인 4시간봉, 이상 변동 봉 뒤, 충격 방향 기준)';
++  if (!parts.length) return '<div style="opacity:.8;margin-top:2px">' + base + ': 뒤 움직임의 방향이 통계적으로 확인되지 않아 반영하지 않음</div>';
++  const first = SHK_STATS.horizons['1'], mean = (SHK_STATS.verdicts['6'] && SHK_STATS.verdicts['6'].use ? SHK_STATS.horizons['6'] : first).mean;
++  return '<div style="opacity:.9;margin-top:2px">' + base + ': ' + parts.join(' · ') + ' — ' + (mean < 0 ? '충격 반대 방향으로 되돌리는 경향' : '충격 방향으로 이어지는 경향')
++    + ' (서로 다른 날 ' + sample + '개, 수수료 차감 전, 참고용 · 확정 아님)</div>';
++}
 diff --git a/tools/wire_shock_chart.py b/tools/wire_shock_chart.py
 new file mode 100644
 index 0000000..429962d
@@ -747,3 +892,47 @@ index 0000000..429962d
 +text = text.replace(A, A2, 1).replace(B, B2, 1).replace(C, C2, 1)
 +page.write_text(text, encoding="utf-8")
 +print("수정: index.html")
+diff --git a/tools/wire_shock_stats.py b/tools/wire_shock_stats.py
+new file mode 100644
+index 0000000..d5be775
+--- /dev/null
++++ b/tools/wire_shock_stats.py
+@@ -0,0 +1,38 @@
++"""충격 봉 툴팁에 '과거 통계' 한 줄을 연결한다(wire_shock_chart.py 를 먼저 적용). dashboard.py 2곳 + index.html 2곳.
++여러 번 실행해도 안전하고, 위치를 하나라도 못 찾으면 아무 파일도 바꾸지 않는다.
++사용: .venv/bin/python tools/wire_shock_stats.py [프로젝트 폴더]
++"""
++import sys
++from pathlib import Path
++
++root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
++dash, page = root / "ena_bot/dashboard.py", root / "ena_bot/dashboard_static/index.html"
++js = Path(__file__).with_name("shock_stats.js").read_text(encoding="utf-8")
++
++IMP = "from .hayes_holdings import DEFAULT_INTERVAL_MIN\n"
++IMP2 = IMP + "from . import shock_study\n"
++GET = '                elif url.path == "/healthz":\n'
++GET2 = '                elif url.path == "/api/shock-study":\n                    self._json(shock_study.load_saved(cfg.data_path))\n' + GET
++TIP = "  return e ? '<div style=\"margin-top:4px\"><b>⚡ ' + shockText(e) + '</b></div>' : '';\n"
++TIP2 = "  return e ? '<div style=\"margin-top:4px\"><b>⚡ ' + shockText(e) + '</b></div>' + shockStatsLine() : '';\n"
++DECL = "let TRNC = null;   // makeTrnChart 인스턴스(스크립트 끝에서 생성)\n"
++DECL2 = js.rstrip("\n") + "\n" + DECL
++
++d, p = dash.read_text(encoding="utf-8"), page.read_text(encoding="utf-8")
++if "function shockStatsLine" in p and "shock_study.load_saved" in d:
++    print("이미 적용됨")
++    raise SystemExit(0)
++if "function detectShocks" not in p:
++    raise SystemExit("먼저 tools/wire_shock_chart.py 를 적용하세요. 아무것도 바꾸지 않았습니다.")
++for name, text, old in (("import", d, IMP), ("/healthz 분기", d, GET), ("툴팁", p, TIP), ("선언", p, DECL)):
++    if text.count(old) != 1:
++        raise SystemExit(f"{name} 위치를 찾지 못했습니다({text.count(old)}곳). 아무 파일도 바꾸지 않았습니다.")
++if "from . import shock_study" not in d:
++    d = d.replace(IMP, IMP2, 1)
++if "shock_study.load_saved" not in d:
++    d = d.replace(GET, GET2, 1)
++if "function shockStatsLine" not in p:
++    p = p.replace(TIP, TIP2, 1).replace(DECL, DECL2, 1)
++dash.write_text(d, encoding="utf-8")
++page.write_text(p, encoding="utf-8")
++print("수정: dashboard.py, index.html")
