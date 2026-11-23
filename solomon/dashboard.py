@@ -45,10 +45,14 @@ VENDORS = {"claude": "Anthropic", "codex": "OpenAI", "antigravity": "Google"}
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, extra: dict | None = None):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.extra = extra or {}  # machine-readable hints for the page (e.g. which folder needs git)
+
+    def payload(self) -> dict:
+        return {"error": self.message, **self.extra}
 
 
 def _default_launcher(args: list[str], log_path: Path) -> subprocess.Popen:
@@ -137,6 +141,12 @@ class DashboardApp:
             ok = False
         self._git_cache[project] = (now, ok)
         return ok
+
+    def _need_git(self, what: str, project: str, tail: str = "") -> ApiError:
+        """The refusal for work that changes code in a folder without a repository. The page reads `need_git` and offers
+        "start git" for that exact folder, so the user never has to open a terminal."""
+        return ApiError(400, f"{what}에는 git 저장소가 필요합니다 (커밋이 1개 이상).{tail} 화면의 'git 시작하기'로 바로 만들 수 있습니다.",
+                        {"need_git": project, "git_state": folders.git_state(Path(project))})
 
     def add_project(self, path: str) -> str:
         """Register a folder. Any folder works for analysis; changing code additionally needs git (checked at run)."""
@@ -249,18 +259,19 @@ class DashboardApp:
         except projects_mod.ProjectError as exc:
             raise ApiError(exc.status, exc.message) from exc
 
-    def git_init(self, path: str) -> dict:
+    def git_init(self, path: str, include=None) -> dict:
         path = self._known(path)
         if self._busy_here(path):
             raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다.")
         try:
-            res = folders.git_init(Path(path))
+            res = folders.git_init(Path(path), include if isinstance(include, list) else None)
         except projects_mod.ProjectError as exc:
             raise ApiError(exc.status, exc.message) from exc
         except gitops.GitError as exc:
             raise ApiError(500, f"git 초기화에 실패했습니다: {exc}") from exc
         self._fresh()
-        return {"ok": True, "message": f"git 저장소를 만들고 파일 {res['files']}개를 첫 커밋으로 기록했습니다. 이제 개선·밤샘 수정을 쓸 수 있습니다."}
+        kept_out = f" (비밀·데이터·큰 파일 {res['excluded']}개는 제외)" if res.get("excluded") else ""
+        return {"ok": True, "message": f"git 저장소를 만들고 파일 {res['files']}개를 첫 커밋으로 기록했습니다{kept_out}. 이제 개선·밤샘 수정을 쓸 수 있습니다.", **res}
 
     def open_path(self, path: str) -> dict:
         try:
@@ -936,8 +947,7 @@ class DashboardApp:
             except gitops.GitError as exc:
                 raise ApiError(400, str(exc)) from exc
         if not self.is_git(project):
-            raise ApiError(400, "개선(코드 수정)에는 git 저장소가 필요합니다 (커밋이 1개 이상). 분석은 git 없이도 됩니다. "
-                                "고치려면 프로젝트 폴더에서 git init 후 첫 커밋을 만드세요.")
+            raise self._need_git("개선(코드 수정)", project, " 분석은 git 없이도 됩니다.")
         args = [sys.executable, "-m", "solomon", "run", goal, "--project", project]
         if self.config_path:
             args += ["--config", self.config_path]
@@ -994,7 +1004,7 @@ class DashboardApp:
             except gitops.GitError as exc:
                 raise ApiError(400, str(exc)) from exc
         if not self.is_git(project):
-            raise ApiError(400, "자동 수정에는 git 저장소가 필요합니다 (커밋이 1개 이상).")
+            raise self._need_git("자동 수정", project)
         sev = str(opts.get("min_severity", "medium"))
         if sev not in ("low", "medium", "high"):
             raise ApiError(400, "심각도 값이 올바르지 않습니다.")
@@ -1232,7 +1242,7 @@ class DashboardApp:
             raise ApiError(400, "제한 시간은 0.25~24시간이어야 합니다.")
         target = self._task_target(project, rid)
         if not self.is_git(target):
-            raise ApiError(400, "자동 실행에는 git 저장소가 필요합니다 (커밋이 1개 이상).")
+            raise self._need_git("자동 실행", target)
         cmd, _ = self.effective_test_command(target)
         if not cmd:
             raise ApiError(400, "테스트 명령이 없으면 자동 실행을 하지 않습니다. 프로젝트 설정에서 테스트 명령을 정하세요.")
@@ -1433,7 +1443,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                         return self._json(200, app.tools_status())
                     return self._json(200, app.git_init_preview((query.get("path") or [""])[0]))
                 except ApiError as exc:
-                    return self._json(exc.status, {"error": exc.message})
+                    return self._json(exc.status, exc.payload())
             if url.path == "/api/portfolio":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1446,7 +1456,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     f = app.shot_path(q("project"), q("run"), q("attempt"), q("name"))
                     return self._send(200, f.read_bytes(), "image/png")
                 except ApiError as exc:
-                    return self._json(exc.status, {"error": exc.message})
+                    return self._json(exc.status, exc.payload())
             if url.path == "/api/attach":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1456,14 +1466,14 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     ctype = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}[f.suffix.lstrip(".")]
                     return self._send(200, f.read_bytes(), ctype)
                 except ApiError as exc:
-                    return self._json(exc.status, {"error": exc.message})
+                    return self._json(exc.status, exc.payload())
             if url.path == "/api/projects/policy":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
                 try:
                     return self._json(200, app.project_policy((query.get("path") or [""])[0]))
                 except ApiError as exc:
-                    return self._json(exc.status, {"error": exc.message})
+                    return self._json(exc.status, exc.payload())
             if url.path == "/api/botlab":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1477,7 +1487,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                         return self._json(200, app.list_reports(proj))
                     return self._json(200, app.get_report(proj, (query.get("id") or [""])[0]))
                 except ApiError as exc:
-                    return self._json(exc.status, {"error": exc.message})
+                    return self._json(exc.status, exc.payload())
             if url.path == "/api/shadow":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1486,7 +1496,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     proj = app._known((query.get("project") or [""])[0])
                     return self._json(200, shadow_mod.evaluate(Path(proj), app.settings.state_dir))
                 except ApiError as exc:
-                    return self._json(exc.status, {"error": exc.message})
+                    return self._json(exc.status, exc.payload())
             if url.path == "/api/projects":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1502,7 +1512,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                         return self._json(200, app.describe(project, (query.get("key") or [""])[0]))
                     return self._json(200, app.diff(project, (query.get("key") or [""])[0]))
                 except ApiError as exc:
-                    return self._json(exc.status, {"error": exc.message})
+                    return self._json(exc.status, exc.payload())
             return self._json(404, {"error": "not found"})
 
         # ---------------------------------------------------------- POST
@@ -1585,7 +1595,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                 if path == "/api/projects/rename":
                     return self._json(200, app.rename_project(str(body.get("path", "")), str(body.get("name", ""))))
                 if path == "/api/projects/git-init":
-                    return self._json(200, app.git_init(str(body.get("path", ""))))
+                    return self._json(200, app.git_init(str(body.get("path", "")), body.get("include")))
                 if path == "/api/open":
                     return self._json(200, app.open_path(str(body.get("path", ""))))
                 if path == "/api/tools/run":
@@ -1622,7 +1632,7 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, {"ok": True})
                 return self._json(404, {"error": "not found"})
             except ApiError as exc:
-                return self._json(exc.status, {"error": exc.message})
+                return self._json(exc.status, exc.payload())
 
     return Handler
 

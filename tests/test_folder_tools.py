@@ -292,3 +292,95 @@ def test_a_project_added_now_is_on_the_board_immediately(env):
     d.mkdir()
     post(env, "/api/project", {"path": str(d)})
     assert str(d) in [c["path"] for c in get(env, "/api/portfolio")[1]["projects"]]
+
+
+# ------------------------------------------------------------------ "git 시작하기": secrets by content, repositories without a commit, manual commands
+def teamsched(env):
+    d = env.home / "teamsched"
+    (d / "app").mkdir(parents=True)
+    (d / "backup").mkdir()
+    (d / "app" / "server.py").write_text("print('serve')\n")
+    (d / "teamsched.sh").write_text('PW="$(getconf TS_EDIT_PASSWORD)"\nif [ -z "$(getconf TS_SECRET)" ]; then echo none; fi\n')  # reads values, holds none
+    (d / "teamsched.conf").write_text("TS_EDIT_PASSWORD=test1234\nTS_SECRET=abc123def\n")  # real secret values
+    (d / "backup" / "x.tar").write_text("data")
+    (d / "app" / "cache.db").write_text("sqlite")
+    (d / "big.bin").write_bytes(b"0" * (folders.BIG_BYTES + 1))
+    (d / "vendored").mkdir()
+    (d / "vendored" / ".git").mkdir()
+    (d / "vendored" / "lib.py").write_text("x = 1\n")
+    post(env, "/api/project", {"path": str(d)})
+    return d
+
+
+def tracked(d):
+    return subprocess.run(["git", "ls-files"], cwd=d, capture_output=True, text=True).stdout.split()
+
+
+def test_secret_values_inside_config_files_are_kept_out_and_listed(env):
+    d = teamsched(env)
+    pre = get(env, "/api/projects/git-init-preview", path=str(d))[1]
+    why = {f["path"]: f["kind"] for f in pre["flagged"]}
+    assert why == {"teamsched.conf": "secret", "backup/x.tar": "data", "app/cache.db": "data", "big.bin": "big"}  # the .sh only *reads* values: not flagged
+    assert pre["state"] == "none" and "vendored" in pre["nested"] and set(pre["sample"]) >= {"app/server.py", "teamsched.sh"}
+    st, body, _ = post(env, "/api/projects/git-init", {"path": str(d)})
+    assert st == 200 and body["excluded"] == 4 and "제외" in body["message"]
+    t = tracked(d)
+    assert "app/server.py" in t and "teamsched.sh" in t and ".gitignore" in t
+    assert not any(x in t for x in ("teamsched.conf", "backup/x.tar", "app/cache.db", "big.bin")) and not any(x.startswith("vendored") for x in t)
+    assert (d / "teamsched.conf").read_text().startswith("TS_EDIT_PASSWORD")  # untouched on disk
+
+
+def test_the_user_can_choose_to_record_a_flagged_file(env):
+    d = teamsched(env)
+    st, body, _ = post(env, "/api/projects/git-init", {"path": str(d), "include": ["backup/x.tar", "not-a-file"]})
+    t = tracked(d)
+    assert st == 200 and "backup/x.tar" in t and "teamsched.conf" not in t
+
+
+def test_a_repository_without_a_commit_gets_its_first_commit_and_staged_secrets_are_dropped(env):
+    d = env.home / "half"
+    d.mkdir()
+    (d / "a.py").write_text("x = 1\n")
+    (d / "pw.conf").write_text("PASSWORD=hunter22\n")
+    subprocess.run(["git", "init", "-q"], cwd=d, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=d, check=True)  # the secret is already staged by an earlier `git add .`
+    post(env, "/api/project", {"path": str(d)})
+    assert next(p for p in get(env, "/api/projects")[1]["projects"] if p["path"] == str(d))["git"] is False
+    pre = get(env, "/api/projects/git-init-preview", path=str(d))[1]
+    assert pre["state"] == "empty" and [f["path"] for f in pre["flagged"]] == ["pw.conf"]
+    assert post(env, "/api/projects/git-init", {"path": str(d)})[0] == 200
+    assert "a.py" in tracked(d) and "pw.conf" not in tracked(d)
+    assert next(p for p in get(env, "/api/projects")[1]["projects"] if p["path"] == str(d))["git"] is True
+
+
+def test_the_manual_commands_do_the_same_thing(env):
+    d = teamsched(env)
+    cmds = get(env, "/api/projects/git-init-preview", path=str(d))[1]["commands"]
+    assert cmds.splitlines()[1] == "git init" and "git add -A" in cmds
+    ident = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    assert subprocess.run(["bash", "-c", cmds], env=ident, capture_output=True, text=True).returncode == 0
+    t = tracked(d)
+    assert "app/server.py" in t and "teamsched.conf" not in t and "big.bin" not in t
+
+
+def test_the_home_folder_and_huge_folders_are_never_made_into_a_repository(env, monkeypatch):
+    with pytest.raises(folders.ProjectError):
+        folders.git_init(env.home)
+    monkeypatch.setattr(folders, "CAP", 3)
+    d = env.home / "huge"
+    d.mkdir()
+    for i in range(6):
+        (d / f"f{i}.txt").write_text("x")
+    post(env, "/api/project", {"path": str(d)})
+    assert get(env, "/api/projects/git-init-preview", path=str(d))[1]["capped"] is True
+    assert post(env, "/api/projects/git-init", {"path": str(d)})[0] == 400
+    assert not (d / ".git").exists()
+
+
+def test_refused_code_changes_tell_the_page_which_folder_needs_git(env):
+    d = teamsched(env)
+    for path, body in (("/api/autofix", {"project": str(d)}), ("/api/run", {"project": str(d), "goal": "고쳐줘"})):
+        st, b, _ = post(env, path, body)
+        assert st == 400 and b["need_git"] == str(d) and b["git_state"] == "none" and "git 시작하기" in b["error"], (path, b)
+    post(env, "/api/projects/git-init", {"path": str(d)})
+    assert "need_git" not in post(env, "/api/autofix", {"project": str(d)})[1]

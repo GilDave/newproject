@@ -433,6 +433,9 @@ textarea{min-height:84px}
 .rptarget #rp-target{font-family:ui-monospace,Menlo,monospace;font-size:13px;margin:0 8px}
 .rpchain{margin:10px 0;padding:10px 12px;border:1px dashed #566f98;border-radius:10px;background:#111a28}
 .rptask label.sel{display:inline-flex;gap:6px;align-items:center;margin:0 8px 0 0;font-size:12px;color:var(--dim)}
+.gitwarn{margin-top:8px;padding:8px 10px;border:1px solid var(--warn,#c90);border-radius:8px;font-size:13px}
+.gitbox{margin:10px 0;padding:8px 10px;border:1px solid var(--line,#8886);border-radius:8px;max-height:240px;overflow:auto}
+.gitcmd{margin:8px 0;padding:8px 10px;border-radius:8px;background:rgba(127,127,127,.12);white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
 </style>
 </head>
 <body>
@@ -553,6 +556,7 @@ textarea{min-height:84px}
       </div>
       <label class="chk"><input type="checkbox" id="bf-g" checked> 같은 파일의 문제는 한 번에 묶어서 고치기 (실행 횟수가 줄어 훨씬 빠릅니다)</label>
       <div class="row" style="margin-top:8px"><button id="bf-go" class="good">밤샘 자동 수정 시작</button></div>
+      <div class="gitwarn" id="bf-git" hidden></div>
       <div id="batches" style="margin-top:10px"></div>
     </div>
   </section>
@@ -755,6 +759,7 @@ async function api(path, body){
   }
   let j = {}; try { j = await r.json(); } catch (e) { j = {error: "응답을 해석하지 못했습니다"}; }
   if (r.status === 404 && j.error === "not found") throw new Error("대시보드 서버가 옛 버전입니다. 터미널에서 bash scripts/stop.sh 후 bash scripts/start.sh 로 다시 시작하세요.");
+  if (j.need_git && !String(path).startsWith("/api/projects/git-init")) setTimeout(() => openGitSetup(j.need_git), 0);  // no terminal needed: offer to start git right here
   if (!r.ok || j.error) throw new Error(j.error || ("오류 " + r.status));
   return j;
 }
@@ -1194,7 +1199,8 @@ function renderCommand(){
   } else if (isAn){
     $("cmdhint").appendChild(document.createTextNode("분석은 코드를 바꾸지 않습니다. 파일 내용을 AI에게 보내기 전에 토큰·비밀번호처럼 보이는 값은 가리고, .env 같은 비밀 파일은 보내지 않습니다."));
   } else if (state.project && state.project_git === false) {
-    $("cmdhint").appendChild(document.createTextNode("⚠ 이 폴더는 git 저장소가 아니라 코드 수정(개선)은 할 수 없습니다. 분석은 가능합니다. 개선하려면 폴더에서 git init 후 첫 커밋을 만드세요."));
+    $("cmdhint").appendChild(document.createTextNode("⚠ 이 폴더는 git 저장소가 아니거나 커밋이 없어 코드 수정(개선·밤샘 수정)은 할 수 없습니다. 분석은 가능합니다. "));
+    const gb = el("button", "good", "git 시작하기"); gb.onclick = () => openGitSetup(state.project); $("cmdhint").appendChild(gb);
   } else {
     $("cmdhint").appendChild(document.createTextNode("원본 프로젝트는 적용을 누르기 전에는 바뀌지 않습니다. 작업은 격리된 복사본에서 이뤄집니다."));
   }
@@ -1225,6 +1231,11 @@ function renderBatches(){
   });
   if (!(state.batches || []).length) box.appendChild(el("div", "hint", "아직 밤샘 수정 기록이 없습니다. 먼저 분석을 실행하세요."));
   $("bf-go").disabled = state.job.state === "running";
+  const bg = $("bf-git"); clear(bg); bg.hidden = !(state.project && state.project_git === false);
+  if (!bg.hidden){
+    bg.appendChild(document.createTextNode("⚠ 이 폴더는 git 저장소가 아니거나 커밋이 없어 자동 수정을 시작할 수 없습니다. 버튼 한 번으로 만들 수 있습니다(비밀 파일은 기본 제외, 파일 자체는 바뀌지 않습니다). "));
+    const gb = el("button", "good", "git 시작하기"); gb.onclick = () => openGitSetup(state.project); bg.appendChild(gb);
+  }
 }
 $("bf-go").onclick = async () => {
   if (!state || !state.project) return toast("프로젝트를 먼저 선택하세요.", true);
@@ -1700,7 +1711,7 @@ function drawReport(cur){
       const n = sel.size, files = new Set(fixable.filter(c => sel.has(c.id)).map(c => c.file)).size;
       info.textContent = "문제 " + fixable.length + "건 중 " + n + "건 선택 (파일 " + files + "개)" + (state.test_command && state.test_command.text === "없음" ? " · ⚠ 테스트 명령이 없어 시작되지 않습니다 (개선 모드의 '프로젝트 설정: 테스트 명령')" : "");
       go.textContent = n ? "▶ 선택한 " + n + "건 전부 순서대로 자동 수정" : "고칠 문제를 선택하세요";
-      go.disabled = !n || state.job.state === "running" || state.project_git === false;
+      go.disabled = !n || state.job.state === "running";  // no git: the click opens "git 시작하기" instead of a dead, unexplained button
     };
     refresh(); refreshFix = refresh;
   }
@@ -2332,6 +2343,59 @@ function openModal(title){
 }
 function closeModal(){ $("modal").close(); }
 
+// ---- start git for a folder without a repository: preview what is recorded, keep secrets out, or copy the commands to do it by hand
+async function openGitSetup(project){
+  if (!project || (openGitSetup.at === project && $("modal").open)) return;
+  openGitSetup.at = project;
+  const body = openModal("git 시작하기");
+  body.appendChild(el("div", "hint", "폴더를 살펴보는 중…"));
+  let pre;
+  try { pre = await api("/api/projects/git-init-preview?path=" + encodeURIComponent(project)); }
+  catch (e) { clear(body); body.appendChild(el("div", "hint", e.message)); return; }
+  clear(body);
+  body.appendChild(el("div", "", pre.name));
+  body.lastChild.style.fontWeight = "700"; body.lastChild.style.fontSize = "15px";
+  body.appendChild(el("div", "hint", project));
+  body.appendChild(el("p", "", "개선·밤샘 수정은 원본을 건드리지 않으려고 별도 복사본에서 작업하고, 되돌릴 수 있게 git 기록을 씁니다. 그래서 git 저장소(첫 커밋 1개 이상)가 필요합니다."));
+  if (pre.state === "empty") body.appendChild(el("p", "hint", "이 폴더에는 git이 이미 있지만 커밋이 하나도 없습니다. 첫 커밋만 만들면 됩니다."));
+  body.appendChild(el("p", "hint", "파일 자체는 바뀌지 않습니다. .git 과 .gitignore 가 추가되고, 아래 파일 " + pre.files + (pre.capped ? "개 이상" : "개") + "가 첫 커밋으로 기록됩니다. 되돌리려면 .git 폴더를 지우면 됩니다."));
+  const checks = [];
+  if (pre.flagged.length){
+    const box = el("div", "gitbox");
+    box.appendChild(el("b", "", "기록하지 않는 파일 " + pre.flagged_total + "개 (기본값)"));
+    box.appendChild(el("div", "hint", "비밀번호·토큰이 든 파일은 한 번 기록되면 지우기 어렵습니다. 꼭 필요한 것만 체크하세요."));
+    pre.flagged.forEach(f => {
+      const row = el("label", "chk"); const cb = el("input"); cb.type = "checkbox"; cb.dataset.path = f.path; checks.push(cb);
+      row.appendChild(cb); row.appendChild(el("span", "tag " + (f.kind === "secret" ? "ERROR" : "WARN"), f.kind === "secret" ? "비밀" : f.kind === "big" ? "큰 파일" : "데이터"));
+      row.appendChild(document.createTextNode(" " + f.path + " — " + f.why + " · 그래도 기록")); box.appendChild(row);
+    });
+    if (pre.flagged_total > pre.flagged.length) box.appendChild(el("div", "hint", "…그 밖에 " + (pre.flagged_total - pre.flagged.length) + "개도 같은 방식으로 제외됩니다."));
+    body.appendChild(box);
+  } else body.appendChild(el("p", "hint", "비밀번호·토큰이 든 파일이나 큰 데이터 파일은 발견되지 않았습니다."));
+  if (pre.nested.length) body.appendChild(el("p", "hint", "안에 별도 git 저장소가 있는 폴더는 기록하지 않습니다: " + pre.nested.join(", ")));
+  if (pre.sample.length){
+    const d = el("details"); d.appendChild(el("summary", "", "기록될 파일 예시 (처음 " + pre.sample.length + "개)"));
+    d.appendChild(el("div", "hint", pre.sample.join("\n"))); d.lastChild.style.whiteSpace = "pre-wrap"; body.appendChild(d);
+  }
+  const row = el("div", "row"); row.style.marginTop = "10px";
+  const go = el("button", "good", "git 시작하기"); go.disabled = !!pre.capped; row.appendChild(go);
+  const man = el("button", "", "직접 하려면 (명령 보기)"); row.appendChild(man);
+  const no = el("button", "", "취소"); no.onclick = closeModal; row.appendChild(no);
+  body.appendChild(row);
+  if (pre.capped) body.appendChild(el("p", "hint", "파일이 너무 많아 프로젝트 폴더가 아닌 것 같습니다. 올바른 폴더를 고르세요."));
+  const cmd = el("pre", "gitcmd"); cmd.hidden = true; cmd.textContent = pre.commands; body.appendChild(cmd);
+  const cp = el("button", "", "명령 복사"); cp.hidden = true; body.appendChild(cp);
+  man.onclick = () => { cmd.hidden = !cmd.hidden; cp.hidden = cmd.hidden; };
+  cp.onclick = async () => { try { await navigator.clipboard.writeText(pre.commands); toast("명령을 복사했습니다. 터미널에 붙여 넣으세요."); } catch (e) { toast("복사하지 못했습니다. 위 명령을 직접 선택해 복사하세요.", true); } };
+  go.onclick = async () => {
+    go.disabled = true; go.textContent = "만드는 중…";
+    try {
+      const r = await api("/api/projects/git-init", {path: project, include: checks.filter(c => c.checked).map(c => c.dataset.path)});
+      toast(r.message + " 방금 하려던 작업을 다시 누르세요."); closeModal(); loadProjects(); poll();
+    } catch (e) { go.disabled = false; go.textContent = "git 시작하기"; toast(e.message, true); }
+  };
+}
+
 async function openBrowser(title, onPick, start){
   const body = openModal(title);
   const folderView = el("div");
@@ -2427,14 +2491,8 @@ function openEditor(c){
   if (c.is_git) s4.appendChild(el("div", "hint", "git 저장소입니다 (브랜치 " + (c.branch || "?") + "). 개선·밤샘 수정을 쓸 수 있습니다."));
   else {
     s4.appendChild(el("div", "hint", "git 저장소가 아니라 코드 수정(개선·밤샘 수정)은 할 수 없습니다. 분석·영상 분석은 가능합니다."));
-    const b = el("button", "good", "git 초기화 + 첫 커밋 만들기"); b.style.marginTop = "6px";
-    b.onclick = async () => {
-      try {
-        const pre = await api("/api/projects/git-init-preview?path=" + encodeURIComponent(c.path));
-        if (!confirm("이 폴더를 git 저장소로 만들고 파일 " + pre.files + (pre.capped ? "개 이상" : "개") + "를 첫 커밋으로 기록합니다.\n제외: " + pre.excluded.join(", ") + "\n파일 자체는 바뀌지 않고 .git 과 .gitignore 만 추가됩니다. 계속할까요?")) return;
-        const r = await api("/api/projects/git-init", {path: c.path}); toast(r.message); closeModal(); loadProjects(); poll();
-      } catch (e) { toast(e.message, true); }
-    };
+    const b = el("button", "good", "git 시작하기 (비밀 파일은 제외)"); b.style.marginTop = "6px";
+    b.onclick = () => openGitSetup(c.path);
     s4.appendChild(b);
   }
 

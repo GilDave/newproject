@@ -5,8 +5,10 @@ created, `git init` never commits secret files, and "open" only opens things tha
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -124,53 +126,169 @@ def rename_project(path: Path, root: Path, new_name: str) -> Path:
 
 
 # ------------------------------------------------------------------ git init for a plain folder
-def _walk_count(path: Path, cap: int = 20000) -> tuple[int, list[str]]:
-    count, skipped = 0, []
-    for dirpath, dirnames, filenames in os.walk(path):
-        keep = []
-        for d in dirnames:
-            if d in SKIP_DIRS or Path(dirpath, d).is_symlink():
-                if dirpath == str(path) and d in SKIP_DIRS and d not in (".git", ".solomon"):
-                    skipped.append(d)
-                continue
-            keep.append(d)
-        dirnames[:] = keep
-        for f in filenames:
-            if f.startswith(".env") or f.endswith((".pem", ".key", ".pyc")) or f == ".DS_Store" or Path(dirpath, f).is_symlink():
-                continue
-            count += 1
-            if count >= cap:
-                return cap, skipped
-    return count, skipped
+CAP = 20000
+BIG_BYTES = 5 * 1024 * 1024
+DATA_NAMES = ("*.db", "*.sqlite", "*.sqlite3", "*.sqlite-wal", "*.sqlite-shm", "*.log", "*.bak", "*.dump", "*.pid")
+DATA_DIRS = {"backup", "backups", "logs", "log", "tmp", ".cache"}
+CONFIGISH = {".conf", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json", ".properties", ".sh", ".bash", ".zsh", ".env", ".plist", ".xml", ".txt"}
+SECRET_VALUE = re.compile(r"(?i)(pass(?:word|wd)?|secret|token|api[_-]?key|private[_-]?key)\w*[\"']?\s*[:=]\s*[\"']?[^\s\"'$(){}<>\[\],;#]{4,}")
+SCAN_READS = 3000  # how many config-like files are opened to look for secret values
+MAX_READ = 200 * 1024
+KIND_LABEL = {"secret": "비밀", "data": "데이터·로그", "big": "큰 파일"}
+
+
+def git_state(path: Path) -> str:
+    """none = no repository, empty = a repository without a commit, ready = has commits."""
+    path = Path(path)
+    if not (path / ".git").exists():
+        return "none"
+    return "ready" if gitops.git(["rev-parse", "--verify", "HEAD"], path, check=False).returncode == 0 else "empty"
+
+
+def _classify(base: Path, rel: str, reads: list[int]) -> Optional[tuple[str, str]]:
+    """Why a file should stay out of a first commit, or None. Names are checked first, then the contents of small config-like files."""
+    if gitops._is_secret(rel):
+        return "secret", "비밀 파일 이름 (.env, *.pem, *.key …)"
+    full = base / rel
+    try:
+        size = full.stat().st_size
+    except OSError:
+        return None
+    name = rel.rsplit("/", 1)[-1]
+    if Path(name).suffix.lower() in CONFIGISH and size <= MAX_READ and reads[0] < SCAN_READS:
+        reads[0] += 1
+        try:
+            if SECRET_VALUE.search(full.read_text(encoding="utf-8", errors="ignore")):
+                return "secret", "비밀번호·토큰처럼 보이는 값이 들어 있음"
+        except OSError:
+            pass
+    if size > BIG_BYTES:
+        return "big", "5MB보다 큼"
+    if any(fnmatch.fnmatch(name, pat) for pat in DATA_NAMES) or any(part in DATA_DIRS for part in rel.split("/")[:-1]):
+        return "data", "데이터베이스·로그·백업 (기록할 코드가 아님)"
+    return None
+
+
+def _scan(path: Path) -> dict:
+    """Everything a first commit would hold: the files to commit, the files kept out and why, nested repositories, skipped folders."""
+    path = Path(path)
+    state = git_state(path)
+    rels: list[str] = []
+    skipped: list[str] = []
+    nested: list[str] = []
+    capped = False
+    if state == "empty":  # a repository exists: respect its own .gitignore
+        out = gitops.git(["ls-files", "-co", "--exclude-standard", "-z"], path).stdout.split("\0")
+        rels = [f for f in out if f]
+        capped = len(rels) >= CAP
+    else:
+        for dirpath, dirnames, filenames in os.walk(path):
+            keep = []
+            for d in dirnames:
+                full = Path(dirpath, d)
+                if d in SKIP_DIRS or full.is_symlink():
+                    if dirpath == str(path) and d in SKIP_DIRS and d not in (".git", ".solomon"):
+                        skipped.append(d)
+                    continue
+                if (full / ".git").exists():  # a repository inside: git would record it as an empty link, so it stays out
+                    nested.append(str(full.relative_to(path)))
+                    continue
+                keep.append(d)
+            dirnames[:] = keep
+            for f in filenames:
+                if f.endswith(".pyc") or f == ".DS_Store" or Path(dirpath, f).is_symlink():
+                    continue
+                rels.append(str(Path(dirpath, f).relative_to(path)))
+                if len(rels) >= CAP:
+                    capped = True
+                    break
+            if capped:
+                break
+    reads = [0]
+    flagged: dict[str, tuple[str, str]] = {}
+    clean: list[str] = []
+    for rel in sorted(rels):
+        why = _classify(path, rel, reads)
+        if why:
+            flagged[rel] = why
+        else:
+            clean.append(rel)
+    return {"state": state, "clean": clean, "flagged": flagged, "nested": sorted(nested), "skipped": sorted(set(skipped)), "capped": capped}
+
+
+def _ignore_line(rel: str) -> str:
+    return "/" + re.sub(r"([*?\[\]\\])", r"\\\1", rel)
+
+
+def _manual_commands(path: Path, scan: dict) -> str:
+    lines = [f"cd {shlex.quote(str(path))}"]
+    if scan["state"] == "none":
+        lines.append("git init")
+    keep = [_ignore_line(r) for r in scan["flagged"]] + [n + "/" for n in scan["nested"]]
+    if keep:
+        shown = keep[:25]
+        lines.append("printf '%s\\n' " + " ".join(shlex.quote(x) for x in shown) + " >> .gitignore" + ("   # 나머지 %d개도 같은 방식으로" % (len(keep) - 25) if len(keep) > 25 else ""))
+    lines += ["git add -A", "git status --short   # 비밀 파일이 보이면 커밋하지 말고 git restore --staged <파일>", 'git commit -m "초기 커밋"']
+    return "\n".join(lines)
+
+
+def _guard(path: Path) -> None:
+    resolved = path.resolve()
+    if resolved == home() or resolved == Path(resolved.anchor):
+        raise ProjectError(400, "홈 폴더나 최상위 폴더 전체는 git 저장소로 만들지 않습니다. 프로젝트 폴더를 고르세요.")
 
 
 def git_init_preview(path: Path) -> dict:
     path = Path(path)
-    if (path / ".git").exists():
+    _guard(path)
+    scan = _scan(path)
+    if scan["state"] == "ready":
         raise ProjectError(409, "이미 git 저장소입니다.")
-    n, skipped = _walk_count(path)
-    n += 0 if (path / ".gitignore").exists() else 1  # the .gitignore Solomon writes is part of the first commit
-    return {"files": n, "capped": n >= 20000, "excluded": sorted(set(skipped)) + ["비밀 파일(.env, *.pem, *.key)"]}
+    have_ignore = (path / ".gitignore").exists()
+    n = len(scan["clean"]) + (0 if have_ignore else 1)  # the .gitignore Solomon writes is part of the first commit
+    flagged = [{"path": r, "kind": k, "why": w} for r, (k, w) in scan["flagged"].items()]
+    return {"state": scan["state"], "files": n, "capped": scan["capped"],
+            "excluded": scan["skipped"] + scan["nested"] + ["비밀 파일(.env, *.pem, *.key)"],
+            "flagged": flagged[:200], "flagged_total": len(flagged), "nested": scan["nested"],
+            "sample": scan["clean"][:30], "commands": _manual_commands(path, scan), "name": path.name}
 
 
-def git_init(path: Path) -> dict:
-    """git init + a .gitignore that keeps secrets and bulky folders out + a first commit under the identity "Solomon"."""
+def git_init(path: Path, include: Optional[list] = None) -> dict:
+    """git init (or the first commit of a repository that has none) + a .gitignore that keeps secrets, data and bulky folders out,
+    under the identity "Solomon". `include` names flagged files the user chose to commit anyway."""
     path = Path(path)
-    if (path / ".git").exists():
+    _guard(path)
+    scan = _scan(path)
+    if scan["state"] == "ready":
         raise ProjectError(409, "이미 git 저장소입니다.")
+    if scan["capped"]:
+        raise ProjectError(400, f"파일이 {CAP}개 이상이라 프로젝트 폴더가 아닌 것 같습니다. 프로젝트 폴더를 골라 주세요.")
+    allow = {str(x) for x in (include or [])}
+    out_files = [r for r in scan["flagged"] if r not in allow]
     gi = path / ".gitignore"
     have = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
     add = [l for l in IGNORE_LINES if l not in have]
+    extra = [l for l in [_ignore_line(r) for r in out_files] + [n + "/" for n in scan["nested"]] if l not in have and l not in add]
+    if extra:
+        add += ["# Solomon: 첫 커밋에서 제외한 파일(비밀·데이터·큰 파일)"] + extra
     if add:
         with gi.open("a", encoding="utf-8") as fh:
             fh.write(("\n" if have and have[-1] else "") + "\n".join(add) + "\n")
-    gitops.git(["init", "-q"], path)
-    gitops.git(["symbolic-ref", "HEAD", "refs/heads/main"], path, check=False)
+    if scan["state"] == "none":
+        gitops.git(["init", "-q"], path)
+        gitops.git(["symbolic-ref", "HEAD", "refs/heads/main"], path, check=False)
+    else:  # something was staged before (maybe a secret): start from an empty index
+        gitops.git(["rm", "-r", "--cached", "-q", "--ignore-unmatch", "."], path, check=False)
     gitops.git(["add", "-A"], path)
+    staged = set(gitops.git(["diff", "--cached", "--name-only", "-z"], path).stdout.split("\0"))
+    leaked = sorted(r for r in out_files if r in staged)
+    if leaked:  # the ignore rules did not hold: stop before anything is recorded
+        gitops.git(["rm", "-r", "--cached", "-q", "--ignore-unmatch", "."], path, check=False)
+        raise ProjectError(500, "제외해야 할 파일이 커밋 대상에 들어가 중단했습니다: " + ", ".join(leaked[:5]))
     gitops.git(["-c", "user.name=Solomon", "-c", "user.email=solomon@localhost", "commit", "-q", "--allow-empty", "-m", "Initial commit by Solomon"], path)
     gitops.exclude_from_git(path, ".solomon")
     n = len(gitops.git(["ls-files"], path).stdout.splitlines())
-    return {"files": n}
+    return {"files": n, "excluded": len(out_files), "excluded_list": out_files[:20]}
 
 
 # ------------------------------------------------------------------ open in Finder
