@@ -1,9 +1,9 @@
 diff --git a/ena_bot/trend_live.py b/ena_bot/trend_live.py
 new file mode 100644
-index 0000000..2f728fe
+index 0000000..935a753
 --- /dev/null
 +++ b/ena_bot/trend_live.py
-@@ -0,0 +1,456 @@
+@@ -0,0 +1,478 @@
 +"""4시간봉 추세 엔진용 거래소 브로커(테스트넷 우선, 메인넷은 여러 겹의 안전장치 뒤에서만).
 +
 +엔진(TrendEngine)은 브로커에 목표 수량만 알려 주고(`rebalance(목표수량, 가격)`), 이 브로커가 거래소의 '실제' 포지션을 읽어
@@ -37,7 +37,9 @@ index 0000000..2f728fe
 +}
 +DEFAULT_STOP_PCT = 0.10
 +STOP_PCT_RANGE = (0.02, 0.30)
-+PASS_FILE = Path("data") / "trend_testnet_pass.json"
++PASS_FILE = Path("data") / "trend_testnet_pass.json"  # 왕복 시험(테스트넷 또는 메인넷 극소액) 통과 기록
++MAINNET_TEST_USD = 12.0        # 메인넷 왕복 시험의 주문 크기(명목가). 수수료는 몇 센트 수준
++MAINNET_TEST_CAP_USD = 25.0    # 시험 중에는 상한도 이 값으로 낮춘다
 +PASS_MAX_AGE_DAYS = 30
 +DUP_LINK_CODE = 110072  # 같은 orderLinkId로 다시 보냄
 +
@@ -329,9 +331,9 @@ index 0000000..2f728fe
 +        d = json.loads(Path(path).read_text(encoding="utf-8"))
 +        age = ((now if now is not None else time.time()) - float(d["ts"])) / 86400
 +    except (OSError, ValueError, KeyError, TypeError):
-+        return False, "테스트넷 왕복 시험 통과 기록이 없습니다"
++        return False, "왕복 시험 통과 기록이 없습니다"
 +    if age > PASS_MAX_AGE_DAYS:
-+        return False, f"테스트넷 시험 통과 기록이 {age:.0f}일 지났습니다(최대 {PASS_MAX_AGE_DAYS}일)"
++        return False, f"왕복 시험 통과 기록이 {age:.0f}일 지났습니다(최대 {PASS_MAX_AGE_DAYS}일)"
 +    return True, ""
 +
 +
@@ -354,7 +356,7 @@ index 0000000..2f728fe
 +            raise LiveRefused("메인넷 실거래는 --i-understand-live-trading 플래그가 필요합니다.")
 +        ok, why = testnet_pass_ok(clock(), pass_path)
 +        if not ok:
-+            raise LiveRefused(why + ". 먼저 테스트넷에서 `python -m ena_bot.trend_live --check --test-order` 를 통과하세요.")
++            raise LiveRefused(why + ". 먼저 `python -m ena_bot.trend_live --test-order` 왕복 시험을 통과하세요(테스트넷, 또는 메인넷 극소액 $12).")
 +        tty = sys.stdin.isatty() if isatty is None else isatty
 +        if not tty:
 +            raise LiveRefused("메인넷 실거래는 사람이 터미널에서 직접 시작해야 합니다(자동 실행·launchd 불가).")
@@ -369,15 +371,30 @@ index 0000000..2f728fe
 +
 +
 +# ---------------------------------------------------------------------- 점검 명령
-+def run_check(cfg, env, *, test_order: bool, client_factory=BybitClient, out=print, pass_path: Path = PASS_FILE, sleep=time.sleep, clock=time.time) -> bool:
++def run_check(cfg, env, *, test_order: bool, client_factory=BybitClient, out=print, pass_path: Path = PASS_FILE, sleep=time.sleep, clock=time.time,
++              args=None, input_fn=input, isatty=None) -> bool:
 +    mode = cfg.mode
 +    if mode not in ("testnet", "live"):
-+        out("config의 mode가 testnet 이어야 점검할 수 있습니다(지금: %s)." % mode)
-+        return False
-+    if test_order and mode != "testnet":
-+        out("--test-order 는 테스트넷에서만 실행합니다. 메인넷에서는 주문하지 않습니다.")
++        out("config의 mode가 testnet 또는 live 이어야 점검할 수 있습니다(지금: %s)." % mode)
 +        return False
 +    limits = resolve_limits(mode, env, cfg.risk.max_leverage)
++    test_usd = 15.0
++    if test_order and mode == "live":  # 메인넷 왕복 시험: 실제 돈이므로 본 실행과 같은 문턱 + 아주 작은 크기
++        try:
++            if not getattr(cfg, "live_enabled", False):
++                raise LiveRefused("메인넷 시험 주문은 config의 live_enabled=true 가 필요합니다.")
++            if not getattr(args, "i_understand_live_trading", False):
++                raise LiveRefused("메인넷 시험 주문은 --i-understand-live-trading 플래그가 필요합니다.")
++            if not (sys.stdin.isatty() if isatty is None else isatty):
++                raise LiveRefused("메인넷 시험 주문은 사람이 터미널에서 직접 실행해야 합니다.")
++            phrase = f"LIVE {cfg.symbol} TEST {int(MAINNET_TEST_USD)}USD"
++            if input_fn(f"메인넷에서 실제 돈으로 약 ${MAINNET_TEST_USD:g}짜리 시험 주문 4번(진입 → 전환 때 닫기+새로 열기 → 정리)을 냅니다. 계속하려면 정확히 입력하세요 → {phrase}\n> ").strip() != phrase:
++                raise LiveRefused("확인 문구가 달라 시작하지 않습니다.")
++        except LiveRefused as exc:
++            out(f"✗ {exc}")
++            return False
++        limits = LiveLimits(min(limits.max_notional_usd, MAINNET_TEST_CAP_USD), min(limits.max_order_usd, MAINNET_TEST_CAP_USD), 1.0, limits.stop_pct)
++        test_usd = MAINNET_TEST_USD
 +    key, secret = _keys(mode, env)
 +    if not key or not secret:
 +        out("API 키가 .env 에 없습니다.")
@@ -405,7 +422,11 @@ index 0000000..2f728fe
 +    except Exception as exc:  # noqa: BLE001
 +        out(f"✗ 현재가를 읽지 못했습니다: {exc}")
 +        return False
-+    qty = max(_floor(15.0 / price, broker.instrument().qty_step), broker.instrument().min_qty)
++    qty = max(_floor(test_usd / price, broker.instrument().qty_step), broker.instrument().min_qty)
++    if qty * price > limits.max_order_usd:
++        out(f"✗ 최소 주문 수량({qty:g})이 시험 상한(${limits.max_order_usd:g})보다 큽니다. 시험하지 않습니다.")
++        return False
++    out(f"시험 주문 크기: {qty:g} {cfg.symbol.replace('USDT', '')} ≈ ${qty * price:.2f} · {'메인넷(실제 돈)' if mode == 'live' else '테스트넷'}")
 +    ok = True
 +    try:
 +        for label, target, check in (
@@ -434,10 +455,10 @@ index 0000000..2f728fe
 +            ok = False
 +    if ok:
 +        Path(pass_path).parent.mkdir(parents=True, exist_ok=True)
-+        Path(pass_path).write_text(json.dumps({"ts": clock(), "symbol": cfg.symbol, "qty": qty}), encoding="utf-8")
-+        out(f"✓ 테스트넷 왕복 시험 통과 — 기록: {pass_path}")
++        Path(pass_path).write_text(json.dumps({"ts": clock(), "symbol": cfg.symbol, "qty": qty, "network": "mainnet" if mode == "live" else "testnet"}), encoding="utf-8")
++        out(f"✓ {'메인넷' if mode == 'live' else '테스트넷'} 왕복 시험 통과 — 기록: {pass_path}")
 +    else:
-+        out("✗ 시험 실패. 메인넷은 열 수 없습니다.")
++        out("✗ 시험 실패. 메인넷 본 실행은 열 수 없습니다.")
 +    return ok
 +
 +
@@ -448,24 +469,25 @@ index 0000000..2f728fe
 +    ap.add_argument("--config", default="config.json")
 +    ap.add_argument("--env", default=".env")
 +    ap.add_argument("--check", action="store_true", help="연결·권한·상품·포지션 모드를 주문 없이 점검")
-+    ap.add_argument("--test-order", action="store_true", help="테스트넷에서 최소 수량으로 진입→전환→정리 왕복 시험")
++    ap.add_argument("--test-order", action="store_true", help="최소 수량으로 진입→전환→정리 왕복 시험(테스트넷, 또는 메인넷 극소액)")
++    ap.add_argument("--i-understand-live-trading", action="store_true", help="메인넷 시험 주문에 필요")
 +    args = ap.parse_args(argv)
 +    if not (args.check or args.test_order):
 +        ap.print_help()
 +        return 2
 +    load_env(args.env)
 +    cfg = load_config(args.config)
-+    return 0 if run_check(cfg, os.environ, test_order=args.test_order) else 1
++    return 0 if run_check(cfg, os.environ, test_order=args.test_order, args=args) else 1
 +
 +
 +if __name__ == "__main__":
 +    raise SystemExit(main())
 diff --git a/tests/test_trend_live.py b/tests/test_trend_live.py
 new file mode 100644
-index 0000000..42d8b51
+index 0000000..9cde0dd
 --- /dev/null
 +++ b/tests/test_trend_live.py
-@@ -0,0 +1,345 @@
+@@ -0,0 +1,376 @@
 +import json
 +import subprocess
 +import sys
@@ -737,7 +759,7 @@ index 0000000..42d8b51
 +        go(c=cfg("live", live_enabled=False))
 +    with pytest.raises(tl.LiveRefused, match="i-understand-live-trading"):
 +        go(a=SimpleNamespace(i_understand_live_trading=False))
-+    with pytest.raises(tl.LiveRefused, match="테스트넷 왕복 시험 통과 기록이 없습니다"):
++    with pytest.raises(tl.LiveRefused, match="왕복 시험 통과 기록이 없습니다"):
 +        go()
 +    passfile.write_text(json.dumps({"ts": 1000.0 - 40 * 86400}))
 +    with pytest.raises(tl.LiveRefused, match="40일 지났습니다"):
@@ -768,6 +790,7 @@ index 0000000..42d8b51
 +    ok = tl.run_check(cfg("testnet"), ENV, test_order=True, client_factory=factory, out=lines.append, pass_path=tmp_path / "p.json", sleep=lambda s: None)
 +    c = made[-1]
 +    assert ok and c.pos == 0.0 and (tmp_path / "p.json").exists() and "테스트넷 왕복 시험 통과" in lines[-1]
++    assert json.loads((tmp_path / "p.json").read_text())["network"] == "testnet"
 +    assert [o["reduce_only"] for o in c.orders] == [False, True, False, True] and [o["side"] for o in c.orders] == ["Buy", "Sell", "Sell", "Buy"]
 +    assert tl.testnet_pass_ok(path=tmp_path / "p.json")[0]
 +
@@ -780,13 +803,43 @@ index 0000000..42d8b51
 +        return made[-1]
 +    out = []
 +    ok = tl.run_check(cfg("testnet"), ENV, test_order=True, client_factory=factory, out=out.append, pass_path=tmp_path / "p.json", sleep=lambda s: None)
-+    assert not ok and not (tmp_path / "p.json").exists() and made[0].pos == 0.0 and "메인넷은 열 수 없습니다" in out[-1]
++    assert not ok and not (tmp_path / "p.json").exists() and made[0].pos == 0.0 and "메인넷 본 실행은 열 수 없습니다" in out[-1]
 +
 +
-+def test_test_orders_are_never_sent_to_mainnet(tmp_path):
++def _mainnet_check(tmp_path, *, live_enabled=True, flag=True, tty=True, typed="LIVE ENAUSDT TEST 12USD", equity=1000.0):
++    out, made = [], []
++
++    def factory(url, key, secret):
++        made.append(FakeClient(equity=equity))
++        made[-1].url = url
++        return made[-1]
++    ok = tl.run_check(cfg("live", live_enabled=live_enabled), ENV, test_order=True, client_factory=factory, out=out.append, pass_path=tmp_path / "p.json",
++                      sleep=lambda s: None, args=SimpleNamespace(i_understand_live_trading=flag), input_fn=lambda p: typed, isatty=tty)
++    return ok, out, made
++
++
++def test_mainnet_rehearsal_needs_the_same_gates_and_sends_nothing_when_refused(tmp_path):
++    for kw, msg in (({"live_enabled": False}, "live_enabled"), ({"flag": False}, "i-understand"), ({"tty": False}, "터미널"), ({"typed": "yes"}, "확인 문구")):
++        ok, out, made = _mainnet_check(tmp_path, **kw)
++        assert not ok and msg in out[-1] and not made and not (tmp_path / "p.json").exists(), (kw, out)
++
++
++def test_mainnet_rehearsal_uses_a_tiny_size_and_unlocks_the_real_run(tmp_path):
++    ok, out, made = _mainnet_check(tmp_path)
++    c = made[-1]
++    assert ok and c.url == tl.MAINNET and c.pos == 0.0
++    assert [o["qty"] for o in c.orders] == [24.0, 24.0, 24.0, 24.0]               # $12 / 0.5 = 24 ENA, 닫기+열기 포함
++    assert max(o["qty"] * 0.5 for o in c.orders) <= 12.0 and c.leverage == 1.0
++    rec = json.loads((tmp_path / "p.json").read_text())
++    assert rec["network"] == "mainnet" and "메인넷 왕복 시험 통과" in out[-1]
++    assert tl.testnet_pass_ok(path=tmp_path / "p.json")[0]
++
++
++def test_mainnet_rehearsal_refuses_when_the_minimum_order_is_bigger_than_the_test_cap(tmp_path):
 +    out = []
-+    assert tl.run_check(cfg("live"), ENV, test_order=True, client_factory=lambda *a: FakeClient(), out=out.append, pass_path=tmp_path / "p.json") is False
-+    assert "테스트넷에서만" in out[-1]
++    ok = tl.run_check(cfg("live", live_enabled=True), ENV, test_order=True, client_factory=lambda *a: FakeClient(min_qty=1000.0, step=1000.0), out=out.append,
++                      pass_path=tmp_path / "p.json", args=SimpleNamespace(i_understand_live_trading=True), input_fn=lambda p: "LIVE ENAUSDT TEST 12USD", isatty=True)
++    assert not ok and "시험 상한" in out[-1] and not (tmp_path / "p.json").exists()
 +
 +
 +# ---------------------------------------------------------------- 연결 스크립트
