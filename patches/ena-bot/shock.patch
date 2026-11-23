@@ -1,0 +1,369 @@
+diff --git a/ena_bot/shock.py b/ena_bot/shock.py
+new file mode 100644
+index 0000000..3b0595a
+--- /dev/null
++++ b/ena_bot/shock.py
+@@ -0,0 +1,213 @@
++"""이상 변동 봉(충격 봉) 탐지 · 보정 · 사후 통계. 순수 계산(파일·네트워크 접근 없음, 미래 데이터를 쓰지 않는다).
++
++원칙
++- 원인(뉴스)을 모델 입력으로 쓰지 않는다. 원인은 틀리기 쉽고(출처 없는 소문 포함) 한 번 학습에 섞이면 되돌리기 어렵다.
++  대신 '가격으로 객관적으로 이상한 봉'을 찾고, 그 뒤에 가격이 실제로 어떻게 움직였는지를 과거 데이터에서 통계로 본다.
++- 원인은 사용자가 출처와 함께 남기는 메모(NoteStore)로만 두고, 항상 '미검증'으로 표시한다. 계산에는 쓰이지 않는다.
++- 표본이 모자라면(독립 사건 30개·코인 5개 미만, 또는 신뢰구간이 0을 포함) 분석에 반영하지 않는다고 답한다. 한 번의 사건으로는 규칙을 만들 수 없다.
++"""
++
++from __future__ import annotations
++
++import json
++import math
++import time
++from pathlib import Path
++
++import numpy as np
++
++MIN_EVENTS = 30
++MIN_COINS = 5
++WICK_SHARE = 0.6          # 윗·아랫꼬리가 전체 범위의 이만큼 이상이면 '꼬리 급등락'(체결 오류·얇은 호가 가능성)
++MAD_SCALE = 1.4826
++
++
++def _rolling_median_mad(x: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray]:
++    """각 위치 i에서 직전 window개(i 자신은 제외)의 중앙값과 절대편차 중앙값. 앞쪽 window개는 NaN. 미래를 쓰지 않는다."""
++    n = len(x)
++    med = np.full(n, np.nan)
++    mad = np.full(n, np.nan)
++    if n <= window:
++        return med, mad
++    win = np.lib.stride_tricks.sliding_window_view(x, window)[: n - window]       # win[k] = x[k : k + window] → 위치 k + window 의 직전 구간
++    m = np.median(win, axis=1)
++    med[window:] = m
++    mad[window:] = np.median(np.abs(win - m[:, None]), axis=1)
++    return med, mad
++
++
++def _scale(med: np.ndarray, mad: np.ndarray, rel_floor: float = 0.25) -> np.ndarray:
++    """산포의 하한: 거의 변동이 없던 구간에서도 0으로 나누지 않는다. 로그 거래량은 중앙값이 커서 상대 하한을 쓰지 않는다(rel_floor=0)."""
++    return np.maximum(np.maximum(MAD_SCALE * mad, rel_floor * np.abs(med)), 1e-9)
++
++
++def detect_shocks(o, h, l, c, v=None, *, window: int = 180, z_thr: float = 6.0, min_range: float = 0.03) -> list[dict]:
++    """평소(직전 window개 봉)의 변동폭·몸통 크기에 비해 z_thr 배 이상 튄 봉. 붙어 있는 봉은 가장 큰 하나로 합친다.
++
++    z는 (값 - 중앙값) / (1.4826 × MAD). 최소 범위(min_range, 로그 기준 3%) 미만의 봉은 아무리 z가 커도 건너뛴다."""
++    o, h, l, c = (np.asarray(a, dtype=float) for a in (o, h, l, c))
++    n = len(c)
++    rng = np.log(np.maximum(h, 1e-12) / np.maximum(l, 1e-12))
++    body = np.log(np.maximum(c, 1e-12) / np.maximum(o, 1e-12))
++    abs_body = np.abs(body)
++    m_r, d_r = _rolling_median_mad(rng, window)
++    m_b, d_b = _rolling_median_mad(abs_body, window)
++    z_r = (rng - m_r) / _scale(m_r, d_r)
++    z_b = (abs_body - m_b) / _scale(m_b, d_b)
++    z_v = np.full(n, np.nan)
++    if v is not None:
++        v = np.asarray(v, dtype=float)
++        m_v, d_v = _rolling_median_mad(np.log1p(np.maximum(v, 0)), window)
++        z_v = (np.log1p(np.maximum(v, 0)) - m_v) / _scale(m_v, d_v, rel_floor=0.0)
++    hit = np.where((~np.isnan(z_r)) & (rng >= min_range) & ((z_r >= z_thr) | (z_b >= z_thr)))[0]
++    out: list[dict] = []
++    for i in hit:
++        full = h[i] - l[i]
++        up_wick = (h[i] - max(o[i], c[i])) / full if full > 0 else 0.0
++        low_wick = (min(o[i], c[i]) - l[i]) / full if full > 0 else 0.0
++        ev = {"i": int(i), "direction": "up" if c[i] >= o[i] else "down", "ret": float(c[i] / o[i] - 1), "range_pct": float(math.expm1(rng[i])),
++              "z_range": float(z_r[i]), "z_body": float(z_b[i]), "z_volume": None if np.isnan(z_v[i]) else float(z_v[i]),
++              "upper_wick": float(up_wick), "lower_wick": float(low_wick),
++              "kind": "wick_spike" if max(up_wick, low_wick) >= WICK_SHARE else "body_run"}
++        if out and ev["i"] - out[-1]["i"] <= 1:                      # 이어진 봉은 하나의 사건
++            if ev["z_range"] > out[-1]["z_range"]:
++                out[-1] = ev
++            continue
++        out.append(ev)
++    return out
++
++
++def winsorize_bars(o, h, l, c, shocks: list[dict], *, window: int = 180, cap_z: float = 4.0):
++    """충격 봉의 몸통·꼬리를 평소 변동폭 + cap_z×산포 이내로 눌러 변동성·ATR·지지/저항 계산이 봉 하나에 끌려가지 않게 한다. 원본 차트는 바꾸지 않는다.
++    (o, h, l, c) 새 배열을 돌려준다. 충격 봉이 아닌 봉은 그대로다."""
++    o2, h2, l2, c2 = (np.array(a, dtype=float) for a in (o, h, l, c))
++    rng = np.log(np.maximum(h2, 1e-12) / np.maximum(l2, 1e-12))
++    abs_body = np.abs(np.log(np.maximum(c2, 1e-12) / np.maximum(o2, 1e-12)))
++    m_r, d_r = _rolling_median_mad(rng, window)
++    m_b, d_b = _rolling_median_mad(abs_body, window)
++    for ev in shocks:
++        i = ev["i"]
++        if np.isnan(m_r[i]):
++            continue
++        r_cap = m_r[i] + cap_z * _scale(m_r, d_r)[i]
++        b_cap = m_b[i] + cap_z * _scale(m_b, d_b)[i]
++        body = math.log(c2[i] / o2[i])
++        c2[i] = o2[i] * math.exp(max(-b_cap, min(b_cap, body)))
++        up = math.log(h2[i] / o2[i])
++        dn = math.log(o2[i] / l2[i])
++        h2[i] = o2[i] * math.exp(min(up, r_cap))
++        l2[i] = o2[i] * math.exp(-min(dn, r_cap))
++        h2[i] = max(h2[i], o2[i], c2[i])
++        l2[i] = min(l2[i], o2[i], c2[i])
++    return o2, h2, l2, c2
++
++
++def _spaced(idx: list[int], min_gap: int) -> list[int]:
++    kept: list[int] = []
++    for i in sorted(idx):
++        if not kept or i - kept[-1] >= min_gap:
++            kept.append(i)
++    return kept
++
++
++def forward_returns(c, shocks: list[dict], horizons=(1, 6, 18, 42), *, min_gap: int = 12) -> dict[int, list[float]]:
++    """충격 봉이 닫힌 뒤(종가 기준) h봉 뒤까지의 로그수익률. 방향을 맞춰 '충격 방향으로 이어지면 +, 되돌리면 -'로 돌려준다.
++    서로 min_gap봉 안의 사건은 하나만 쓴다(같은 움직임을 여러 번 세지 않도록)."""
++    c = np.asarray(c, dtype=float)
++    keep = set(_spaced([e["i"] for e in shocks], min_gap))
++    sign = {e["i"]: (1.0 if e["direction"] == "up" else -1.0) for e in shocks}
++    out: dict[int, list[float]] = {h: [] for h in horizons}
++    for i in keep:
++        for h in horizons:
++            if i + h < len(c):
++                out[h].append(sign[i] * math.log(c[i + h] / c[i]))
++    return out
++
++
++def _summarize(vals: list[float], n_coins: int, iters: int = 2000, seed: int = 11) -> dict:
++    a = np.asarray(vals, dtype=float)
++    if len(a) == 0:
++        return {"n": 0, "n_coins": n_coins, "mean": None, "median": None, "continue_rate": None, "ci": None}
++    rng = np.random.default_rng(seed)
++    boots = a[rng.integers(0, len(a), (iters, len(a)))].mean(axis=1)
++    return {"n": int(len(a)), "n_coins": n_coins, "mean": float(a.mean()), "median": float(np.median(a)), "continue_rate": float((a > 0).mean()),
++            "ci": [float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))]}
++
++
++def event_study(per_coin: dict, horizons=(1, 6, 18, 42), *, min_gap: int = 12, **detect_kw) -> dict:
++    """코인별 OHLC(v는 선택)에서 충격 봉을 찾아 모은 뒤의 통계. per_coin: {심볼: (o, h, l, c) 또는 (o, h, l, c, v)}."""
++    pooled: dict[int, list[float]] = {h: [] for h in horizons}
++    coins = 0
++    events = []
++    for sym, arrs in per_coin.items():
++        o, h_, l, c = arrs[:4]
++        v = arrs[4] if len(arrs) > 4 else None
++        shocks = detect_shocks(o, h_, l, c, v, **detect_kw)
++        if shocks:
++            coins += 1
++        events += [{**e, "symbol": sym} for e in shocks]
++        for h, vals in forward_returns(c, shocks, horizons, min_gap=min_gap).items():
++            pooled[h] += vals
++    return {"horizons": {h: _summarize(pooled[h], coins) for h in horizons}, "events": len(events), "coins_with_events": coins}
++
++
++def verdict(study: dict, horizon: int) -> dict:
++    """사건 뒤의 움직임을 차트 분석에 반영해도 되는지. 기준을 못 넘으면 반영하지 않는다."""
++    s = study["horizons"].get(horizon) or {}
++    if s.get("n", 0) < MIN_EVENTS or s.get("n_coins", 0) < MIN_COINS:
++        return {"use": False, "why": f"표본 부족(독립 사건 {s.get('n', 0)}개·코인 {s.get('n_coins', 0)}개, 필요 {MIN_EVENTS}개·{MIN_COINS}개) — 반영하지 않음"}
++    lo, hi = s["ci"]
++    if lo <= 0 <= hi:
++        return {"use": False, "why": "충격 뒤 움직임의 방향이 통계적으로 불분명(신뢰구간이 0을 포함) — 반영하지 않음"}
++    return {"use": True, "why": ("충격 방향으로 이어지는 경향" if s["mean"] > 0 else "충격 방향을 되돌리는 경향") + f" (n={s['n']}, 평균 {s['mean']:+.2%})"}
++
++
++# ----------------------------------------------------------------------------------- 표시·메모
++def describe(ev: dict, note: dict | None = None) -> str:
++    kind = "장대 양봉" if ev["direction"] == "up" else "장대 음봉"
++    if ev["kind"] == "wick_spike":
++        kind = "꼬리 급등락"
++    text = f"{kind} {ev['ret']:+.0%} · 평소 변동폭의 {1 + ev['z_range']:.0f}배 수준"
++    if ev.get("z_volume") is not None and ev["z_volume"] >= 3:
++        text += " · 거래량도 급증"
++    if ev["kind"] == "wick_spike":
++        text += " · 체결·데이터 오류 가능성 확인 필요"
++    text += (f" · 사용자 메모(미검증): {note['note']}" if note else " · 원인 미확인")
++    return text
++
++
++def shock_markers(ts, shocks: list[dict], notes: list[dict] | None = None, bar_ms: int = 4 * 3600_000) -> list[dict]:
++    """차트에 올릴 표시 목록. {ts, direction, text}."""
++    ts = np.asarray(ts)
++    out = []
++    for ev in shocks:
++        t = int(ts[ev["i"]])
++        note = next((n for n in (notes or []) if t <= n["ts"] < t + bar_ms), None)
++        out.append({"ts": t, "direction": ev["direction"], "kind": ev["kind"], "text": describe(ev, note)})
++    return out
++
++
++class NoteStore:
++    """사용자가 직접 남기는 '이 봉의 원인' 메모. 계산에는 쓰이지 않고 표시에만 쓰인다. 항상 미검증."""
++
++    def __init__(self, path):
++        self.path = Path(path)
++
++    def load(self) -> list[dict]:
++        try:
++            rows = json.loads(self.path.read_text(encoding="utf-8"))
++            return [r for r in rows if isinstance(r, dict) and isinstance(r.get("ts"), int) and isinstance(r.get("note"), str)]
++        except (OSError, ValueError):
++            return []
++
++    def add(self, ts_ms: int, note: str, url: str = "", now: float | None = None) -> dict:
++        note = (note or "").strip()
++        if not note or len(note) > 200:
++            raise ValueError("메모는 1~200자여야 합니다.")
++        if url and not url.startswith(("http://", "https://")):
++            raise ValueError("출처 URL은 http(s)로 시작해야 합니다.")
++        row = {"ts": int(ts_ms), "note": note, "url": url, "verified": False, "saved": int(now if now is not None else time.time())}
++        rows = [r for r in self.load() if r["ts"] != row["ts"]] + [row]
++        self.path.parent.mkdir(parents=True, exist_ok=True)
++        self.path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
++        return row
+diff --git a/tests/test_shock.py b/tests/test_shock.py
+new file mode 100644
+index 0000000..62cf248
+--- /dev/null
++++ b/tests/test_shock.py
+@@ -0,0 +1,144 @@
++import json
++import math
++
++import numpy as np
++import pytest
++
++from ena_bot import shock as sk
++
++
++def series(r, seed=0, vol=0.004, v=False):
++    """로그수익률 r로 만든 OHLC(+거래량). 꼬리 폭은 평소 변동에 비례."""
++    rng = np.random.default_rng(seed + 1000)
++    c = 0.5 * np.exp(np.cumsum(r))
++    o = np.concatenate([[0.5], c[:-1]])
++    spread = np.abs(rng.normal(0, vol, len(r))) * 0.8
++    h = np.maximum(o, c) * np.exp(spread)
++    l = np.minimum(o, c) * np.exp(-spread)
++    vol_arr = np.exp(rng.normal(8, 0.3, len(r))) if v else None
++    return (o, h, l, c, vol_arr) if v else (o, h, l, c)
++
++
++def walk(n=600, seed=1, vol=0.004):
++    return np.random.default_rng(seed).normal(0, vol, n)
++
++
++def test_a_giant_green_candle_is_found_and_ordinary_bars_are_not():
++    for seed in range(1, 6):                                            # 평범한 구간에서는 오탐이 없다
++        assert sk.detect_shocks(*series(walk(seed=seed), seed)[:4]) == []
++    r = walk()
++    r[400] = math.log(1.34)                                             # 하루 만에 +34%
++    o, h, l, c = series(r)
++    h[400] = c[400] * 1.005
++    (ev,) = sk.detect_shocks(o, h, l, c)
++    assert ev["i"] == 400 and ev["direction"] == "up" and ev["kind"] == "body_run" and ev["ret"] == pytest.approx(0.34, abs=0.01)
++    assert ev["z_range"] > 20 and ev["upper_wick"] < 0.05
++
++
++def test_a_wick_spike_is_labelled_as_such_and_volume_is_used_when_given():
++    r = walk()
++    o, h, l, c, v = series(r, v=True)
++    h[300] = o[300] * 1.5                                               # 몸통은 평범한데 꼬리만 튐
++    v[300] *= 40
++    (ev,) = sk.detect_shocks(o, h, l, c, v)
++    assert ev["i"] == 300 and ev["kind"] == "wick_spike" and ev["z_volume"] > 5
++    assert "체결·데이터 오류" in sk.describe(ev)
++
++
++def test_detection_never_uses_future_bars():
++    r = walk()
++    r[400] = math.log(1.3)
++    full = series(r)
++    cut = [a[:401] for a in full]
++    a = sk.detect_shocks(*full)[0]
++    b = sk.detect_shocks(*cut)[0]
++    assert a["i"] == b["i"] == 400 and a["z_range"] == b["z_range"] and a["z_body"] == b["z_body"]
++    full2 = [x.copy() for x in full]
++    for arr in full2:
++        arr[402:] *= 3.0                                                # 이후 가격을 바꿔도 400번 봉의 판정은 같다
++    assert sk.detect_shocks(*full2)[0]["z_range"] == a["z_range"]
++
++
++def test_adjacent_shock_bars_are_one_event_and_tiny_ranges_are_ignored():
++    r = walk()
++    r[400], r[401] = math.log(1.25), math.log(1.10)
++    evs = sk.detect_shocks(*series(r))
++    assert [e["i"] for e in evs] == [400]
++    quiet = np.full(400, 1e-5)
++    quiet[350] = 0.004                                                  # 거의 무변동 구간에서의 작은 움직임: z는 크지만 범위가 3% 미만
++    assert sk.detect_shocks(*series(quiet, vol=1e-5)) == []
++
++
++def test_winsorizing_tames_the_shock_but_leaves_other_bars_and_the_raw_chart_alone():
++    r = walk()
++    r[400] = math.log(1.34)
++    o, h, l, c = series(r)
++    shocks = sk.detect_shocks(o, h, l, c)
++    o2, h2, l2, c2 = sk.winsorize_bars(o, h, l, c, shocks)
++    before = np.log(h / l)
++    after = np.log(h2 / l2)
++    assert after[400] < before[400] / 5 and c2[400] > o2[400] and h2[400] >= c2[400] >= l2[400]
++    mask = np.ones(len(c), bool)
++    mask[400] = False
++    assert np.array_equal(h2[mask], h[mask]) and np.array_equal(c2[mask], c[mask])
++    assert c[400] == pytest.approx(o[400] * 1.34)                       # 원본은 그대로
++    assert after.std() < before.std() / 2                               # 변동성이 봉 하나에 끌려가지 않는다
++
++
++def injected(seed, n=900, at=(250, 400, 550, 700), up=0.29, drift=-0.015, back=6):
++    r = walk(n, seed)
++    for i in at:
++        r[i] = up
++        r[i + 1:i + 1 + back] = drift
++    return series(r, seed)
++
++
++def test_forward_returns_are_direction_normalised_and_events_are_spaced():
++    o, h, l, c = injected(1)
++    shocks = sk.detect_shocks(o, h, l, c)
++    assert [e["i"] for e in shocks] == [250, 400, 550, 700]
++    fr = sk.forward_returns(c, shocks, (1, 6))
++    assert len(fr[6]) == 4 and all(x < -0.05 for x in fr[6])            # 오른 뒤 되돌림 → 충격 방향 기준 음수
++    down = injected(2, up=-0.29, drift=+0.015)
++    ds = sk.detect_shocks(*down)
++    assert all(e["direction"] == "down" for e in ds)
++    assert all(x < -0.05 for x in sk.forward_returns(down[3], ds, (6,))[6])   # 내린 뒤 되돌림도 같은 부호
++    close = [{"i": 100, "direction": "up"}, {"i": 105, "direction": "up"}, {"i": 130, "direction": "up"}]
++    assert len(sk.forward_returns(c, close, (1,), min_gap=12)[1]) == 2        # 12봉 안의 사건은 하나만
++
++
++def test_one_event_is_never_enough_but_many_independent_reversals_are():
++    single = sk.event_study({"COIN": injected(1, at=(400,))}, (6,))
++    v = sk.verdict(single, 6)
++    assert not v["use"] and "표본 부족" in v["why"]
++    many = {f"C{k}": injected(k) for k in range(1, 10)}                 # 9코인 × 4사건 = 36개
++    study = sk.event_study(many, (1, 6, 18))
++    assert study["events"] == 36 and study["horizons"][6]["n"] == 36 and study["horizons"][6]["n_coins"] == 9
++    v = sk.verdict(study, 6)
++    assert v["use"] and "되돌리는" in v["why"] and study["horizons"][6]["continue_rate"] == 0.0
++    noise = {f"N{k}": injected(k, drift=0.0) for k in range(1, 10)}     # 이후 움직임이 평범하면 결론을 내리지 않는다
++    nv = sk.verdict(sk.event_study(noise, (6,)), 6)
++    assert not nv["use"] and "불분명" in nv["why"]
++
++
++def test_notes_are_shown_but_always_unverified_and_never_change_the_detection(tmp_path):
++    r = walk()
++    r[400] = math.log(1.34)
++    o, h, l, c = series(r)
++    ts = np.arange(len(c)) * 4 * 3600_000
++    shocks = sk.detect_shocks(o, h, l, c)
++    plain = sk.shock_markers(ts, shocks)
++    assert "원인 미확인" in plain[0]["text"] and plain[0]["direction"] == "up"
++    store = sk.NoteStore(tmp_path / "notes.json")
++    row = store.add(int(ts[400]) + 1000, "엔비디아 관련 소문", "https://example.com/x", now=5)
++    assert row["verified"] is False
++    marked = sk.shock_markers(ts, shocks, store.load())
++    assert "사용자 메모(미검증): 엔비디아 관련 소문" in marked[0]["text"]
++    assert sk.detect_shocks(o, h, l, c) == shocks                       # 메모는 계산에 영향이 없다
++    for bad in (("", ""), ("x" * 201, ""), ("ok", "ftp://x")):
++        with pytest.raises(ValueError):
++            store.add(1, *bad)
++    store.add(int(ts[400]) + 1000, "수정한 메모")
++    assert [n["note"] for n in store.load()] == ["수정한 메모"]
++    (tmp_path / "notes.json").write_text("{broken")
++    assert store.load() == []
