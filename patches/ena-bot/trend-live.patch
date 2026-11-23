@@ -1,0 +1,866 @@
+diff --git a/ena_bot/trend_live.py b/ena_bot/trend_live.py
+new file mode 100644
+index 0000000..2f728fe
+--- /dev/null
++++ b/ena_bot/trend_live.py
+@@ -0,0 +1,456 @@
++"""4시간봉 추세 엔진용 거래소 브로커(테스트넷 우선, 메인넷은 여러 겹의 안전장치 뒤에서만).
++
++엔진(TrendEngine)은 브로커에 목표 수량만 알려 주고(`rebalance(목표수량, 가격)`), 이 브로커가 거래소의 '실제' 포지션을 읽어
++차이만큼 주문한다. 원칙:
++- 거래소가 기준이다: 매 사이클 포지션·잔고를 다시 읽고, 주문 뒤에는 반영될 때까지 확인한다. 반영이 확인되지 않으면 재주문하지 않고 멈춘다.
++- 상한은 코드에 박혀 있다(1회 주문, 총 명목가, 레버리지). 환경 변수로는 낮추기만 할 수 있다.
++- 포지션에는 항상 거래소 측 손절이 붙는다. 손절을 걸지 못하면 포지션을 닫고 멈춘다.
++- 킬 스위치(STOP 파일)가 있으면 늘리는 주문은 하지 않고 정리만 한다.
++- 메인넷은 live_enabled + 확인 플래그 + 테스트넷 왕복 시험 통과 기록 + 직접 입력한 확인 문구가 모두 있어야 한다.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import math
++import os
++import sys
++import time
++from dataclasses import dataclass
++from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
++from pathlib import Path
++
++from .exchange import MAINNET, TESTNET, BybitClient, BybitError
++
++# 메인넷 상한은 일부러 아주 작다. 올리려면 이 파일을 고쳐야 한다(환경 변수로는 낮추기만 가능).
++HARD_LIMITS = {
++    "testnet": {"max_notional_usd": 20000.0, "max_order_usd": 5000.0, "max_leverage": 2.0},
++    "live": {"max_notional_usd": 150.0, "max_order_usd": 100.0, "max_leverage": 1.5},
++}
++DEFAULT_STOP_PCT = 0.10
++STOP_PCT_RANGE = (0.02, 0.30)
++PASS_FILE = Path("data") / "trend_testnet_pass.json"
++PASS_MAX_AGE_DAYS = 30
++DUP_LINK_CODE = 110072  # 같은 orderLinkId로 다시 보냄
++
++
++class LiveRefused(RuntimeError):
++    """시작 조건을 채우지 못해 실거래 브로커를 만들지 않았다."""
++
++
++class LiveSafetyError(RuntimeError):
++    """주문 중 안전 조건이 깨졌다(반영 미확인, 손절 실패 등). 엔진은 이 사이클을 처리하지 않은 채 멈춘다."""
++
++
++@dataclass
++class LiveLimits:
++    max_notional_usd: float
++    max_order_usd: float
++    max_leverage: float
++    stop_pct: float
++
++
++def _env_float(env, name: str, hard: float, lo: float = 0.0) -> float:
++    raw = (env.get(name) or "").strip()
++    if not raw:
++        return hard
++    try:
++        v = float(raw)
++    except ValueError as exc:
++        raise LiveRefused(f"{name} 값이 숫자가 아닙니다: {raw!r}") from exc
++    if not (v > lo) or math.isnan(v):
++        raise LiveRefused(f"{name}은 {lo}보다 커야 합니다: {raw!r}")
++    return min(v, hard)  # 낮추기만 한다
++
++
++def resolve_limits(mode: str, env, risk_max_leverage: float) -> LiveLimits:
++    hard = HARD_LIMITS["live" if mode == "live" else "testnet"]
++    raw = (env.get("ENA_LIVE_HARD_STOP_PCT") or "").strip()
++    pct = DEFAULT_STOP_PCT
++    if raw:
++        try:
++            pct = float(raw)
++        except ValueError as exc:
++            raise LiveRefused(f"ENA_LIVE_HARD_STOP_PCT 값이 숫자가 아닙니다: {raw!r}") from exc
++    if not (STOP_PCT_RANGE[0] <= pct <= STOP_PCT_RANGE[1]):
++        raise LiveRefused(f"거래소 손절 거리(ENA_LIVE_HARD_STOP_PCT)는 {STOP_PCT_RANGE[0]:.0%}~{STOP_PCT_RANGE[1]:.0%} 사이여야 합니다: {pct}")
++    return LiveLimits(
++        max_notional_usd=_env_float(env, "ENA_LIVE_MAX_NOTIONAL_USD", hard["max_notional_usd"]),
++        max_order_usd=_env_float(env, "ENA_LIVE_MAX_ORDER_USD", hard["max_order_usd"]),
++        max_leverage=min(_env_float(env, "ENA_LIVE_MAX_LEVERAGE", hard["max_leverage"]), float(risk_max_leverage)),
++        stop_pct=pct,
++    )
++
++
++def _dec(x) -> Decimal:
++    return Decimal(str(x))
++
++
++def _floor(x: float, step: float) -> float:
++    if step <= 0:
++        return float(x)
++    return float((_dec(x) / _dec(step)).to_integral_value(rounding=ROUND_DOWN) * _dec(step))
++
++
++def _fmt(x: float, step: float, rounding=ROUND_DOWN) -> str:
++    d = (_dec(x) / _dec(step)).to_integral_value(rounding=rounding) * _dec(step)
++    return format(d.normalize(), "f")
++
++
++class TrendLiveBroker:
++    """TrendEngine이 쓰는 브로커 인터페이스(qty, balance, equity, rebalance, state_dict …)를 거래소 주문으로 구현한다."""
++
++    live = True
++
++    def __init__(self, cfg, client, mode: str, limits: LiveLimits, notifier=None, *, clock=time.time, sleep=time.sleep,
++                 stop_files=None, confirm_polls: int = 15):
++        self.cfg, self.client, self.mode, self.limits, self.notifier = cfg, client, mode, limits, notifier
++        self.symbol = cfg.symbol
++        self.clock, self.sleep, self.confirm_polls = clock, sleep, confirm_polls
++        self.total_fees = 0.0  # 거래소 정산값을 쓰므로 가상 수수료 누적은 없다
++        self._equity = 0.0
++        self._inst = None
++        self._snap = (0.0, 0.0, 0.0, 0.0)  # (조회 시각, 부호 있는 수량, 평균 진입가, 거래소 손절가)
++        self._orders = 0
++        self._stop_files = stop_files if stop_files is not None else [Path(cfg.data_path) / "STOP", Path("data") / "STOP"]
++
++    # ------------------------------------------------------------------ 거래소 상태
++    def _say(self, text: str) -> None:
++        tag = "테스트넷" if self.mode != "live" else "⚠ 메인넷"
++        if self.notifier is not None:
++            try:
++                self.notifier.send(f"[{tag} 실주문] {text}")
++            except Exception:  # noqa: BLE001 - 알림 실패가 주문 안전 흐름을 깨면 안 된다
++                pass
++
++    def instrument(self):
++        if self._inst is None:
++            self._inst = self.client.get_instrument(self.symbol)
++        return self._inst
++
++    def _killed(self) -> bool:
++        return any(Path(p).exists() for p in self._stop_files)
++
++    def refresh(self, force: bool = False) -> tuple[float, float, float]:
++        """거래소의 실제 포지션을 읽는다(2초 캐시). (부호 있는 수량, 평균 진입가, 손절가). 단방향 모드가 아니면 거부한다."""
++        now = self.clock()
++        if not force and now - self._snap[0] < 2.0 and self._snap[0] > 0:
++            return self._snap[1:]
++        res = self.client._request("GET", "/v5/position/list", {"category": "linear", "symbol": self.symbol}, signed=True)
++        rows = res.get("list", []) or []
++        if any(int(p.get("positionIdx") or 0) != 0 for p in rows):
++            raise LiveRefused("이 계정은 헤지 모드로 보입니다. 단방향(one-way) 포지션 모드로 바꾼 뒤 사용하세요.")
++        qty = entry = stop = 0.0
++        for p in rows:
++            size = float(p.get("size") or 0)
++            if size > 0:
++                qty = size if p.get("side") == "Buy" else -size
++                entry, stop = float(p.get("avgPrice") or 0), float(p.get("stopLoss") or 0)
++                break
++        self._snap = (now, qty, entry, stop)
++        return qty, entry, stop
++
++    @property
++    def qty(self) -> float:
++        return self.refresh()[0]
++
++    @property
++    def entry(self) -> float:
++        return self.refresh()[1]
++
++    @property
++    def balance(self) -> float:
++        if self._equity <= 0:
++            self._equity = float(self.client.get_equity())
++        return self._equity
++
++    def equity(self, price: float) -> float:
++        self._equity = float(self.client.get_equity())
++        qty, entry, stop = self.refresh()
++        if qty != 0 and stop <= 0:  # 거래소 손절이 없는 포지션은 허용하지 않는다(수동 변경·취소 대비)
++            self._set_stop(qty, entry or price)
++        return self._equity
++
++    # 펀딩비는 거래소가 잔고에서 직접 정산한다
++    def accrue_funding(self, price: float, hours: float) -> None:
++        return None
++
++    def accrue_funding_actual(self, price: float, rates: list) -> float:
++        return 0.0
++
++    # ------------------------------------------------------------------ 손절
++    def _stop_price(self, signed_qty: float, ref: float) -> str:
++        inst = self.instrument()
++        raw = ref * (1 - self.limits.stop_pct) if signed_qty > 0 else ref * (1 + self.limits.stop_pct)
++        return _fmt(raw, inst.tick_size, ROUND_HALF_UP)
++
++    def _set_stop(self, signed_qty: float, ref: float) -> None:
++        params = {"category": "linear", "symbol": self.symbol, "stopLoss": self._stop_price(signed_qty, ref), "slTriggerBy": "MarkPrice",
++                  "tpslMode": "Full", "positionIdx": 0}
++        self.client._request("POST", "/v5/position/trading-stop", params, signed=True)
++        self._snap = (0.0, *self._snap[1:])  # 다음 조회는 거래소에서 다시 읽는다
++
++    # ------------------------------------------------------------------ 주문
++    def _link_id(self, leg: str, side: str, qty_str: str) -> str:
++        bucket = int(self.clock() // (4 * 3600))  # 같은 4시간 봉에서 같은 주문을 다시 보내면 거래소가 거부한다(중복 방지)
++        h = hashlib.sha1(f"{self.symbol}|{bucket}|{leg}|{side}|{qty_str}".encode()).hexdigest()[:20]
++        return f"ena{self.mode[0]}{h}"
++
++    def _wait_for(self, expected: float) -> float:
++        step = self.instrument().qty_step
++        got = 0.0
++        for i in range(self.confirm_polls):
++            got = self.refresh(force=True)[0]
++            if abs(got - expected) <= step / 2:
++                return got
++            self.sleep(1.0)
++        raise LiveSafetyError(f"주문 반영을 확인하지 못했습니다(기대 {expected:+g}, 실제 {got:+g}). 재주문하지 않고 멈춥니다. 거래소 앱에서 포지션을 확인하세요.")
++
++    def _send(self, leg: str, side: str, qty: float, *, reduce_only: bool, stop_ref: float | None, expected_after: float) -> None:
++        inst = self.instrument()
++        qty_str = _fmt(qty, inst.qty_step)
++        link = self._link_id(leg, side, qty_str)
++        stop = None
++        if stop_ref is not None:
++            stop = self._stop_price(1.0 if side == "Buy" else -1.0, stop_ref)
++        try:
++            self.client.create_market_order(self.symbol, side, qty_str, link, stop_loss=stop, reduce_only=reduce_only)
++        except BybitError as exc:
++            if exc.code != DUP_LINK_CODE:
++                raise
++            self._say(f"같은 주문 ID가 이미 있어 재전송하지 않고 반영만 확인합니다({leg})")  # 응답 유실 뒤 재시도: 이미 나간 주문
++        self._orders += 1
++        self._wait_for(expected_after)
++
++    def _flatten(self, reason: str) -> None:
++        qty = self.refresh(force=True)[0]
++        if qty != 0:
++            self._send("flat", "Sell" if qty > 0 else "Buy", abs(qty), reduce_only=True, stop_ref=None, expected_after=0.0)
++        self._say(f"포지션을 정리했습니다: {reason}")
++
++    def _cap_qty(self, price: float, equity: float) -> float:
++        lim = self.limits
++        by_notional = lim.max_notional_usd / price
++        by_leverage = lim.max_leverage * equity / price
++        return _floor(max(0.0, min(by_notional, by_leverage)), self.instrument().qty_step)
++
++    def rebalance(self, target_qty: float, price: float) -> float:
++        """목표 수량(부호 있음)으로 맞춘다. 거래소에서 실제로 바뀐 수량(부호 있음)을 돌려준다."""
++        if not price > 0:
++            raise LiveSafetyError(f"가격이 올바르지 않습니다: {price}")
++        inst = self.instrument()
++        step, min_qty = inst.qty_step, inst.min_qty
++        cur, entry, _ = self.refresh(force=True)
++        start_qty = cur
++        eq = self.equity(price)
++        sign = 1.0 if target_qty >= 0 else -1.0
++        why = ""
++        if self._killed():
++            tgt, why = 0.0, " (킬 스위치: 정리만 합니다)"
++        else:
++            tgt = sign * min(_floor(abs(target_qty), step), self._cap_qty(price, eq))
++            if abs(tgt) < min_qty:
++                tgt = 0.0
++        if abs(tgt - cur) < max(min_qty, step) - 1e-12:
++            return 0.0
++
++        max_order_qty = _floor(self.limits.max_order_usd / price, step)
++        flip = cur != 0 and (tgt == 0 or (tgt > 0) != (cur > 0))
++        if flip:  # 반대 방향이면 먼저 줄이기 전용으로 모두 닫고, 그다음 새로 연다
++            self._send("close", "Sell" if cur > 0 else "Buy", abs(cur), reduce_only=True, stop_ref=None, expected_after=0.0)
++            cur = 0.0
++        if tgt != 0 and abs(tgt) > abs(cur):  # 늘리기(신규 포함): 1회 주문 상한을 넘지 않는다
++            add = min(abs(tgt) - abs(cur), max_order_qty)
++            if add >= min_qty:
++                side = "Buy" if tgt > 0 else "Sell"
++                after = cur + (add if tgt > 0 else -add)
++                self._send("open" if cur == 0 else "add", side, add, reduce_only=False, stop_ref=price, expected_after=after)
++                cur = after
++        elif tgt != 0 and abs(tgt) < abs(cur):  # 줄이기: 상한 없이 전량 허용
++            cut = abs(cur) - abs(tgt)
++            self._send("cut", "Sell" if cur > 0 else "Buy", cut, reduce_only=True, stop_ref=None, expected_after=tgt)
++            cur = tgt
++        final, avg, stop = self.refresh(force=True)
++        if final != 0:  # 평균 진입가가 바뀌었으니 손절을 다시 맞춘다. 실패하면 포지션을 닫고 멈춘다
++            try:
++                self._set_stop(final, avg or price)
++                if self.refresh(force=True)[2] <= 0:
++                    raise LiveSafetyError("거래소에 손절이 등록되지 않았습니다")
++            except (BybitError, LiveSafetyError) as exc:
++                self._flatten(f"거래소 손절을 걸지 못함 ({exc})")
++                raise LiveSafetyError(f"거래소 손절을 걸지 못해 포지션을 정리했습니다: {exc}") from exc
++        return final - start_qty
++
++    # ------------------------------------------------------------------ 엔진 상태 저장
++    def state_dict(self) -> dict:
++        qty, entry, _ = self.refresh()
++        return {"balance": self._equity, "qty": qty, "entry": entry, "total_fees": 0.0, "live": self.mode, "orders": self._orders}
++
++    def load_state(self, d: dict) -> None:
++        self._orders = int(d.get("orders", 0)) if isinstance(d, dict) else 0
++
++    @property
++    def startup_text(self) -> str:
++        lim = self.limits
++        label = "테스트넷 실주문" if self.mode != "live" else "⚠ 메인넷 실거래"
++        return (f"추세추종 {label} 시작 {self.symbol} equity={self.balance:.2f} · 상한 명목가 ${lim.max_notional_usd:g} · "
++                f"1회 ${lim.max_order_usd:g} · 레버리지 {lim.max_leverage:g}x · 거래소 손절 {lim.stop_pct:.0%}")
++
++    def preflight(self) -> dict:
++        """주문 없이 계정·상품·포지션 모드를 점검한다. 문제가 있으면 LiveRefused."""
++        inst = self.instrument()
++        qty, entry, stop = self.refresh(force=True)
++        eq = float(self.client.get_equity())
++        if not eq > 0:
++            raise LiveRefused(f"계정 자본이 0 이하입니다({eq}). 입금 또는 테스트넷 faucet을 확인하세요.")
++        self.client.set_leverage(self.symbol, self.limits.max_leverage)
++        self._equity = eq
++        return {"equity": eq, "qty": qty, "entry": entry, "stop": stop, "min_qty": inst.min_qty, "qty_step": inst.qty_step, "tick": inst.tick_size}
++
++
++# ---------------------------------------------------------------------- 만들기(시작 조건)
++def _keys(mode: str, env) -> tuple[str, str]:
++    if mode == "live":
++        return (env.get("BYBIT_API_KEY") or "").strip(), (env.get("BYBIT_API_SECRET") or "").strip()
++    return ((env.get("BYBIT_TESTNET_API_KEY") or env.get("BYBIT_API_KEY") or "").strip(),
++            (env.get("BYBIT_TESTNET_API_SECRET") or env.get("BYBIT_API_SECRET") or "").strip())
++
++
++def testnet_pass_ok(now: float | None = None, path: Path = PASS_FILE) -> tuple[bool, str]:
++    try:
++        d = json.loads(Path(path).read_text(encoding="utf-8"))
++        age = ((now if now is not None else time.time()) - float(d["ts"])) / 86400
++    except (OSError, ValueError, KeyError, TypeError):
++        return False, "테스트넷 왕복 시험 통과 기록이 없습니다"
++    if age > PASS_MAX_AGE_DAYS:
++        return False, f"테스트넷 시험 통과 기록이 {age:.0f}일 지났습니다(최대 {PASS_MAX_AGE_DAYS}일)"
++    return True, ""
++
++
++def make_trend_broker(cfg, args, env, paper_cls, notifier=None, *, client_factory=BybitClient, input_fn=input, isatty=None, pass_path: Path = PASS_FILE,
++                      clock=time.time, sleep=time.sleep):
++    """config의 mode에 맞는 브로커. paper면 기존 페이퍼 브로커. 조건이 모자라면 LiveRefused."""
++    if cfg.mode == "paper":
++        return paper_cls(cfg)
++    if cfg.mode not in ("testnet", "live"):
++        raise LiveRefused(f"알 수 없는 mode: {cfg.mode}")
++    limits = resolve_limits(cfg.mode, env, cfg.risk.max_leverage)
++    key, secret = _keys(cfg.mode, env)
++    if not key or not secret:
++        names = "BYBIT_API_KEY / BYBIT_API_SECRET" if cfg.mode == "live" else "BYBIT_TESTNET_API_KEY / BYBIT_TESTNET_API_SECRET"
++        raise LiveRefused(f"{names} 이 필요합니다(.env). 키는 거래 권한만, 출금 권한은 끄고, IP 제한을 거세요.")
++    if cfg.mode == "live":
++        if not getattr(cfg, "live_enabled", False):
++            raise LiveRefused("메인넷 실거래는 config의 live_enabled=true 가 필요합니다.")
++        if not getattr(args, "i_understand_live_trading", False):
++            raise LiveRefused("메인넷 실거래는 --i-understand-live-trading 플래그가 필요합니다.")
++        ok, why = testnet_pass_ok(clock(), pass_path)
++        if not ok:
++            raise LiveRefused(why + ". 먼저 테스트넷에서 `python -m ena_bot.trend_live --check --test-order` 를 통과하세요.")
++        tty = sys.stdin.isatty() if isatty is None else isatty
++        if not tty:
++            raise LiveRefused("메인넷 실거래는 사람이 터미널에서 직접 시작해야 합니다(자동 실행·launchd 불가).")
++        phrase = f"LIVE {cfg.symbol} {int(limits.max_notional_usd)}USD"
++        typed = input_fn(f"메인넷에서 실제 돈으로 주문합니다. 계속하려면 정확히 입력하세요 → {phrase}\n> ").strip()
++        if typed != phrase:
++            raise LiveRefused("확인 문구가 달라 시작하지 않습니다.")
++    client = client_factory(TESTNET if cfg.mode == "testnet" else MAINNET, key, secret)
++    broker = TrendLiveBroker(cfg, client, cfg.mode, limits, notifier, clock=clock, sleep=sleep)
++    broker.preflight()
++    return broker
++
++
++# ---------------------------------------------------------------------- 점검 명령
++def run_check(cfg, env, *, test_order: bool, client_factory=BybitClient, out=print, pass_path: Path = PASS_FILE, sleep=time.sleep, clock=time.time) -> bool:
++    mode = cfg.mode
++    if mode not in ("testnet", "live"):
++        out("config의 mode가 testnet 이어야 점검할 수 있습니다(지금: %s)." % mode)
++        return False
++    if test_order and mode != "testnet":
++        out("--test-order 는 테스트넷에서만 실행합니다. 메인넷에서는 주문하지 않습니다.")
++        return False
++    limits = resolve_limits(mode, env, cfg.risk.max_leverage)
++    key, secret = _keys(mode, env)
++    if not key or not secret:
++        out("API 키가 .env 에 없습니다.")
++        return False
++    client = client_factory(TESTNET if mode == "testnet" else MAINNET, key, secret)
++    broker = TrendLiveBroker(cfg, client, mode, limits, None, clock=clock, sleep=sleep)
++    try:
++        info = broker.preflight()
++    except (LiveRefused, BybitError) as exc:
++        out(f"✗ 점검 실패: {exc}")
++        return False
++    out(f"✓ 연결·권한 · 엔드포인트 {'테스트넷' if mode == 'testnet' else '메인넷'} · 자본 {info['equity']:.2f} USDT")
++    out(f"✓ 상품 {cfg.symbol} · 최소 수량 {info['min_qty']:g} · 수량 단위 {info['qty_step']:g} · 호가 단위 {info['tick']:g}")
++    out(f"✓ 포지션 모드 단방향 · 현재 포지션 {info['qty']:+g}" + (f" (진입 {info['entry']:g}, 손절 {info['stop']:g})" if info["qty"] else ""))
++    out(f"✓ 상한 · 총 명목가 ${limits.max_notional_usd:g} · 1회 ${limits.max_order_usd:g} · 레버리지 {limits.max_leverage:g}x · 거래소 손절 {limits.stop_pct:.0%}")
++    if not test_order:
++        out("주문은 하지 않았습니다. 왕복 시험은 --test-order (테스트넷 전용).")
++        return True
++    if info["qty"] != 0:
++        out("✗ 이미 포지션이 있어 시험하지 않습니다. 테스트넷에서 먼저 정리하세요.")
++        return False
++    try:
++        c = client.get_klines(cfg.symbol, 1, 2)
++        price = float(c.close[-1])
++    except Exception as exc:  # noqa: BLE001
++        out(f"✗ 현재가를 읽지 못했습니다: {exc}")
++        return False
++    qty = max(_floor(15.0 / price, broker.instrument().qty_step), broker.instrument().min_qty)
++    ok = True
++    try:
++        for label, target, check in (
++            ("롱 진입 + 거래소 손절", +qty, lambda q, s: q > 0 and s > 0),
++            ("반대 방향 전환(먼저 닫고 새로 열기)", -qty, lambda q, s: q < 0 and s > 0),
++            ("전량 정리", 0.0, lambda q, s: q == 0),
++        ):
++            before = broker.refresh(force=True)[0]
++            moved = broker.rebalance(target, price)
++            q, _, s = broker.refresh(force=True)
++            good = check(q, s) and abs(moved - (q - before)) < broker.instrument().qty_step / 2
++            out(f"{'✓' if good else '✗'} {label} · 수량 {q:+g}" + (f" · 손절 {s:g}" if q else ""))
++            ok = ok and good
++            if not good:
++                break
++    except (LiveSafetyError, BybitError, LiveRefused) as exc:
++        out(f"✗ 시험 중 오류: {exc}")
++        ok = False
++    finally:
++        try:
++            if abs(broker.refresh(force=True)[0]) > 0:
++                broker.rebalance(0.0, price)
++                out("시험 포지션을 정리했습니다.")
++        except Exception as exc:  # noqa: BLE001
++            out(f"⚠ 시험 포지션 정리에 실패했습니다. 테스트넷 앱에서 직접 닫으세요: {exc}")
++            ok = False
++    if ok:
++        Path(pass_path).parent.mkdir(parents=True, exist_ok=True)
++        Path(pass_path).write_text(json.dumps({"ts": clock(), "symbol": cfg.symbol, "qty": qty}), encoding="utf-8")
++        out(f"✓ 테스트넷 왕복 시험 통과 — 기록: {pass_path}")
++    else:
++        out("✗ 시험 실패. 메인넷은 열 수 없습니다.")
++    return ok
++
++
++def main(argv: list[str] | None = None) -> int:
++    from .config import load_config, load_env
++
++    ap = argparse.ArgumentParser(description="추세 엔진 실거래 브로커 점검(주문은 --test-order, 테스트넷 전용)")
++    ap.add_argument("--config", default="config.json")
++    ap.add_argument("--env", default=".env")
++    ap.add_argument("--check", action="store_true", help="연결·권한·상품·포지션 모드를 주문 없이 점검")
++    ap.add_argument("--test-order", action="store_true", help="테스트넷에서 최소 수량으로 진입→전환→정리 왕복 시험")
++    args = ap.parse_args(argv)
++    if not (args.check or args.test_order):
++        ap.print_help()
++        return 2
++    load_env(args.env)
++    cfg = load_config(args.config)
++    return 0 if run_check(cfg, os.environ, test_order=args.test_order) else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/test_trend_live.py b/tests/test_trend_live.py
+new file mode 100644
+index 0000000..42d8b51
+--- /dev/null
++++ b/tests/test_trend_live.py
+@@ -0,0 +1,345 @@
++import json
++import subprocess
++import sys
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++from ena_bot import trend_live as tl
++from ena_bot.exchange import BybitError, Instrument
++
++TOOL = Path(__file__).resolve().parents[1] / "tools" / "wire_trend_live.py"
++
++
++class FakeClient:
++    """Bybit 단방향 계정을 흉내 낸다: 시장가 주문이 즉시 체결되고 포지션·손절·주문 ID 중복을 거래소처럼 처리한다."""
++
++    def __init__(self, equity=1000.0, step=1.0, min_qty=1.0, fail_stop=False, never_fill=False, hedge=False, drop_stop_on_fill=False):
++        self.equity, self.step, self.min_qty = equity, step, min_qty
++        self.fail_stop, self.never_fill, self.hedge, self.drop_stop = fail_stop, never_fill, hedge, drop_stop_on_fill
++        self.pos, self.entry, self.stop = 0.0, 0.0, 0.0
++        self.orders, self.stops, self.links, self.leverage = [], [], set(), None
++
++    def get_instrument(self, symbol):
++        return Instrument(symbol, self.step, self.min_qty, 0.0001)
++
++    def get_equity(self):
++        return self.equity
++
++    def set_leverage(self, symbol, lev):
++        self.leverage = lev
++
++    def create_market_order(self, symbol, side, qty_str, link_id, stop_loss=None, reduce_only=False):
++        if link_id in self.links:
++            raise BybitError(tl.DUP_LINK_CODE, "dup", "/v5/order/create")
++        self.links.add(link_id)
++        q = float(qty_str) * (1 if side == "Buy" else -1)
++        if reduce_only and not (self.pos != 0 and (q > 0) != (self.pos > 0) and abs(q) <= abs(self.pos) + 1e-9):
++            raise BybitError(110017, "reduce-only rejected", "/v5/order/create")
++        self.orders.append({"side": side, "qty": float(qty_str), "reduce_only": reduce_only, "stop_loss": stop_loss})
++        if self.never_fill:
++            return {}
++        new = self.pos + q
++        if self.pos == 0 or (self.pos > 0) == (q > 0):
++            self.entry = (abs(self.pos) * self.entry + abs(q) * 0.5) / (abs(self.pos) + abs(q))
++        self.pos = new if abs(new) > 1e-9 else 0.0
++        if stop_loss and not self.drop_stop:
++            self.stop = float(stop_loss)
++        if self.pos == 0:
++            self.entry = self.stop = 0.0
++        return {}
++
++    def _request(self, method, path, params=None, signed=False):
++        if path == "/v5/position/list":
++            if self.hedge:
++                return {"list": [{"side": "Buy", "size": "0", "avgPrice": "0", "stopLoss": "0", "positionIdx": 1},
++                                 {"side": "Sell", "size": "0", "avgPrice": "0", "stopLoss": "0", "positionIdx": 2}]}
++            side = "Buy" if self.pos > 0 else "Sell" if self.pos < 0 else ""
++            return {"list": [{"side": side, "size": str(abs(self.pos)), "avgPrice": str(self.entry), "stopLoss": str(self.stop), "positionIdx": 0}]}
++        if path == "/v5/position/trading-stop":
++            if self.fail_stop:
++                raise BybitError(34040, "stop rejected", path)
++            self.stops.append(params)
++            self.stop = float(params["stopLoss"])
++            return {}
++        raise AssertionError(path)
++
++    def get_klines(self, symbol, interval, limit):
++        return SimpleNamespace(close=[0.5, 0.5])
++
++
++class Notes:
++    def __init__(self):
++        self.sent = []
++
++    def send(self, t):
++        self.sent.append(t)
++
++
++def cfg(mode="testnet", data=None, live_enabled=False):
++    return SimpleNamespace(symbol="ENAUSDT", mode=mode, live_enabled=live_enabled, risk=SimpleNamespace(max_leverage=3.0), data_path=Path(data or "/nonexistent-ena"))
++
++
++def broker(client=None, mode="testnet", tmp=None, **kw):
++    c = client or FakeClient()
++    lim = tl.resolve_limits(mode, {}, 3.0)
++    return tl.TrendLiveBroker(cfg(mode, tmp), c, mode, lim, Notes(), clock=lambda: 1_000_000.0, sleep=lambda s: None,
++                              stop_files=[Path(tmp) / "STOP"] if tmp else [], **kw), c
++
++
++def test_open_attaches_an_exchange_stop_and_reports_the_filled_change():
++    b, c = broker()
++    assert b.rebalance(200.0, 0.5) == 200.0
++    assert c.pos == 200.0 and c.orders[0]["stop_loss"] == "0.45" and c.stop == pytest.approx(0.45)  # 평균 진입가 0.5의 -10%
++    assert b.qty == 200.0 and b.equity(0.5) == 1000.0
++
++
++def test_short_stop_is_above_entry():
++    b, c = broker()
++    b.rebalance(-100.0, 0.5)
++    assert c.pos == -100.0 and c.stop == pytest.approx(0.55)
++
++
++def test_caps_hold_notional_leverage_and_single_order_size():
++    b, c = broker(FakeClient(equity=100000.0))                # 테스트넷 상한: 명목가 $20000, 1회 $5000
++    now = [1_000_000.0]
++    b.clock = lambda: now[0]
++    b.rebalance(1_000_000.0, 0.5)
++    assert c.orders[0]["qty"] == 10000.0                      # 1회 주문 $5000 / 0.5
++    for _ in range(5):                                        # 다음 4시간 봉들에서 이어서 쌓는다(상한에서 멈춘다)
++        now[0] += 4 * 3600
++        b.rebalance(1_000_000.0, 0.5)
++    assert c.pos <= 20000 / 0.5 + 1e-6 and c.pos == 40000.0   # 명목가 상한 $20000 → 40000 ENA
++    small, c2 = broker(FakeClient(equity=100.0))              # 자본 $100 × 레버리지 2 = $200 → 400 ENA
++    small.rebalance(10_000.0, 0.5)
++    assert c2.pos == 400.0
++
++
++def test_mainnet_caps_are_much_smaller():
++    b, c = broker(FakeClient(equity=100000.0), mode="live")
++    now = [1_000_000.0]
++    b.clock = lambda: now[0]
++    for _ in range(5):
++        b.rebalance(1_000_000.0, 0.5)
++        now[0] += 4 * 3600
++    assert c.pos == 300.0                                     # $150 / 0.5
++
++
++def test_environment_can_only_lower_the_caps():
++    lo = tl.resolve_limits("live", {"ENA_LIVE_MAX_NOTIONAL_USD": "40", "ENA_LIVE_MAX_LEVERAGE": "1"}, 3.0)
++    assert lo.max_notional_usd == 40 and lo.max_leverage == 1
++    hi = tl.resolve_limits("live", {"ENA_LIVE_MAX_NOTIONAL_USD": "999999", "ENA_LIVE_MAX_LEVERAGE": "20"}, 3.0)
++    assert hi.max_notional_usd == 150 and hi.max_leverage == 1.5
++    for bad in ({"ENA_LIVE_MAX_NOTIONAL_USD": "abc"}, {"ENA_LIVE_MAX_ORDER_USD": "-5"}, {"ENA_LIVE_HARD_STOP_PCT": "0.9"}, {"ENA_LIVE_HARD_STOP_PCT": "0.001"}):
++        with pytest.raises(tl.LiveRefused):
++            tl.resolve_limits("live", bad, 3.0)
++
++
++def test_flip_closes_with_reduce_only_first_then_opens_the_other_way():
++    b, c = broker()
++    b.rebalance(100.0, 0.5)
++    c.links.clear()
++    assert b.rebalance(-60.0, 0.5) == -160.0
++    assert [(o["side"], o["qty"], o["reduce_only"]) for o in c.orders[1:]] == [("Sell", 100.0, True), ("Sell", 60.0, False)]
++    assert c.pos == -60.0 and c.stop == pytest.approx(0.55)
++
++
++def test_reduce_and_close_never_exceed_the_position():
++    b, c = broker()
++    b.rebalance(100.0, 0.5)
++    assert b.rebalance(40.0, 0.5) == -60.0 and c.pos == 40.0 and c.orders[-1]["reduce_only"]
++    assert b.rebalance(0.0, 0.5) == -40.0 and c.pos == 0.0 and c.stop == 0.0
++
++
++def test_a_target_below_the_minimum_does_nothing():
++    b, c = broker(FakeClient(min_qty=10.0, step=10.0))
++    assert b.rebalance(5.0, 0.5) == 0.0 and not c.orders
++
++
++def test_kill_switch_only_flattens(tmp_path):
++    b, c = broker(tmp=tmp_path)
++    b.rebalance(100.0, 0.5)
++    c.links.clear()
++    (tmp_path / "STOP").write_text("x")
++    assert b.rebalance(500.0, 0.5) == -100.0 and c.pos == 0.0 and c.orders[-1]["reduce_only"]
++    n = len(c.orders)
++    assert b.rebalance(500.0, 0.5) == 0.0 and len(c.orders) == n    # 다시 늘리지 않는다
++
++
++def test_failure_to_confirm_the_fill_stops_without_resending():
++    b, c = broker(FakeClient(never_fill=True))
++    with pytest.raises(tl.LiveSafetyError, match="반영을 확인하지 못했습니다"):
++        b.rebalance(100.0, 0.5)
++    assert len(c.orders) == 1                                  # 재주문 없음
++
++
++def test_a_lost_response_retry_reuses_the_order_id_and_does_not_double_the_position():
++    b, c = broker()
++    b.rebalance(100.0, 0.5)
++    # 엔진이 같은 4시간 봉을 다시 처리(크래시 뒤 재시작): 같은 목표 → 이미 맞아서 주문 없음
++    assert b.rebalance(100.0, 0.5) == 0.0 and len(c.orders) == 1
++    # 응답 유실로 주문은 나갔는데 포지션이 아직 안 보이는 경우: 같은 ID가 거부돼도 반영만 확인한다
++    b2, c2 = broker()
++    link = b2._link_id("open", "Buy", "100")
++    c2.links.add(link)
++    c2.pos, c2.entry, c2.stop = 100.0, 0.5, 0.45
++    c2.pos = 0.0                                               # 반영이 아직 안 된 상태에서 시작
++    orig = c2.create_market_order
++
++    def delayed(*a, **k):
++        try:
++            return orig(*a, **k)
++        finally:
++            c2.pos, c2.entry, c2.stop = 100.0, 0.5, 0.45        # 거부 응답 직후 포지션이 나타남
++    c2.create_market_order = delayed
++    assert b2.rebalance(100.0, 0.5) == 100.0 and c2.pos == 100.0 and any("이미 있어" in t for t in b2.notifier.sent)
++
++
++def test_if_the_stop_cannot_be_placed_the_position_is_closed_and_the_cycle_stops():
++    b, c = broker(FakeClient(fail_stop=True, drop_stop_on_fill=True))
++    with pytest.raises(tl.LiveSafetyError, match="손절"):
++        b.rebalance(100.0, 0.5)
++    assert c.pos == 0.0 and c.orders[-1]["reduce_only"]
++    assert any("정리" in t for t in b.notifier.sent)
++
++
++def test_a_position_without_an_exchange_stop_gets_one_on_the_next_cycle():
++    b, c = broker()
++    c.pos, c.entry, c.stop = 50.0, 0.6, 0.0                     # 누가 손절을 지웠다
++    b.equity(0.6)
++    assert c.stop == pytest.approx(0.54)
++
++
++def test_hedge_mode_accounts_are_refused():
++    b, _ = broker(FakeClient(hedge=True))
++    with pytest.raises(tl.LiveRefused, match="헤지 모드"):
++        b.preflight()
++
++
++def test_funding_hooks_do_nothing_and_state_mirrors_the_exchange():
++    b, c = broker()
++    b.rebalance(100.0, 0.5)
++    assert b.accrue_funding(0.5, 4) is None and b.accrue_funding_actual(0.5, [0.0001]) == 0.0
++    st = b.state_dict()
++    assert st["qty"] == 100.0 and st["balance"] == 1000.0 and st["live"] == "testnet" and {"entry", "total_fees"} <= set(st)
++    b.load_state({"orders": 7, "qty": 999})                     # 저장된 수량은 믿지 않고 거래소를 기준으로 한다
++    assert b.qty == 100.0 and "테스트넷 실주문" in b.startup_text
++
++
++# ---------------------------------------------------------------- 시작 조건
++ENV = {"BYBIT_TESTNET_API_KEY": "k", "BYBIT_TESTNET_API_SECRET": "s", "BYBIT_API_KEY": "mk", "BYBIT_API_SECRET": "ms"}
++
++
++class Paper:
++    def __init__(self, cfg):
++        self.cfg = cfg
++
++
++def make(cfg_, args=None, env=None, **kw):
++    seen = {}
++
++    def factory(url, key, secret):
++        seen.update(url=url, key=key)
++        return FakeClient()
++    kw.setdefault("client_factory", factory)
++    b = tl.make_trend_broker(cfg_, args or SimpleNamespace(i_understand_live_trading=False), ENV if env is None else env, Paper, Notes(), **kw)
++    return b, seen
++
++
++def test_paper_mode_keeps_the_paper_broker_and_testnet_uses_the_testnet_endpoint_and_keys():
++    assert isinstance(make(cfg("paper"))[0], Paper)
++    b, seen = make(cfg("testnet"))
++    assert isinstance(b, tl.TrendLiveBroker) and seen == {"url": tl.TESTNET, "key": "k"}
++    assert make(cfg("testnet"), env={"BYBIT_API_KEY": "mk", "BYBIT_API_SECRET": "ms"})[1]["key"] == "mk"   # v1 이름으로도 가능
++    with pytest.raises(tl.LiveRefused, match="API_KEY"):
++        make(cfg("testnet"), env={})
++
++
++def test_mainnet_needs_every_gate(tmp_path):
++    ok = SimpleNamespace(i_understand_live_trading=True)
++    passfile = tmp_path / "pass.json"
++    typed = []
++    phrase = "LIVE ENAUSDT 150USD"
++
++    def go(c=None, a=ok, **kw):
++        return make(c or cfg("live", live_enabled=True), a, pass_path=passfile, isatty=True, input_fn=lambda p: typed[-1] if typed else "", clock=lambda: 1000.0, **kw)
++
++    with pytest.raises(tl.LiveRefused, match="live_enabled"):
++        go(c=cfg("live", live_enabled=False))
++    with pytest.raises(tl.LiveRefused, match="i-understand-live-trading"):
++        go(a=SimpleNamespace(i_understand_live_trading=False))
++    with pytest.raises(tl.LiveRefused, match="테스트넷 왕복 시험 통과 기록이 없습니다"):
++        go()
++    passfile.write_text(json.dumps({"ts": 1000.0 - 40 * 86400}))
++    with pytest.raises(tl.LiveRefused, match="40일 지났습니다"):
++        go()
++    passfile.write_text(json.dumps({"ts": 1000.0}))
++    with pytest.raises(tl.LiveRefused, match="터미널"):
++        make(cfg("live", live_enabled=True), ok, pass_path=passfile, isatty=False, clock=lambda: 1000.0)
++    typed.append("yes")
++    with pytest.raises(tl.LiveRefused, match="확인 문구"):
++        go()
++    typed.append(phrase)
++    b, seen = go()
++    assert b.mode == "live" and seen == {"url": tl.MAINNET, "key": "mk"} and "⚠ 메인넷 실거래" in b.startup_text
++    with pytest.raises(tl.LiveRefused, match="BYBIT_API_KEY"):
++        go(env={"BYBIT_TESTNET_API_KEY": "k", "BYBIT_TESTNET_API_SECRET": "s"})                 # 테스트넷 키로는 메인넷을 못 연다
++
++
++# ---------------------------------------------------------------- 점검 명령
++def test_check_without_orders_and_the_round_trip_rehearsal(tmp_path):
++    lines, made = [], []
++
++    def factory(url, key, secret):
++        made.append(FakeClient())
++        return made[-1]
++    ok = tl.run_check(cfg("testnet"), ENV, test_order=False, client_factory=factory, out=lines.append, pass_path=tmp_path / "p.json")
++    assert ok and not made[0].orders and not (tmp_path / "p.json").exists() and any("주문은 하지 않았습니다" in l for l in lines)
++    lines.clear()
++    ok = tl.run_check(cfg("testnet"), ENV, test_order=True, client_factory=factory, out=lines.append, pass_path=tmp_path / "p.json", sleep=lambda s: None)
++    c = made[-1]
++    assert ok and c.pos == 0.0 and (tmp_path / "p.json").exists() and "테스트넷 왕복 시험 통과" in lines[-1]
++    assert [o["reduce_only"] for o in c.orders] == [False, True, False, True] and [o["side"] for o in c.orders] == ["Buy", "Sell", "Sell", "Buy"]
++    assert tl.testnet_pass_ok(path=tmp_path / "p.json")[0]
++
++
++def test_a_failed_rehearsal_writes_no_pass_record_and_cleans_up(tmp_path):
++    made = []
++
++    def factory(url, key, secret):
++        made.append(FakeClient(drop_stop_on_fill=True, fail_stop=True))
++        return made[-1]
++    out = []
++    ok = tl.run_check(cfg("testnet"), ENV, test_order=True, client_factory=factory, out=out.append, pass_path=tmp_path / "p.json", sleep=lambda s: None)
++    assert not ok and not (tmp_path / "p.json").exists() and made[0].pos == 0.0 and "메인넷은 열 수 없습니다" in out[-1]
++
++
++def test_test_orders_are_never_sent_to_mainnet(tmp_path):
++    out = []
++    assert tl.run_check(cfg("live"), ENV, test_order=True, client_factory=lambda *a: FakeClient(), out=out.append, pass_path=tmp_path / "p.json") is False
++    assert "테스트넷에서만" in out[-1]
++
++
++# ---------------------------------------------------------------- 연결 스크립트
++def test_wire_tool_is_atomic_and_idempotent(tmp_path):
++    (tmp_path / "ena_bot").mkdir()
++    main = ('def cmd_trend_run(cfg, args):\n    load_env(args.env)\n    if cfg.mode != "paper":\n'
++            '        print("trend-run은 페이퍼 모드 전용입니다(config의 mode=paper). 실거래 주문은 아직 구현하지 않았습니다.", file=sys.stderr)\n        return 2\n'
++            '    store = 1\n    notifier = 2\n    client = 3\n    eng = TrendEngine(cfg, client, PaperTrendBroker(cfg), store, notifier)\n    return 0\n\n\n'
++            'def build():\n    s = sub.add_parser("trend-run")\n    s.add_argument("--env", default=".env")\n    s.add_argument("--once", action="store_true")\n')
++    eng = ('class E:\n    def startup(self):\n        self.notifier.send(f"추세추종 페이퍼 시작 {self.cfg.symbol} equity={self.broker.balance:.2f} (실거래 주문 없음)")\n')
++    (tmp_path / "ena_bot/main.py").write_text(main)
++    (tmp_path / "ena_bot/trend_engine.py").write_text(eng)
++    run = lambda: subprocess.run([sys.executable, str(TOOL), str(tmp_path)], capture_output=True, text=True)
++    r = run()
++    assert r.returncode == 0, r.stderr
++    m, e = (tmp_path / "ena_bot/main.py").read_text(), (tmp_path / "ena_bot/trend_engine.py").read_text()
++    compile(m, "m", "exec"); compile(e, "e", "exec")
++    assert "make_trend_broker" in m and "PaperTrendBroker(cfg), store" not in m and "i-understand-live-trading" in m and "startup_text" in e
++    assert "이미 적용됨" in run().stdout and (tmp_path / "ena_bot/main.py").read_text() == m
++    # 위치가 하나라도 없으면 둘 다 그대로
++    (tmp_path / "ena_bot/main.py").write_text("x = 1\n")
++    (tmp_path / "ena_bot/trend_engine.py").write_text(eng)
++    r = run()
++    assert r.returncode != 0 and (tmp_path / "ena_bot/trend_engine.py").read_text() == eng
+diff --git a/tools/wire_trend_live.py b/tools/wire_trend_live.py
+new file mode 100644
+index 0000000..305b096
+--- /dev/null
++++ b/tools/wire_trend_live.py
+@@ -0,0 +1,47 @@
++"""trend-run 이 mode=testnet/live 에서 거래소 브로커를 쓰도록 연결한다(main.py 3곳, trend_engine.py 1곳). 여러 번 실행해도 안전.
++위치를 하나라도 못 찾으면 아무 파일도 바꾸지 않는다.
++사용: .venv/bin/python tools/wire_trend_live.py [프로젝트 폴더]
++"""
++import sys
++from pathlib import Path
++
++root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
++main_py, engine_py = root / "ena_bot/main.py", root / "ena_bot/trend_engine.py"
++
++A = '''    if cfg.mode != "paper":
++        print("trend-run은 페이퍼 모드 전용입니다(config의 mode=paper). 실거래 주문은 아직 구현하지 않았습니다.", file=sys.stderr)
++        return 2
++'''
++A2 = "    # 실거래(testnet/live)는 아래 make_trend_broker 가 모든 조건을 확인한 뒤에만 허용한다\n"
++B = "    eng = TrendEngine(cfg, client, PaperTrendBroker(cfg), store, notifier)\n"
++B2 = '''    from .trend_live import LiveRefused, make_trend_broker
++    try:
++        broker = make_trend_broker(cfg, args, os.environ, PaperTrendBroker, notifier)
++    except LiveRefused as exc:
++        print(f"실거래를 시작하지 않았습니다: {exc}", file=sys.stderr)
++        return 2
++    eng = TrendEngine(cfg, client, broker, store, notifier)
++'''
++C = '''    s = sub.add_parser("trend-run")
++    s.add_argument("--env", default=".env")
++    s.add_argument("--once", action="store_true")
++'''
++C2 = C + '    s.add_argument("--i-understand-live-trading", action="store_true", help="mode=live(메인넷 실거래)에 필요")\n'
++D = '        self.notifier.send(f"추세추종 페이퍼 시작 {self.cfg.symbol} equity={self.broker.balance:.2f} (실거래 주문 없음)")\n'
++D2 = ('        self.notifier.send(getattr(self.broker, "startup_text", None)\n'
++      '                           or f"추세추종 페이퍼 시작 {self.cfg.symbol} equity={self.broker.balance:.2f} (실거래 주문 없음)")\n')
++
++jobs = [(main_py, A, A2), (main_py, B, B2), (main_py, C, C2), (engine_py, D, D2)]
++texts = {main_py: main_py.read_text(encoding="utf-8"), engine_py: engine_py.read_text(encoding="utf-8")}
++todo = []
++for path, old, new in jobs:
++    if new in texts[path]:  # 이미 적용됨(새 내용이 옛 내용을 포함해도 이 검사가 먼저다)
++        continue
++    if texts[path].count(old) != 1:
++        raise SystemExit(f"{path.name}: 연결할 위치를 찾지 못했습니다({texts[path].count(old)}곳). 아무 파일도 바꾸지 않았습니다.")
++    todo.append((path, old, new))
++for path, old, new in todo:
++    texts[path] = texts[path].replace(old, new, 1)
++for path in {p for p, _, _ in todo}:
++    path.write_text(texts[path], encoding="utf-8")
++print("수정:", ", ".join(sorted({p.name for p, _, _ in todo})) if todo else "이미 적용됨")
