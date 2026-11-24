@@ -115,6 +115,7 @@ def test_wire_tool_installs_upgrades_in_place_and_is_atomic(tmp_path):
 
 def test_the_summary_line_and_the_display_threshold_are_what_the_page_needs():
     src = JS.read_text(encoding="utf-8")
+    assert "가이드라인에 맞지 않는 항목" in src and "e.forming5" in src
     assert "collapsed: true" in src and "function structSummary" in src and "maxLineDist: 8.0" in src and src.rstrip().endswith("// ---- /차트 구조 자동 작도 ----")
     assert st.MAX_LINE_DIST_ATR == 8.0                                   # 파이썬 기준 구현과 같은 값
     shock_src = (TOOLS / "shock_chart.js").read_text(encoding="utf-8")

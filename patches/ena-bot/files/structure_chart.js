@@ -165,6 +165,7 @@ function structBox(res) {
       row('엘리엇 후보: ' + (e.direction === 'up' ? '상승' : '하락') + ' 5파 ' + (e.complete ? '완성(마지막 극점 확정)' : e.forming5 ? '진행 중(5파 극점을 갱신하는 중)' : '진행 중(4파까지)') + ' · 필수 규칙 ' + e.rules.length + '/' + e.rules.length + ' 통과 · 가이드라인 ' + e.hits.length + '/' + (e.hits.length + e.misses.length));
       row('무효화: ' + structFmt(e.invalidation.level) + ' ' + (e.invalidation.side === 'above' ? '위로' : '아래로') + ' 벗어나면 — ' + e.invalidation.why + (e.forming5 ? ' (새 극점이 나와도 이 선은 움직이지 않음)' : ''));
       if (e.targets.length) row('5파가 이어진다면 목표 구간 ' + structFmt(Math.min(...e.targets)) + ' ~ ' + structFmt(Math.max(...e.targets)) + ' (1파 길이의 0.618~1.0배)');
+      if (e.misses.length) row('가이드라인에 맞지 않는 항목: ' + e.misses.join(', ') + ' (필수 규칙이 아니라 카운트의 품질을 보는 항목)', true);
       if (e.alternatives > 0) row('규칙을 통과하는 다른 카운트도 ' + e.alternatives + '개 더 있습니다(이 후보가 유일한 해석이 아닙니다).', true);
     }
   }
