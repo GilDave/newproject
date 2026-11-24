@@ -61,3 +61,23 @@ def test_the_card_script_is_valid_javascript_and_its_pure_helpers_behave(tmp_pat
     assert out["v"]["cls"] == "warn" and "검증 전" in out["v"]["text"] and out["ok"]["cls"] == "ok" and out["bad"]["cls"] == "bad" and "기준 미달" in out["bad"]["text"]
     assert "검증하지 않았습니다" in out["m15"]["text"] and "검증하지 않았습니다" in out["unk"]["text"]
     assert out["txt"] == "숏 밴드 반전 (추세와 반대)" and out["fmt"] == "0.10000" and out["none"] == "-"
+
+
+def test_unverified_rules_are_never_called_favorable_on_the_card():
+    src = (TOOLS / "entry_card.js").read_text(encoding="utf-8")
+    assert "조건이 가장 많이 겹친 시간봉(과거 검증 미통과 · 참고용)" in src and "v.cls === 'ok' ? '지금 가장 유리한 시간봉: '" in src      # 통과한 규칙만 '유리한'이라고 부른다
+    assert "function entStudyLine" in src and "방향을 맞히는 근거로 쓰지 마세요" in src and "' (참고)'" in src
+
+
+@pytest.mark.skipif(NODE is None, reason="node 가 없어 JS 확인을 건너뜀")
+def test_the_study_summary_line_counts_passed_rules(tmp_path):
+    import json
+    src = (TOOLS / "entry_card.js").read_text(encoding="utf-8")
+    f = tmp_path / "s.js"
+    f.write_text("globalThis.document = {getElementById: () => null, createElement: () => ({}), head: {appendChild() {}}}; globalThis.fetch = () => new Promise(() => {});\n"
+                 "globalThis.setTimeout = () => 0; globalThis.setInterval = () => 0; globalThis.localStorage = {getItem: () => null, setItem() {}};\n" + src +
+                 "\nconst out = {};\nENT.data = {study: {ok: false}}; out.none = entStudyLine();"
+                 "\nENT.data = {study: {ok: true, coins: 18, age_days: 2.2, groups: {a: {verdict: {use: false}}, b: {verdict: {use: false}}}}}; out.zero = entStudyLine();"
+                 "\nENT.data.study.groups.b.verdict.use = true; out.one = entStudyLine(); console.log(JSON.stringify(out));", encoding="utf-8")
+    out = json.loads(subprocess.run([NODE, str(f)], capture_output=True, text=True, check=True).stdout)
+    assert "검증 전" in out["none"] and "2개 중 0개 통과" in out["zero"] and "쓰지 마세요" in out["zero"] and "2개 중 1개 통과" in out["one"] and "쓰지 마세요" not in out["one"]

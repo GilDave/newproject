@@ -31,6 +31,12 @@ function entVerdict(tf, setup) {
   return g.verdict.use ? {cls: 'ok', text: '과거 검증 통과: ' + g.verdict.why} : {cls: 'bad', text: '과거 검증: ' + g.verdict.why};
 }
 function entDist(b) { return b.dist_pct == null ? '-' : (b.dist_pct >= 0 ? '+' : '') + (b.dist_pct * 100).toFixed(1) + '%'; }
+function entStudyLine() {
+  const st = ENT.data && ENT.data.study;
+  if (!st || !st.ok) return '과거 검증 전 — 이 계획 규칙이 과거에 나았는지 아직 모릅니다';
+  const gs = Object.values(st.groups || {}), ok = gs.filter(g => g.verdict && g.verdict.use).length;
+  return '과거 검증 결과: 규칙 ' + gs.length + '개 중 ' + ok + '개 통과 (' + st.coins + '개 코인, ' + Math.round(st.age_days) + '일 전 계산)' + (ok === 0 ? ' — 방향을 맞히는 근거로 쓰지 마세요' : '');
+}
 function entPlanText(b) {
   return (b.direction === 'long' ? '롱' : '숏') + ' ' + ENT_SETUP[b.setup] + (b.aligned_trend ? '' : ' (추세와 반대)');
 }
@@ -42,10 +48,11 @@ function entCard() {
   if (!d || !d.ok) { box.appendChild(entEl('div', 'sub', '불러오는 중이거나 시세를 받지 못했습니다')); return; }
   const tfs = d.plans.timeframes, fav = d.plans.favorable;
   const pr = ['1h', '4h', '15m', '1d'].map(k => tfs[k]).find(p => p && p.status === 'ok');
+  box.appendChild(entEl('div', 'sub', entStudyLine()));
   if (pr) box.appendChild(entEl('div', 'sub', '현재가 ' + entFmt(pr.price) + ' (진입가까지의 거리는 현재가 기준: + 위, - 아래)'));
   if (fav && tfs[fav] && tfs[fav].best) {
     const b = tfs[fav].best, v = entVerdict(fav, b.setup);
-    box.appendChild(entEl('div', 'fav', '지금 가장 유리한 시간봉: ' + ENT_TF_KO[fav] + ' — ' + entPlanText(b)));
+    box.appendChild(entEl('div', 'fav', (v.cls === 'ok' ? '지금 가장 유리한 시간봉: ' : '조건이 가장 많이 겹친 시간봉(과거 검증 미통과 · 참고용): ') + ENT_TF_KO[fav] + ' — ' + entPlanText(b)));
     box.appendChild(entEl('div', null, '권장 진입 ' + entFmt(b.entry) + ' (구간 ' + entFmt(b.zone[0]) + ' ~ ' + entFmt(b.zone[1]) + ') · 손절 ' + entFmt(b.stop) + ' · 목표 ' + entFmt(b.targets[0]) + ' / ' + entFmt(b.targets[1])
       + ' · 진입까지 ' + entDist(b) + ' · 첫 목표 손익비 ' + b.rr.toFixed(2) + ' · 손절 폭 ' + (b.risk_pct * 100).toFixed(1) + '% · 조건 일치 ' + b.score + '/3' + (b.htf_aligned ? ' · 상위 시간봉 추세와 같은 방향' : '')));
     box.appendChild(entEl('div', 'sub', '왕복 비용은 위험의 ' + (b.cost_r * 100).toFixed(0) + '% · 비용을 빼고 본전이 되려면 첫 목표 기준 승률 ' + (b.be_win_rate * 100).toFixed(0) + '% 이상 필요'));
@@ -102,11 +109,11 @@ function entDraw() {
     if (!ENT.lineOn || !tf || !d || !d.ok) return;
     const p = d.plans.timeframes[tf], b = p && p.status === 'ok' ? p.best : null;
     if (!b || !['in_zone', 'approaching', 'waiting'].includes(b.state)) return;
-    const a = b.state === 'waiting' ? '88' : '', side = b.direction === 'long' ? '롱' : '숏';
+    const a = b.state === 'waiting' ? '88' : '', side = b.direction === 'long' ? '롱' : '숏', ref = entVerdict(tf, b.setup).cls === 'ok' ? '' : ' (참고)';
     const add = (price, color, style, title, label) => ENT.lines.push(candle.createPriceLine({price, color: color + a, lineWidth: 1, lineStyle: style, axisLabelVisible: label, title}));
     add(b.zone[0], '#64b5f6', 3, '', false); add(b.zone[1], '#64b5f6', 3, '', false);
-    add(b.entry, '#42a5f5', 2, side + ' 진입', true); add(b.stop, '#ef5350', 2, '손절', true);
-    add(b.targets[0], '#66bb6a', 2, '목표1', true); add(b.targets[1], '#66bb6a', 3, '목표2', true);
+    add(b.entry, '#42a5f5', 2, side + ' 진입' + ref, true); add(b.stop, '#ef5350', 2, '손절' + ref, true);
+    add(b.targets[0], '#66bb6a', 2, '목표1' + ref, true); add(b.targets[1], '#66bb6a', 3, '목표2' + ref, true);
   } catch (err) { /* 선을 못 그려도 차트는 그대로 */ }
 }
 async function entLoad() {
