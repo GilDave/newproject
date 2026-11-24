@@ -161,3 +161,37 @@ def test_the_api_payload_is_json_safe_cached_and_carries_the_study_summary(tmp_p
     (tmp_path / "entry_study.json").write_text(json.dumps({"generated": 1, "coins": ["A"], "groups": {"4h|pullback": {"n": 5, "verdict": {"use": False, "why": "표본 부족"}}}}))
     c2 = entry_api.payload(fetch, tmp_path, "ENAUSDT", ttl=60, cache=cache)
     assert c2["study"]["ok"] and c2["study"]["groups"]["4h|pullback"]["verdict"]["why"] == "표본 부족"            # 검증 요약은 캐시와 상관없이 최신 파일을 읽는다
+
+
+# ---------------------------------------------------------------- 현실성 경고(손절 폭·비용·거리)
+def test_costs_break_even_win_rate_and_distance_are_computed_from_the_plan():
+    o, h, l, c = ohlc(path([(180, -0.004), (7, 0.006)]))
+    ind = ep.indicators(o, h, l, c)
+    p = next(x for x in ep.candidates(ind, len(c) - 1, price=c[-1] * 0.99) if x["setup"] == "pullback")
+    risk = abs(p["entry"] - p["stop"])
+    assert p["cost_r"] == pytest.approx(p["entry"] * 2 * (ep.COST_FEE + ep.COST_SLIP) / risk)
+    assert p["be_win_rate"] == pytest.approx((1 + p["cost_r"]) / (p["rr"] + 1))               # 비용을 뺀 뒤 본전이 되는 승률
+    assert p["dist_pct"] == pytest.approx((p["entry"] - p["price"]) / p["price"])                              # 진입가가 현재가보다 몇 % 위(+)/아래(-)인지
+    assert isinstance(p["warnings"], list) and isinstance(p["severe"], bool)
+
+
+def test_a_plan_whose_stop_is_far_away_is_warned_and_never_becomes_the_favorable_timeframe():
+    o, h, l, c = ohlc(path([(180, -0.006), (7, 0.008)], noise=0.015, seed=1), seed=1, spread=0.015)           # 변동이 큰 종목(ATR이 커서 손절 폭 한도 4ATR 안에서도 10%를 넘을 수 있다)
+    h[-4] *= 1.1                                                        # 최근 10봉 안의 장대 고점이 손절 위치를 끌어올린다
+    ind = ep.indicators(o, h, l, c)
+    wide = [x for x in ep.candidates(ind, len(c) - 1) if x["setup"] == "pullback"]
+    assert len(wide) == 1 and wide[0]["risk_pct"] > ep.SEVERE_RISK_PCT and wide[0]["severe"] is True
+    assert any("손절 폭이 큼" in w for w in wide[0]["warnings"])
+    rows = [[T0 + i * 3600_000, o[i], h[i], l[i], c[i], 1.0] for i in range(len(c))]
+    res = ep.plans(lambda iv, n: rows, T0 + len(c) * 3600_000)
+    fav = res["favorable"]
+    assert fav is None or not res["timeframes"][fav]["best"]["severe"]
+    shown = [tf for tf in res["timeframes"].values() if tf["best"] and tf["best"]["setup"] == "pullback" and tf["best"]["risk_pct"] > ep.SEVERE_RISK_PCT]
+    assert shown                                                        # 표에는 경고와 함께 남는다
+
+
+def test_a_very_tight_stop_makes_costs_a_large_part_of_the_risk():
+    o, h, l, c = ohlc(path([(180, -0.004), (7, 0.006)]), spread=0.0004)
+    p = next(x for x in ep.candidates(ep.indicators(o, h, l, c), len(c) - 1) if x["setup"] == "pullback")
+    expected = p["entry"] * 2 * (ep.COST_FEE + ep.COST_SLIP) / abs(p["entry"] - p["stop"])
+    assert p["cost_r"] == pytest.approx(expected) and (p["cost_r"] > ep.WARN_COST_R) == any("수수료·슬리피지" in w for w in p["warnings"])

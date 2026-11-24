@@ -18,6 +18,10 @@ RSI_N, MACD_FAST, MACD_SLOW, MACD_SIG, BB_N, BB_K, EMA_FAST, EMA_SLOW = 14, 12, 
 MIN_BARS = 120
 MIN_STOP_ATR, MAX_STOP_ATR = 0.8, 4.0     # 손절 폭이 이 범위를 벗어나는 계획은 만들지 않는다(너무 촘촘하거나 너무 넓음)
 ZONE_REACH_ATR = 1.5                      # 가격이 진입 구간에서 이만큼(ATR) 이내면 '다가오는 중'
+COST_FEE, COST_SLIP = 0.00055, 0.0001     # 한쪽 체결당 수수료·슬리피지(entry_study 와 같은 값)
+WARN_RISK_PCT, SEVERE_RISK_PCT = 0.08, 0.10   # 손절 폭이 가격의 이 비율을 넘으면 경고 / '가장 유리한 시간봉' 후보에서 제외
+WARN_COST_R, SEVERE_COST_R = 0.15, 0.25       # 왕복 비용이 위험(R)의 이 비율을 넘으면 경고 / 후보에서 제외
+FAR_TARGET_PCT = 0.30                          # 목표가 진입가에서 이만큼 멀면 비현실적이라고 경고
 TIMEFRAMES = {"15m": ("15", 15), "1h": ("60", 60), "4h": ("240", 240), "1d": ("D", 1440)}
 NAN = float("nan")
 
@@ -101,8 +105,21 @@ def _finish(direction: int, setup: str, entry: float, stop: float, zone: tuple, 
     if not (MIN_STOP_ATR * a <= risk <= MAX_STOP_ATR * a) or risk <= 0:
         return None
     reward = (targets[0] - entry) if direction == 1 else (entry - targets[0])
+    rr, risk_pct = reward / risk, risk / entry
+    cost_r = entry * 2 * (COST_FEE + COST_SLIP) / risk            # 왕복 비용이 위험(R)의 몇 배인지
+    warnings, severe = [], False
+    if risk_pct > WARN_RISK_PCT:
+        warnings.append(f"손절 폭이 큼({risk_pct:.1%}) — 목표도 그만큼 멀어집니다")
+        severe = severe or risk_pct > SEVERE_RISK_PCT
+    if cost_r > WARN_COST_R:
+        warnings.append(f"수수료·슬리피지가 위험의 {cost_r:.0%}(손절 폭이 좁아 비용 부담이 큼)")
+        severe = severe or cost_r > SEVERE_COST_R
+    far = max(abs(t - entry) / entry for t in targets)
+    if far > FAR_TARGET_PCT:
+        warnings.append(f"목표가 진입가에서 {far:.0%} 떨어져 있어 비현실적일 수 있음")
     return {"setup": setup, "direction": "long" if direction == 1 else "short", "state": state, "entry": entry, "zone": [zone[0], zone[1]], "stop": stop,
-            "targets": targets, "rr": reward / risk, "risk_pct": risk / entry, "score": sum(1 for _, ok, _ in checks if ok), "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks],
+            "targets": targets, "rr": rr, "risk_pct": risk_pct, "cost_r": cost_r, "be_win_rate": (1 + cost_r) / (rr + 1), "dist_pct": (entry - price) / price,
+            "warnings": warnings, "severe": severe, "score": sum(1 for _, ok, _ in checks if ok), "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks],
             "aligned_trend": direction == trend, "price": price, "notes": notes}
 
 
@@ -127,14 +144,14 @@ def candidates(ind: dict, t: int, price: float | None = None) -> list:
         entry = zhi
         stop = min(min(l[t - 9:t + 1]), zlo) - 0.3 * a
         stop = min(stop, entry - MIN_STOP_ATR * a)
-        checks = [("RSI 35~60(과열·과매도 아님)", 35 <= r <= 60, f"RSI {r:.0f}"), ("MACD 상승 쪽(선>신호 또는 히스토그램 개선)", ind["macd"][t] > ind["signal"][t] or hist > hist_prev, f"히스토그램 {hist:+.5f}"),
+        checks = [("RSI 35~60(과열·과매도 아님)", 35 <= r <= 60, f"RSI {r:.0f}"), ("MACD 상승 쪽(선>신호 또는 히스토그램 개선)", ind["macd"][t] > ind["signal"][t] or hist > hist_prev, f"히스토그램 {hist:+.5f}(직전 {hist_prev:+.5f}), MACD선은 신호선{'보다 위' if ind['macd'][t] > ind['signal'][t] else '보다 아래'}"),
                   ("볼린저 중하단(%B 0.15~0.65)", 0.15 <= pctb <= 0.65, f"%B {pctb:.2f}")]
     else:
         zlo, zhi = min(mid, e21), max(mid, e21) + 0.25 * a
         entry = zlo
         stop = max(max(h[t - 9:t + 1]), zhi) + 0.3 * a
         stop = max(stop, entry + MIN_STOP_ATR * a)
-        checks = [("RSI 40~65(과열·과매도 아님)", 40 <= r <= 65, f"RSI {r:.0f}"), ("MACD 하락 쪽(선<신호 또는 히스토그램 악화)", ind["macd"][t] < ind["signal"][t] or hist < hist_prev, f"히스토그램 {hist:+.5f}"),
+        checks = [("RSI 40~65(과열·과매도 아님)", 40 <= r <= 65, f"RSI {r:.0f}"), ("MACD 하락 쪽(선<신호 또는 히스토그램 악화)", ind["macd"][t] < ind["signal"][t] or hist < hist_prev, f"히스토그램 {hist:+.5f}(직전 {hist_prev:+.5f}), MACD선은 신호선{'보다 위' if ind['macd'][t] > ind['signal'][t] else '보다 아래'}"),
                   ("볼린저 중상단(%B 0.35~0.85)", 0.35 <= pctb <= 0.85, f"%B {pctb:.2f}")]
     risk = abs(entry - stop)
     targets = [entry + d * 1.5 * risk, entry + d * 3.0 * risk]
@@ -206,8 +223,8 @@ def plans(fetch, now_ms: int, timeframes: dict | None = None, limit: int = 300) 
     best, best_key = None, None
     for name, p in out["timeframes"].items():
         b = p.get("best") if p.get("status") == "ok" else None
-        if not b or b["state"] not in ("in_zone", "approaching") or b["score"] < 2:
-            continue
+        if not b or b["state"] not in ("in_zone", "approaching") or b["score"] < 2 or b["severe"]:
+            continue                                  # 손절 폭이 너무 크거나 비용 부담이 큰 계획은 '가장 유리한 시간봉'으로 내세우지 않는다(표에는 경고와 함께 남는다)
         direction = 1 if b["direction"] == "long" else -1
         b["htf_aligned"] = bool(htf) and all(x == direction for x in htf)
         key = (STATE_RANK[b["state"]], b["score"], b["htf_aligned"], b["rr"])

@@ -22,7 +22,7 @@ from . import entry_plan as ep
 from . import shock
 from .shock_study import coin_arrays, resample_ohlcv
 
-FEE, SLIP = 0.00055, 0.0001
+FEE, SLIP = ep.COST_FEE, ep.COST_SLIP
 WAIT_BARS, HOLD_BARS, MIN_SCORE = 6, 48, 2
 FACTORS = {"1h": 1, "4h": 4, "1d": 24}
 DAY_MS = 24 * 3600_000
