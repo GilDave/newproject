@@ -122,7 +122,7 @@ function frcBox() {
     tr.insertCell().textContent = e && e.status === 'ok' && e.targets.length ? frcFmt(Math.min(...e.targets)) + ' ~ ' + frcFmt(Math.max(...e.targets)) : '—';
     tr.insertCell().textContent = e && e.status === 'ok' ? frcHint(ref, e) : '—';
     const drawn = FRC.drawn[name]; tr.insertCell().textContent = !FRC.on[name] ? '꺼짐' : sec < mainSec ? '차트보다 짧아 생략' : drawn ? '그림' : '—';
-    for (const td of tr.cells) td.style.cssText = 'padding:3px 8px;vertical-align:top';
+    for (const td of tr.cells) td.style.cssText = 'padding:3px 8px;vertical-align:top;text-align:left';
   }
   box.appendChild(tbl);
   box.appendChild(mk('div', '차트의 시간봉(' + Math.round(mainSec / 60) + '분)보다 짧은 시간봉은 선이 겹쳐 그릴 수 없어 표에만 나옵니다. 15분 차트에서 보면 네 시간봉이 모두 겹쳐 그려집니다. 굵은 선일수록 큰 시간봉입니다.', 'opacity:.65;font-size:11px;margin-top:4px'));
