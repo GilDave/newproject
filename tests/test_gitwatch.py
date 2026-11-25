@@ -180,3 +180,47 @@ def test_api_overview_fetch_and_remote(env, tmp_path):
     assert env.call("POST", "/api/git/remote", {"path": "/x", "name": "origin", "url": "https://github.com/a/b.git"})[0] == 400
     assert env.call("POST", "/api/git/fetch", {"path": "/x"})[0] == 400
     assert env.call("POST", "/api/git/remote", {"path": proj, "name": "origin", "url": "https://github.com/a/b.git"}, token="bad")[0] == 401
+
+
+# ------------------------------------------------------------------ version identity
+def test_app_version_is_read_from_the_usual_places(tmp_path):
+    a = tmp_path / "a"; a.mkdir(); (a / "pyproject.toml").write_text('[project]\nname="x"\nversion = "1.2.3"\n')
+    b = tmp_path / "b"; b.mkdir(); (b / "package.json").write_text('{"name":"x","version":"4.5.6"}')
+    c = tmp_path / "c"; c.mkdir(); (c / "VERSION").write_text("7.8.9\n")
+    d = tmp_path / "d"; (d / "pkg").mkdir(parents=True); (d / "pkg" / "__init__.py").write_text('__version__ = "0.3.1"\n')
+    e = tmp_path / "e"; e.mkdir(); (e / "VERSION").write_text("not a version\n")
+    assert [gitwatch.app_version(x) for x in (a, b, c, d, e)] == ["1.2.3", "4.5.6", "7.8.9", "0.3.1", ""]
+
+
+def test_inspect_reports_head_tag_version_and_a_fingerprint_only_when_dirty(tmp_path):
+    work = repo(tmp_path / "w", {"a.txt": "1\n", "VERSION": "2.0.1\n"})
+    i = gitwatch.inspect(work)
+    assert len(i["head"]) == 40 and i["last_commit"]["hash"] == i["head"][:len(i["last_commit"]["hash"])] and i["app_version"] == "2.0.1" and i["tag"] == "" and i["fingerprint"] is None
+    sh(work, "tag", "v2.0.1")
+    (work / "a.txt").write_text("changed\n")
+    j = gitwatch.inspect(work)
+    assert j["tag"] == "v2.0.1" and len(j["fingerprint"]) == 7
+
+
+def test_two_copies_with_the_same_commit_and_changes_have_the_same_fingerprint(tmp_path):
+    origin = repo(tmp_path / "o")
+    c1, c2 = tmp_path / "c1", tmp_path / "c2"
+    for c in (c1, c2):
+        subprocess.run(["git", "clone", "-q", str(origin), str(c)], check=True)
+        (c / "a.txt").write_text("same edit\n")
+        (c / "new.py").write_text("print(1)\n")
+    f1, f2 = gitwatch.inspect(c1), gitwatch.inspect(c2)
+    assert f1["head"] == f2["head"] and f1["fingerprint"] == f2["fingerprint"] and f1["fingerprint"]
+    (c2 / "new.py").write_text("print(2)\n")                 # 새 파일의 내용만 달라도 지문이 달라진다
+    assert gitwatch.inspect(c2)["fingerprint"] != f1["fingerprint"]
+    (c2 / "new.py").write_text("print(1)\n")
+    assert gitwatch.inspect(c2)["fingerprint"] == f1["fingerprint"]
+    sh(c1, "checkout", "-q", "--", "a.txt")
+    assert gitwatch.inspect(c1)["fingerprint"] != f2["fingerprint"]
+
+
+def test_fingerprint_is_skipped_when_there_are_too_many_untracked_files(tmp_path):
+    work = repo(tmp_path / "w")
+    for k in range(gitwatch.FP_MAX_FILES + 5):
+        (work / f"f{k}.txt").write_text("x")
+    assert gitwatch.inspect(work)["fingerprint"] is None

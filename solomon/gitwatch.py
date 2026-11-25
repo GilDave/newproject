@@ -7,6 +7,8 @@ refs through `git fetch` when the user asks for it. It never commits, pushes, pu
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import time
@@ -24,6 +26,8 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
 SECRET_RE = re.compile(r"(^|/)(\.env(\.[^/]+)?|[^/]*\.pem|[^/]*\.key|id_rsa|id_ed25519|credentials\.json)$")
 SECRET_OK = re.compile(r"(^|/)\.env\.(example|sample|template)$")
 LEVEL_RANK = {"bad": 2, "warn": 1, "info": 0}
+FP_MAX_FILES, FP_MAX_BYTES, FP_MAX_DIFF = 300, 20_000_000, 2_000_000     # 변경 지문을 계산할 최대 크기(넘으면 계산하지 않음)
+VERSION_RE = re.compile(r"""^\s*(?:__version__|version|VERSION)\s*[:=]\s*["']([0-9][0-9A-Za-z.+_-]{0,40})["']""", re.M)
 
 
 class GitWatchError(Exception):
@@ -135,6 +139,12 @@ def inspect(path) -> dict:
     last = (_git(["log", "-1", "--format=%h%x1f%an%x1f%at%x1f%s"], p) or "").rstrip("\n").split("\x1f")
     if len(last) == 4 and last[2].isdigit():
         info["last_commit"] = {"hash": last[0], "author": last[1], "time": int(last[2]), "subject": last[3][:120]}
+    head = (_git(["rev-parse", "HEAD"], p) or "").strip()
+    info["head"] = head
+    tag = (_git(["describe", "--tags", "--abbrev=0"], p) or "").strip()
+    info["tag"] = tag
+    info["app_version"] = app_version(p)
+    info["fingerprint"] = fingerprint(p, head) if (changed + untracked) else None
     week = (_git(["rev-list", "--count", "--since=7.days", "HEAD"], p) or "").strip()
     info["commits_7d"] = int(week) if week.isdigit() else None
     info["stash"] = len((_git(["stash", "list"], p) or "").splitlines())
@@ -147,6 +157,66 @@ def inspect(path) -> dict:
     info["tracked_secrets"] = tracked[:5]
     info["warnings"] = warnings_for(info)
     return info
+
+
+def app_version(root: Path) -> str:
+    """프로젝트가 스스로 밝힌 버전(pyproject.toml · package.json · VERSION · 패키지의 __init__.py). 없으면 ''."""
+    def read(path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")[:200_000] if path.is_file() else ""
+        except OSError:
+            return ""
+    m = re.search(r'^version\s*=\s*"([^"]{1,40})"', read(root / "pyproject.toml"), re.M)
+    if m:
+        return m.group(1)
+    try:
+        v = json.loads(read(root / "package.json") or "{}").get("version")
+        if isinstance(v, str) and v:
+            return v[:40]
+    except (ValueError, AttributeError):
+        pass
+    first = read(root / "VERSION").strip().splitlines()[:1]
+    if first and re.match(r"^[0-9][0-9A-Za-z.+_-]{0,40}$", first[0].strip()):
+        return first[0].strip()
+    try:
+        for d in sorted(x for x in root.iterdir() if x.is_dir() and not x.name.startswith((".", "_")))[:40]:
+            m = VERSION_RE.search(read(d / "__init__.py"))
+            if m:
+                return m.group(1)
+    except OSError:
+        pass
+    return ""
+
+
+def fingerprint(p: Path, head: str) -> Optional[str]:
+    """같은 커밋 위의 '커밋하지 않은 변경'이 두 폴더에서 같은지 비교하는 짧은 지문(7자). 새 파일은 내용까지 해시한다. 너무 크면 None."""
+    status = _git(["status", "--porcelain=v1"], p) or ""
+    diff = _git(["diff", "HEAD", "--binary"], p) or ""
+    if len(diff) > FP_MAX_DIFF:
+        return None
+    files = [f for f in (_git(["ls-files", "--others", "--exclude-standard"], p) or "").splitlines() if f]
+    if len(files) > FP_MAX_FILES:
+        return None
+    h = hashlib.sha1()
+    h.update(head.encode())
+    h.update(status.encode())
+    h.update(diff.encode("utf-8", "replace"))
+    total = 0
+    base = Path((_git(["rev-parse", "--show-toplevel"], p) or str(p)).strip())
+    for f in sorted(files):
+        try:
+            fp = base / f
+            size = fp.stat().st_size
+            total += size
+            if total > FP_MAX_BYTES:
+                return None
+            h.update(f.encode())
+            with fp.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+        except OSError:
+            h.update(b"?" + f.encode())
+    return h.hexdigest()[:7]
 
 
 def _w(level: str, code: str, text: str) -> dict:

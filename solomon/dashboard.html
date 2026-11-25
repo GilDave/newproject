@@ -2557,11 +2557,25 @@ async function runTool(tool, label){
 // ------------------------------------------------------------------ 프로젝트 탭 · Git 저장소 현황 (읽기 전용 + 원격 주소 설정·원격 확인)
 let gitData = null, gitForm = null, gitBusy = new Set(), ghInfo = null, gitCreate = null, gitPush = null;
 async function loadGit(){
-  try { [gitData, ghInfo] = await Promise.all([api("/api/git"), api("/api/github/status")]); renderGit(); } catch (e) { if (!e.offline) { gitData = null; $("gitGrid").textContent = ""; $("gitGrid").appendChild(el("div", "hint", e.message)); } }
+  try { [gitData, ghInfo] = await Promise.all([api("/api/git"), api("/api/github/status")]); renderGit(); if (typeof renderProjects === "function") renderProjects(); } catch (e) { if (!e.offline) { gitData = null; $("gitGrid").textContent = ""; $("gitGrid").appendChild(el("div", "hint", e.message)); } }
 }
 function gitAgo(sec){
   const d = Math.max(0, Date.now() / 1000 - sec);
   return d < 90 ? "방금" : d < 5400 ? Math.round(d / 60) + "분 전" : d < 129600 ? Math.round(d / 3600) + "시간 전" : Math.round(d / 86400) + "일 전";
+}
+function gitVersionText(i){
+  if (!i || i.state !== "ready") return "";
+  const dirty = (i.changed || 0) + (i.untracked || 0);
+  const rem = i.upstream ? (i.ahead || i.behind ? "원격 " + i.upstream + " 대비 올릴 " + i.ahead + "·받을 " + i.behind : "원격 " + i.upstream + " 와 같음") : "원격 연결 없음";
+  return [i.app_version ? "v" + i.app_version : "(앱 버전 표기 없음)", "커밋 " + (i.head || "").slice(0, 7) + (i.tag ? " (" + i.tag + ")" : ""), i.branch,
+    dirty ? "변경 " + dirty + "개" + (i.fingerprint ? " (지문 " + i.fingerprint + ")" : "") : "변경 없음", rem].join(" · ");
+}
+function gitVersionLine(i){
+  const t = gitVersionText(i); if (!t) return null;
+  const d = el("div", "gver", "버전 " + t); d.title = "눌러서 복사 — 다른 폴더·다른 AI와 같은 버전인지 비교할 때 붙여넣으세요(커밋과 지문이 같으면 같은 코드)";
+  d.style.cssText = "font-size:12px;color:var(--dim);cursor:copy;overflow-wrap:anywhere";
+  d.onclick = async () => { try { await navigator.clipboard.writeText(t); toast("버전 정보를 복사했습니다."); } catch (e) { toast("복사하지 못했습니다. 직접 선택해서 복사하세요.", true); } };
+  return d;
 }
 function gitChip(text, cls){ return el("span", "chip" + (cls ? " " + cls : ""), text); }
 function gitCard(i){
@@ -2583,6 +2597,7 @@ function gitCard(i){
     if (i.commits_7d != null) chips.appendChild(gitChip("7일 커밋 " + i.commits_7d));
   }
   c.appendChild(chips);
+  const gv = gitVersionLine(i); if (gv) c.appendChild(gv);
   if (i.git_root){ const l = el("div", "loc"); l.appendChild(document.createTextNode("git 위치 ")); l.appendChild(el("code", "", i.git_root)); if (i.nested) l.appendChild(document.createTextNode(" (이 폴더는 하위 폴더)")); c.appendChild(l); }
   if (i.state === "ready" || i.state === "empty"){
     const r = el("div", "rem");
@@ -2816,6 +2831,7 @@ function pcard(c){
   if (c.alias) box.appendChild(el("div", "sub", "폴더: " + c.name));
   if (c.memo) box.appendChild(el("div", "memo", c.memo));
   box.appendChild(el("div", "hint", c.path));
+  const gvl = gitVersionLine(gitData && gitData.projects.find(x => x.path === c.path)); if (gvl) box.appendChild(gvl);
   if (c.error){ box.appendChild(el("div", "hint", "⚠ 이 프로젝트를 읽지 못했습니다: " + c.error)); }
   else {
     const n = c.counts, fl = el("div", "flow");

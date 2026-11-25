@@ -15,7 +15,7 @@ GUIDE = ROOT / "solomon" / "USER_GUIDE.md"
 
 def test_version_is_one_number_everywhere():
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    assert meta["project"]["version"] == __version__ == "1.19.0"
+    assert meta["project"]["version"] == __version__ == "1.19.1"
     assert "USER_GUIDE.md" in meta["tool"]["setuptools"]["package-data"]["solomon"]
     assert "solomon.example.toml" in meta["tool"]["setuptools"]["package-data"]["solomon"]
 
@@ -153,8 +153,8 @@ def test_numbered_steps_keep_their_numbers_in_the_rendered_guide():
 
 
 def test_print_version_of_the_guide_has_cover_and_contents():
-    html = mdhtml.print_page(GUIDE.read_text(), "1.19.0", "2026-01-01")
-    assert 'class="cover"' in html and "버전 1.19.0" in html and 'class="toc"' in html
+    html = mdhtml.print_page(GUIDE.read_text(), "1.19.1", "2026-01-01")
+    assert 'class="cover"' in html and "버전 1.19.1" in html and 'class="toc"' in html
     assert html.count('<h1') == 1  # the cover's title only; the guide's own h1 is dropped
     assert "@page" in html and "<script" not in html.lower()
 
