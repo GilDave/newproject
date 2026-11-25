@@ -20,6 +20,20 @@ PRICES2 = ("const prices = plan ? [fmt(plan.entry, 6), fmt(plan.take_profit, 6) 
 STATUS = "`저장된 봉 기준가 ${fmt(j.current_price, 6)} USDT · ${tstr(j.as_of)} KST`"
 STATUS2 = "(j.stale ? '⚠ 실시간 시세를 못 받아 저장된 봉 기준(오래됐을 수 있음) ' : '현재가 ') + `${fmt(j.current_price, 6)} USDT · ${tstr(j.as_of)} KST 기준`"
 
+LOOP = "for (const value of [label, direction, ...prices]) row.insertCell().textContent = value;"
+LOOP2 = ("if (plan) { for (const value of [label, direction, ...prices]) row.insertCell().textContent = value; }\n"
+         "        else { row.insertCell().textContent = label; row.insertCell().textContent = direction; const c = row.insertCell(); c.colSpan = 3; c.style.textAlign = 'left'; c.style.opacity = '.75'; c.textContent = prices[0]; }")
+NOTE = "note.textContent = j.disclaimer;"
+NOTE2 = NOTE + """
+    const rf = $('#levels-refs') || (() => { const d = document.createElement('div'); d.id = 'levels-refs'; d.style.cssText = 'margin:8px 0;font-size:12px;line-height:1.7'; note.parentNode.insertBefore(d, note); return d; })();
+    rf.replaceChildren(); const t0 = document.createElement('div'); t0.textContent = '참고 구간 — 계획이 무효여도 보이는 가까운 거래량 매물대(현재가 대비 %)'; t0.style.opacity = '.7'; rf.appendChild(t0);
+    for (const [key, label] of labels) {
+      const r = j.timeframes[key] && j.timeframes[key].refs; if (!r) continue;
+      const fz = z => fmt(z.price, 6) + ' (' + (z.dist_pct >= 0 ? '+' : '') + (z.dist_pct * 100).toFixed(1) + '%)';
+      const up = (r.resistance || []).map(fz).join(' · ') || '없음', dn = (r.support || []).map(fz).join(' · ') || '없음';
+      const dv = document.createElement('div'); dv.textContent = label + ' — 위 저항: ' + up + '  /  아래 지지: ' + dn; rf.appendChild(dv);
+    }"""
+
 d, p = dash.read_text(encoding="utf-8"), page.read_text(encoding="utf-8")
 nd, np_ = d, p
 if "levels_live" not in d:
@@ -32,6 +46,11 @@ if PRICES2 not in p:
         if p.count(old) != 1:
             raise SystemExit(f"index.html 에서 {name} 위치를 찾지 못했습니다({p.count(old)}곳). 아무것도 바꾸지 않았습니다.")
     np_ = p.replace(PRICES, PRICES2, 1).replace(STATUS, STATUS2, 1)
+if "levels-refs" not in np_:
+    for name, old in (("표 행 만들기", LOOP), ("설명 문구", NOTE)):
+        if np_.count(old) != 1:
+            raise SystemExit(f"index.html 에서 {name} 위치를 찾지 못했습니다({np_.count(old)}곳). 아무것도 바꾸지 않았습니다.")
+    np_ = np_.replace(LOOP, LOOP2, 1).replace(NOTE, NOTE2, 1)
 if nd == d and np_ == p:
     print("이미 적용되어 있습니다. 아무것도 바꾸지 않았습니다.")
     raise SystemExit(0)

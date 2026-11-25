@@ -132,3 +132,21 @@ def test_price_at_the_bottom_of_the_range_explains_which_side_is_missing():
     t = ll.plan_timeframe(drift, 60, NOW)
     assert t["status"] == "ok" and t["long"] is None and t["short"] is None
     assert "지지 구간이 없음" in t["why"]["long"] and "지지 구간이 없음" in t["why"]["short"]
+
+
+def test_reference_zones_are_kept_even_when_no_plan_can_be_made():
+    base = rows(200, 60, base=0.1, amp=0.0, seed=3)
+    n = len(base)
+    drift = []
+    for i, r in enumerate(base):
+        f = 1 - 0.25 * i / n
+        drift.append([r[0], r[1] * f, r[2] * f, r[3] * f, r[4] * f, r[5]])
+    t = ll.plan_timeframe(drift, 60, NOW)
+    assert t["long"] is None and t["short"] is None
+    refs = t["refs"]
+    assert refs["support"] == [] or all(z["dist_pct"] < 0 for z in refs["support"])
+    assert all(z["dist_pct"] > 0 for z in refs["resistance"]) and len(refs["resistance"]) <= ll.REF_COUNT
+    xs = [z["dist_pct"] for z in refs["resistance"]]
+    assert xs == sorted(xs)                                     # 가까운 순서
+    body = ll.compute(fetch_all(), "ENAUSDT", NOW)
+    assert all("refs" in v for v in body["timeframes"].values() if v["status"] == "ok")

@@ -22,6 +22,7 @@ MAX_ENTRY_ATR = 3.0
 MIN_STOP_ATR, MAX_STOP_ATR, MAX_STOP_PCT = 0.8, 3.5, 0.10
 TP_MAX_ATR = 4.5
 TTL_SEC = 30
+REF_COUNT = 3
 NOTE = (dl.DISCLAIMER + " 진입가가 현재가에서 3 ATR(평균 변동폭의 3배)보다 멀거나 손절 폭이 3.5 ATR·10%를 넘으면 표시하지 않고, "
         "목표는 진입가에서 4.5 ATR 안으로 제한합니다(↧).")
 _LOCK = threading.Lock()
@@ -94,6 +95,9 @@ def plan_timeframe(rows, minutes: int, now_ms: float, price: float | None = None
     sup, res = prof["support_levels"], prof["resistance_levels"]
     out["status"] = "ok"
     out["atr"] = atr
+    # 계획이 무효여도 위치 정보는 남긴다: 현재가에서 가까운 순서로 지지·저항 각 3개와 현재가 대비 거리
+    out["refs"] = {"support": [{"price": z["price"], "dist_pct": (z["price"] - price) / price} for z in sup[:REF_COUNT]],
+                   "resistance": [{"price": z["price"], "dist_pct": (z["price"] - price) / price} for z in res[:REF_COUNT]]}
     if not sup or not res:                                    # 가격이 최근 범위의 맨 아래(또는 위)라서 한쪽에 거래량 구간이 없으면 진입가·목표가를 만들 수 없다
         no_sup = "현재가 아래에 거래량이 많이 쌓인 지지 구간이 없음(최근 하락이 빨라 아래쪽 거래가 적음)"
         no_res = "현재가 위에 거래량이 많이 쌓인 저항 구간이 없음(최근 상승이 빨라 위쪽 거래가 적음)"
