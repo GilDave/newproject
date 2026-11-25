@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, joblock, analysis as analysis_mod, alerts as alerts_mod, attachments as attach_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, gitwatch, manage, policy as policy_mod,
+from . import (__version__, joblock, analysis as analysis_mod, alerts as alerts_mod, attachments as attach_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, githost, gitwatch, manage, policy as policy_mod,
                portfolio, projects as projects_mod, report as report_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
@@ -288,6 +288,44 @@ class DashboardApp:
             raise ApiError(exc.status, exc.message) from exc
         self._gitwatch_cache.pop(path, None)
         self._fresh()
+        return res
+
+    # ------------------------------------------------------- GitHub hookup (login, new private repo, push)
+    def _gh(self, fn, *a):
+        try:
+            return fn(*a)
+        except githost.GithubError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        except gitwatch.GitWatchError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+
+    def github_status(self) -> dict:
+        return githost.status()
+
+    def github_login(self, token: str) -> dict:
+        return self._gh(githost.save_login, token)
+
+    def github_logout(self) -> dict:
+        return githost.logout()
+
+    def github_create_repo(self, path: str, name: str, description: str) -> dict:
+        path = self._known(path)
+        if self._busy_here(path):
+            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝난 뒤에 하세요.")
+        res = self._gh(githost.create_repo, path, name, description)
+        self._gitwatch_cache.pop(path, None)
+        self._fresh()
+        return res
+
+    def github_push_preview(self, project: str) -> dict:
+        return githost.push_preview(self._known(project))
+
+    def github_push(self, path: str, confirm) -> dict:
+        path = self._known(path)
+        if self._busy_here(path):
+            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝난 뒤에 하세요.")
+        res = self._gh(githost.push, path, confirm)
+        self._gitwatch_cache.pop(path, None)
         return res
 
     def git_init_preview(self, path: str) -> dict:
@@ -1537,6 +1575,15 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, shadow_mod.evaluate(Path(proj), app.settings.state_dir))
                 except ApiError as exc:
                     return self._json(exc.status, exc.payload())
+            if url.path in ("/api/github/status", "/api/git/push-preview"):
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    if url.path == "/api/github/status":
+                        return self._json(200, app.github_status())
+                    return self._json(200, app.github_push_preview((query.get("project") or [""])[0]))
+                except ApiError as exc:
+                    return self._json(exc.status, exc.payload())
             if url.path == "/api/git":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1643,6 +1690,14 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, app.rename_project(str(body.get("path", "")), str(body.get("name", ""))))
                 if path == "/api/projects/git-init":
                     return self._json(200, app.git_init(str(body.get("path", "")), body.get("include")))
+                if path == "/api/github/login":
+                    return self._json(200, app.github_login(str(body.get("token", ""))))
+                if path == "/api/github/logout":
+                    return self._json(200, app.github_logout())
+                if path == "/api/git/create-repo":
+                    return self._json(200, app.github_create_repo(str(body.get("path", "")), str(body.get("name", "")), str(body.get("description", ""))))
+                if path == "/api/git/push":
+                    return self._json(200, app.github_push(str(body.get("path", "")), body.get("confirm")))
                 if path == "/api/git/fetch":
                     return self._json(200, app.git_fetch(str(body.get("path", "")), str(body.get("remote", ""))))
                 if path == "/api/git/remote":

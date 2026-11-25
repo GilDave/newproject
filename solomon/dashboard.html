@@ -58,6 +58,11 @@ pre.diff .a{color:#7ee2b0}pre.diff .d{color:#ff9aa5}pre.diff .h{color:#8fb4ff}
 .chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.chip{font-size:11px;border-radius:999px;padding:2px 9px;border:1px solid var(--line);background:#0d1826;color:var(--dim)}
 .chip.ai{cursor:pointer;color:var(--text)}.chip.ai:hover{border-color:#3a5b88}
 .meter{height:6px;border-radius:3px;background:#13202f;overflow:hidden;margin:4px 0}.meter i{display:block;height:100%}
+.gh-panel{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:10px;margin-top:10px}
+.gh-box{border:1px solid var(--line);border-radius:12px;padding:10px 13px;background:#0b141f;display:flex;flex-direction:column;gap:7px;font-size:12px}
+.gh-box h3{margin:0;font-size:13px}.gh-box form{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.gh-box input{min-width:0;flex:1}
+.gh-box ol{margin:2px 0 0 18px;padding:0;color:var(--dim)}.gh-box a{color:#8db4ff}
+.gcard .gpush{font-size:12px;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#101c2c}.gcard .gpush ul{margin:4px 0 0 16px;padding:0}
 .gitgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px;margin-top:10px}
 .gcard{display:flex;flex-direction:column;gap:7px;border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:#0b141f}
 .gcard.bad{border-color:#7a3030}.gcard.warn{border-color:#6b5a26}.gcard h3{margin:0;font-size:14px}
@@ -664,9 +669,10 @@ textarea{min-height:84px}
   </section>
   <section class="card" id="gitCard">
     <div class="toolbar"><h2 style="margin:0">Git 저장소 현황 <span class="hint" style="font-weight:400">프로젝트별 위치 · 원격 · 변경 · 경고</span></h2><span class="spacer"></span><button id="gitRefresh">새로고침</button></div>
+    <div class="gh-panel" id="ghPanel"></div>
     <div class="chips" id="gitSum"></div>
     <div class="gitgrid" id="gitGrid"><div class="hint">불러오는 중…</div></div>
-    <div class="hint">읽기만 합니다. 바꿀 수 있는 것은 '원격 주소 설정'과 '원격 확인'(원격 정보만 새로 받음)뿐이며, 커밋·올리기·받아 합치기·삭제는 하지 않습니다. 30초마다 자동으로 다시 읽습니다.</div>
+    <div class="hint">상태는 읽기만 합니다. 바꾸는 것은 ① git 사용자 정보 ② GitHub 로그인 ③ 원격 주소 설정 ④ 원격 확인(원격 정보만 받음) ⑤ 비공개 저장소 만들기 ⑥ 올리기(현재 브랜치만, 강제 덮어쓰기 없음, 비밀 파일이 추적 중이면 거절, 미리보기 확인 후)뿐입니다. 커밋·받아 합치기·삭제는 하지 않습니다. 30초마다 자동으로 다시 읽습니다.</div>
   </section>
   <section class="card"><h2>단계별 AI 참여 도식 — 단계마다 최대 3개 AI</h2><div id="flowDiagram"></div>
     <div class="hint">칩을 누르면 대시보드의 역할 배정으로 이동합니다. 범위 검사와 테스트는 AI의 말이 아니라 기계가 판정하고, 적용은 사람이 합니다.</div></section>
@@ -2549,9 +2555,9 @@ async function runTool(tool, label){
 
 // ------------------------------------------------------------------ 프로젝트 탭 · 상단 현재 작업 표시줄
 // ------------------------------------------------------------------ 프로젝트 탭 · Git 저장소 현황 (읽기 전용 + 원격 주소 설정·원격 확인)
-let gitData = null, gitForm = null, gitBusy = new Set();
+let gitData = null, gitForm = null, gitBusy = new Set(), ghInfo = null, gitCreate = null, gitPush = null;
 async function loadGit(){
-  try { gitData = await api("/api/git"); renderGit(); } catch (e) { if (!e.offline) { gitData = null; $("gitGrid").textContent = ""; $("gitGrid").appendChild(el("div", "hint", e.message)); } }
+  try { [gitData, ghInfo] = await Promise.all([api("/api/git"), api("/api/github/status")]); renderGit(); } catch (e) { if (!e.offline) { gitData = null; $("gitGrid").textContent = ""; $("gitGrid").appendChild(el("div", "hint", e.message)); } }
 }
 function gitAgo(sec){
   const d = Math.max(0, Date.now() / 1000 - sec);
@@ -2596,8 +2602,15 @@ function gitCard(i){
     row.appendChild(f);
     const s = el("button", "", "원격 주소 설정…"); s.onclick = () => { gitForm = gitForm === i.path ? null : i.path; renderGit(); }; row.appendChild(s);
   }
+  if (i.state === "ready" && !(i.remotes && i.remotes.length)){ const m = el("button", "primary", "GitHub에 새 저장소 만들기…"); m.onclick = () => { gitCreate = gitCreate === i.path ? null : i.path; renderGit(); }; row.appendChild(m); }
+  if (i.state === "ready" && i.remotes && i.remotes.some(r => r.name === "origin") && (i.ahead || !i.upstream)){ const u = el("button", "primary", "GitHub에 올리기…"); u.onclick = () => gitOpenPush(i); row.appendChild(u); }
   if (i.state !== "missing"){ const o = el("button", "", "폴더 열기"); o.onclick = () => openOnDisk(i.path); row.appendChild(o); }
   c.appendChild(row);
+  if (gitCreate === i.path){
+    c.appendChild(gitCreateForm(i));
+    c.appendChild(el("div", "hint", ghInfo && ghInfo.login ? "GitHub 계정 " + ghInfo.login + " 아래에 비공개(Private) 저장소를 만들고 origin 으로 연결합니다. 코드는 아직 올라가지 않습니다." : "먼저 위 ② 에서 GitHub에 로그인하세요."));
+  }
+  if (gitPush && gitPush.path === i.path) c.appendChild(gitPushBox(i));
   if (gitForm === i.path){
     const form = el("form"), name = el("input"), url = el("input"), ok = el("button", "good", "저장"), no = el("button", "", "취소");
     name.type = "text"; name.value = (i.remotes && i.remotes[0] && i.remotes[0].name) || "origin"; name.style.width = "90px"; name.setAttribute("aria-label", "원격 이름");
@@ -2609,8 +2622,62 @@ function gitCard(i){
   }
   return c;
 }
+function renderGhPanel(){
+  const root = $("ghPanel"); if (!root || !ghInfo) return; root.textContent = "";
+  const idb = el("div", "gh-box"); idb.appendChild(el("h3", "", "① git 사용자 정보 (커밋에 찍히는 이름·이메일)"));
+  const id = ghInfo.identity || {};
+  if (id.name && id.email) idb.appendChild(el("div", "", "✔ " + id.name + " <" + id.email + ">"));
+  const f1 = el("form"), n1 = el("input"), e1 = el("input"), b1 = el("button", id.name ? "" : "good", id.name ? "바꾸기" : "저장");
+  n1.type = "text"; n1.placeholder = "이름"; n1.value = id.name || ""; n1.setAttribute("aria-label", "이름"); e1.type = "text"; e1.placeholder = "GitHub에 등록한 이메일"; e1.value = id.email || ""; e1.setAttribute("aria-label", "이메일"); b1.type = "submit";
+  f1.onsubmit = async (ev) => { ev.preventDefault(); try { const r = await api("/api/tools/git-identity", {name: n1.value, email: e1.value}); toast(r.message); loadGit(); } catch (e) { toast(e.message, true); } };
+  f1.append(n1, e1, b1); idb.appendChild(f1); root.appendChild(idb);
+  const gb = el("div", "gh-box"); gb.appendChild(el("h3", "", "② GitHub 로그인 (토큰은 이 컴퓨터의 자격 증명 저장소에만 저장)"));
+  if (ghInfo.login){
+    gb.appendChild(el("div", "", "✔ " + ghInfo.login + " 로 로그인됨 · 새 저장소 만들기와 올리기를 쓸 수 있습니다."));
+    const out = el("button", "", "로그아웃 (저장된 토큰 삭제)"); out.onclick = async () => { if (!confirm("저장된 GitHub 토큰을 지울까요? 이 컴퓨터에서 올리기가 다시 로그인을 요구합니다.")) return; try { const r = await api("/api/github/logout", {}); toast(r.message); loadGit(); } catch (e) { toast(e.message, true); } };
+    gb.appendChild(out);
+  } else {
+    const ol = el("ol"); ["아래 링크로 GitHub 토큰 만들기 페이지를 엽니다(로그인 필요). 권한은 repo 하나만 켜져 있으면 됩니다.", "만들기를 누르면 보이는 토큰(ghp_… 또는 github_pat_…)을 복사합니다. 한 번만 보입니다.", "아래 칸에 붙여넣고 [로그인]을 누릅니다."].forEach(t => ol.appendChild(el("li", "", t)));
+    gb.appendChild(ol);
+    const a = el("a", "", "GitHub 토큰 만들기 페이지 열기 ↗"); a.href = "https://github.com/settings/tokens/new?scopes=repo&description=Solomon"; a.target = "_blank"; a.rel = "noopener noreferrer"; gb.appendChild(a);
+    const f2 = el("form"), tk = el("input"), b2 = el("button", "good", "로그인");
+    tk.type = "password"; tk.placeholder = "토큰 붙여넣기"; tk.autocomplete = "off"; tk.spellcheck = false; tk.setAttribute("aria-label", "GitHub 토큰"); b2.type = "submit";
+    f2.onsubmit = async (ev) => { ev.preventDefault(); b2.disabled = true; try { const r = await api("/api/github/login", {token: tk.value}); tk.value = ""; toast(r.message); loadGit(); } catch (e) { toast(e.message, true); b2.disabled = false; } };
+    f2.append(tk, b2); gb.appendChild(f2);
+    gb.appendChild(el("div", "hint", "토큰은 비밀번호와 같습니다. 화면·메신저에 붙여넣지 마세요. 이 칸에서는 이 컴퓨터의 Solomon으로만 전달되고, Solomon 파일·기록에는 남지 않습니다."));
+  }
+  root.appendChild(gb);
+}
+function gitSafeName(n){ return (n || "project").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 100) || "project"; }
+function gitCreateForm(i){
+  const form = el("form"), name = el("input"), desc = el("input"), ok = el("button", "good", "비공개 저장소 만들고 연결"), no = el("button", "", "취소");
+  name.type = "text"; name.value = gitSafeName(i.name); name.style.width = "170px"; name.setAttribute("aria-label", "저장소 이름");
+  desc.type = "text"; desc.placeholder = "설명(선택)"; desc.maxLength = 200; desc.style.flex = "1"; desc.setAttribute("aria-label", "설명");
+  ok.type = "submit"; no.type = "button"; no.onclick = () => { gitCreate = null; renderGit(); };
+  form.onsubmit = async (ev) => { ev.preventDefault(); ok.disabled = true; try { const r = await api("/api/git/create-repo", {path: i.path, name: name.value, description: desc.value}); toast(r.message); gitCreate = null; loadGit(); } catch (e) { toast(e.message, true); ok.disabled = false; } };
+  form.append(name, desc, ok, no); return form;
+}
+async function gitOpenPush(i){
+  gitPush = {path: i.path, pre: null}; renderGit();
+  try { gitPush.pre = await api("/api/git/push-preview?project=" + encodeURIComponent(i.path)); } catch (e) { toast(e.message, true); gitPush = null; }
+  renderGit();
+}
+function gitPushBox(i){
+  const box = el("div", "gpush"), pre = gitPush.pre;
+  if (!pre){ box.textContent = "올릴 내용을 확인하는 중…"; return box; }
+  box.appendChild(el("div", "", "올릴 곳: " + (pre.remote || "(없음)") + " · 브랜치 " + (pre.branch || "-") + " · 커밋 " + pre.count + "개" + (pre.first_push ? " (처음 올리는 것: 지금까지의 모든 이력이 올라갑니다)" : "")));
+  if (pre.commits.length){ const ul = el("ul"); pre.commits.slice(0, 8).forEach(c => ul.appendChild(el("li", "", c.hash + " " + c.subject))); if (pre.count > 8) ul.appendChild(el("li", "", "… 외 " + (pre.count - 8) + "개")); box.appendChild(ul); }
+  pre.blockers.forEach(b => box.appendChild(el("div", "gw bad", "⛔ " + b)));
+  const row = el("div", "row"); row.style.marginTop = "6px";
+  const go = el("button", "good", "올리기"), no = el("button", "", "닫기");
+  go.disabled = pre.blockers.length > 0 || !ghInfo || !ghInfo.login; if (ghInfo && !ghInfo.login) box.appendChild(el("div", "gw warn", "⚠ 위 ② 에서 GitHub에 먼저 로그인하세요."));
+  go.onclick = async () => { go.disabled = true; go.textContent = "올리는 중…"; try { const r = await api("/api/git/push", {path: i.path, confirm: true}); toast(r.message); gitPush = null; loadGit(); } catch (e) { toast(e.message, true); go.disabled = false; go.textContent = "올리기"; } };
+  no.onclick = () => { gitPush = null; renderGit(); };
+  row.append(go, no); box.appendChild(row); return box;
+}
 function renderGit(){
   if (!gitData || !$("gitGrid")) return;
+  renderGhPanel();
   const sm = gitData.summary, sum = $("gitSum"); sum.textContent = "";
   sum.appendChild(gitChip("프로젝트 " + sm.projects));
   [["bad", "비밀 파일 추적", "bad"], ["no_remote", "원격 없음", "warn"], ["dirty", "변경 있음", "warn"], ["unpushed", "올리지 않은 커밋", "warn"], ["behind", "받을 커밋", "warn"], ["no_git", "git 없음", "warn"]]
@@ -2621,7 +2688,8 @@ function renderGit(){
   gitData.projects.forEach(i => grid.appendChild(gitCard(i)));
 }
 $("gitRefresh").onclick = loadGit;
-setInterval(() => { if (tab === "pj" && !document.hidden && !gitForm && !gitBusy.size) loadGit(); }, 30000);
+const gitEditing = () => gitForm || gitCreate || gitPush || gitBusy.size || (document.activeElement && document.activeElement.closest && document.activeElement.closest("#gitCard") && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
+setInterval(() => { if (tab === "pj" && !document.hidden && !gitEditing()) loadGit(); }, 30000);
 async function loadProjects(){
   try { [projectsInfo, portfolioData] = await Promise.all([api("/api/projects"), api("/api/portfolio")]); renderProjects(); } catch (e) { if (!e.offline) toast(e.message, true); }
 }
