@@ -2,7 +2,7 @@
 const ENT = {data: null, lines: [], key: '', lineOn: true, loaded: false, started: false};
 const ENT_TF = {'15': '15m', '60': '1h', '240': '4h', 'D': '1d'};
 const ENT_TF_KO = {'15m': '15분', '1h': '1시간', '4h': '4시간', '1d': '1일'};
-const ENT_STATE = {in_zone: '진입 구간 안', approaching: '다가오는 중', waiting: '대기(아직 멀음)', broken: '구간 이탈', poor_rr: '손익비 부족'};
+const ENT_STATE = {in_zone: '진입 구간 안', approaching: '다가오는 중', waiting: '대기(아직 멀음)', broken: '구간 이탈', poor_rr: '손익비 부족', weak: '조건 부족'};
 const ENT_SETUP = {pullback: '추세 눌림목', reversion: '밴드 반전'};
 function entFmt(v) { return v == null ? '-' : (typeof fmt === 'function' ? fmt(v, 5) : Number(v).toFixed(5)); }
 function entEl(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }

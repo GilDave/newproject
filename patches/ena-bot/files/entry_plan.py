@@ -16,10 +16,14 @@ from .structure import atr as _atr
 
 RSI_N, MACD_FAST, MACD_SLOW, MACD_SIG, BB_N, BB_K, EMA_FAST, EMA_SLOW = 14, 12, 26, 9, 20, 2.0, 21, 50
 MIN_BARS = 120
-MIN_STOP_ATR, MAX_STOP_ATR = 0.8, 4.0     # 손절 폭이 이 범위를 벗어나는 계획은 만들지 않는다(너무 촘촘하거나 너무 넓음)
-ZONE_REACH_ATR = 1.5                      # 가격이 진입 구간에서 이만큼(ATR) 이내면 '다가오는 중'
+MIN_STOP_ATR, MAX_STOP_ATR = 0.8, 2.5     # 손절 폭이 이 범위를 벗어나는 계획은 만들지 않는다(너무 촘촘하거나 너무 넓음)
+MAX_STOP_PCT = 0.08                       # 손절 폭이 가격의 8%를 넘는 계획도 만들지 않는다(변동성이 매우 큰 구간에서 비현실적인 계획 방지)
+ZONE_REACH_ATR, ZONE_REACH_PCT = 1.0, 0.06  # 진입 구간이 현재가에서 이만큼(ATR·가격 비율 중 작은 쪽) 이내면 '다가오는 중'
+T1_MAX_ATR, T2_MAX_ATR = 2.5, 4.5         # 목표가 진입가에서 이 ATR 배수보다 멀면 거기까지만(현실적인 한 번의 움직임)
+MIN_RR = 1.2                              # 제한을 거친 첫 목표의 손익비가 이보다 작으면 '손익비 부족'
+MIN_SHOW_SCORE = 2                        # 조건 일치가 이보다 적으면 '조건 부족'(차트 선·유리한 시간봉 후보에서 제외)
 COST_FEE, COST_SLIP = 0.00055, 0.0001     # 한쪽 체결당 수수료·슬리피지(entry_study 와 같은 값)
-WARN_RISK_PCT, SEVERE_RISK_PCT = 0.08, 0.10   # 손절 폭이 가격의 이 비율을 넘으면 경고 / '가장 유리한 시간봉' 후보에서 제외
+WARN_RISK_PCT, SEVERE_RISK_PCT = 0.05, 0.08   # 손절 폭이 가격의 이 비율을 넘으면 경고 / '가장 유리한 시간봉' 후보에서 제외
 WARN_COST_R, SEVERE_COST_R = 0.15, 0.25       # 왕복 비용이 위험(R)의 이 비율을 넘으면 경고 / 후보에서 제외
 FAR_TARGET_PCT = 0.30                          # 목표가 진입가에서 이만큼 멀면 비현실적이라고 경고
 TIMEFRAMES = {"15m": ("15", 15), "1h": ("60", 60), "4h": ("240", 240), "1d": ("D", 1440)}
@@ -89,23 +93,35 @@ def snapshot(ind: dict, t: int) -> dict:
 
 def _state(price: float, lo: float, hi: float, a: float, direction: int) -> str:
     """진입 구간 대비 가격 위치. 롱은 구간 위에서 내려와 닿는 것, 숏은 아래에서 올라와 닿는 것을 기다린다."""
+    reach = min(ZONE_REACH_ATR * a, ZONE_REACH_PCT * price)
     if lo <= price <= hi:
         return "in_zone"
     if direction == 1:
         if price > hi:
-            return "approaching" if price - hi <= ZONE_REACH_ATR * a else "waiting"
+            return "approaching" if price - hi <= reach else "waiting"
         return "broken"                    # 구간 아래로 이미 내려감
     if price < lo:
-        return "approaching" if lo - price <= ZONE_REACH_ATR * a else "waiting"
+        return "approaching" if lo - price <= reach else "waiting"
     return "broken"
+
+
+def _cap_targets(entry: float, direction: int, raw: list, a: float) -> list:
+    """목표를 한 번의 현실적인 움직임(첫 목표 2.5 ATR, 둘째 4.5 ATR) 안으로 제한한다."""
+    return [entry + direction * min(abs(raw[0] - entry), T1_MAX_ATR * a), entry + direction * min(abs(raw[1] - entry), T2_MAX_ATR * a)]
 
 
 def _finish(direction: int, setup: str, entry: float, stop: float, zone: tuple, targets: list, a: float, checks: list, state: str, trend: int, price: float, notes: list) -> dict | None:
     risk = (entry - stop) if direction == 1 else (stop - entry)
-    if not (MIN_STOP_ATR * a <= risk <= MAX_STOP_ATR * a) or risk <= 0:
+    if not (MIN_STOP_ATR * a <= risk <= MAX_STOP_ATR * a) or risk <= 0 or risk > MAX_STOP_PCT * entry:
         return None
+    targets = _cap_targets(entry, direction, targets, a)
     reward = (targets[0] - entry) if direction == 1 else (entry - targets[0])
     rr, risk_pct = reward / risk, risk / entry
+    score = sum(1 for _, ok, _ in checks if ok)
+    if rr < MIN_RR and state in ("in_zone", "approaching", "waiting"):
+        state = "poor_rr"                                    # 현실적인 첫 목표까지의 이득이 위험에 비해 작으면 대기
+    elif score < MIN_SHOW_SCORE and state in ("in_zone", "approaching"):
+        state = "weak"                                       # 조건이 거의 안 겹친 계획은 참고 수준
     cost_r = entry * 2 * (COST_FEE + COST_SLIP) / risk            # 왕복 비용이 위험(R)의 몇 배인지
     warnings, severe = [], False
     if risk_pct > WARN_RISK_PCT:
@@ -119,7 +135,7 @@ def _finish(direction: int, setup: str, entry: float, stop: float, zone: tuple, 
         warnings.append(f"목표가 진입가에서 {far:.0%} 떨어져 있어 비현실적일 수 있음")
     return {"setup": setup, "direction": "long" if direction == 1 else "short", "state": state, "entry": entry, "zone": [zone[0], zone[1]], "stop": stop,
             "targets": targets, "rr": rr, "risk_pct": risk_pct, "cost_r": cost_r, "be_win_rate": (1 + cost_r) / (rr + 1), "dist_pct": (entry - price) / price,
-            "warnings": warnings, "severe": severe, "score": sum(1 for _, ok, _ in checks if ok), "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks],
+            "warnings": warnings, "severe": severe, "score": score, "checks": [{"name": n, "ok": ok, "detail": d} for n, ok, d in checks],
             "aligned_trend": direction == trend, "price": price, "notes": notes}
 
 
@@ -155,7 +171,7 @@ def candidates(ind: dict, t: int, price: float | None = None) -> list:
                   ("볼린저 중상단(%B 0.35~0.85)", 0.35 <= pctb <= 0.85, f"%B {pctb:.2f}")]
     risk = abs(entry - stop)
     targets = [entry + d * 1.5 * risk, entry + d * 3.0 * risk]
-    p = _finish(d, "pullback", entry, stop, (zlo, zhi), targets, a, checks, _state(price, zlo, zhi, a, d), trend, price, ["추세 방향 눌림목", "목표는 위험의 1.5배·3배"])
+    p = _finish(d, "pullback", entry, stop, (zlo, zhi), targets, a, checks, _state(price, zlo, zhi, a, d), trend, price, ["추세 방향 눌림목", "목표는 위험의 1.5배·3배(한 번의 움직임 2.5·4.5 ATR 이내로 제한)"])
     if p:
         out.append(p)
     # 2) 밴드 반전 (롱: 아래 밴드, 숏: 위 밴드)
@@ -171,15 +187,13 @@ def candidates(ind: dict, t: int, price: float | None = None) -> list:
         st = _state(price, zlo, zhi, a, d)
         if not (ok_band or st in ("in_zone", "approaching")):
             continue                                              # 밴드 근처가 아니면 반전 계획을 내지 않는다
-        p = _finish(d, "reversion", entry, stop, (zlo, zhi), targets, a, checks, st, trend, price, ["밴드 반전" + ("" if d == trend else " · 추세와 반대 방향(주의)"), "목표는 볼린저 중심선·반대편 밴드"])
+        p = _finish(d, "reversion", entry, stop, (zlo, zhi), targets, a, checks, st, trend, price, ["밴드 반전" + ("" if d == trend else " · 추세와 반대 방향(주의)"), "목표는 볼린저 중심선·반대편 밴드(2.5·4.5 ATR 이내로 제한)"])
         if p:
-            if p["rr"] < 1.0:
-                p["state"] = "poor_rr"                           # 첫 목표까지의 이득이 위험보다 작으면 대기
             out.append(p)
     return out
 
 
-STATE_RANK = {"in_zone": 3, "approaching": 2, "waiting": 1, "poor_rr": 0, "broken": 0}
+STATE_RANK = {"in_zone": 3, "approaching": 2, "waiting": 1, "poor_rr": 0, "weak": 0, "broken": 0}
 
 
 def best_for(cands: list) -> dict | None:

@@ -38,28 +38,33 @@ def test_indicators_match_hand_calculations():
 
 
 def test_trend_pullback_gives_a_long_plan_with_consistent_levels():
-    c = path([(180, 0.004), (7, -0.006)])                              # 강한 상승 뒤 짧은 눌림
-    o, h, l, c = ohlc(c)
+    o, h, l, c = ohlc(path([(180, 0.004), (7, -0.006)], seed=6), seed=6)          # 강한 상승 뒤 짧은 눌림
     ind = ep.indicators(o, h, l, c)
     t = len(c) - 1
-    cands = ep.candidates(ind, t)
-    pb = [x for x in cands if x["setup"] == "pullback"]
+    pb = [x for x in ep.candidates(ind, t) if x["setup"] == "pullback"]
     assert len(pb) == 1
     p = pb[0]
+    a = ind["atr"][t]
     assert p["direction"] == "long" and p["aligned_trend"] and p["stop"] < p["zone"][0] < p["entry"] and p["entry"] < p["targets"][0] < p["targets"][1]
     risk = p["entry"] - p["stop"]
-    assert p["rr"] == pytest.approx(1.5) and p["targets"][1] == pytest.approx(p["entry"] + 3 * risk) and p["risk_pct"] == pytest.approx(risk / p["entry"])
-    assert ep.MIN_STOP_ATR * ind["atr"][t] <= risk <= ep.MAX_STOP_ATR * ind["atr"][t]
-    assert p["state"] in ("in_zone", "approaching", "waiting", "broken") and len(p["checks"]) == 3 and p["score"] == sum(1 for k in p["checks"] if k["ok"])
+    t1, t2 = p["entry"] + min(1.5 * risk, ep.T1_MAX_ATR * a), p["entry"] + min(3.0 * risk, ep.T2_MAX_ATR * a)     # 목표는 위험의 1.5·3배, 단 한 번의 움직임(2.5·4.5 ATR) 안으로 제한
+    assert p["targets"] == [pytest.approx(t1), pytest.approx(t2)] and p["rr"] == pytest.approx((t1 - p["entry"]) / risk) and p["risk_pct"] == pytest.approx(risk / p["entry"])
+    assert ep.MIN_STOP_ATR * a <= risk <= ep.MAX_STOP_ATR * a and risk <= ep.MAX_STOP_PCT * p["entry"]
+    assert p["state"] in ("in_zone", "approaching", "waiting", "broken", "poor_rr", "weak") and len(p["checks"]) == 3 and p["score"] == sum(1 for k in p["checks"] if k["ok"])
+    assert (p["state"] == "weak") == (p["score"] < ep.MIN_SHOW_SCORE and p["state"] != "poor_rr" and p["state"] == "weak")      # 조건이 적게 겹친 계획만 '조건 부족'
 
 
 def test_downtrend_pullback_is_the_mirror_image():
-    c = path([(180, -0.004), (7, 0.006)])
-    o, h, l, c = ohlc(c)
+    o, h, l, c = ohlc(path([(180, -0.004), (7, 0.006)], seed=9), seed=9)
     ind = ep.indicators(o, h, l, c)
-    pb = [x for x in ep.candidates(ind, len(c) - 1) if x["setup"] == "pullback"]
+    t = len(c) - 1
+    pb = [x for x in ep.candidates(ind, t) if x["setup"] == "pullback"]
     assert len(pb) == 1 and pb[0]["direction"] == "short" and pb[0]["aligned_trend"]
-    assert pb[0]["stop"] > pb[0]["zone"][1] > pb[0]["entry"] > pb[0]["targets"][0] > pb[0]["targets"][1]
+    p = pb[0]
+    assert p["stop"] > p["zone"][1] > p["entry"] > p["targets"][0] > p["targets"][1]
+    risk = p["stop"] - p["entry"]
+    a = ind["atr"][t]
+    assert p["targets"][0] == pytest.approx(p["entry"] - min(1.5 * risk, ep.T1_MAX_ATR * a)) and p["targets"][1] == pytest.approx(p["entry"] - min(3.0 * risk, ep.T2_MAX_ATR * a))
 
 
 def test_band_reversion_long_after_a_sharp_drop_targets_the_mid_and_upper_band():
@@ -70,9 +75,12 @@ def test_band_reversion_long_after_a_sharp_drop_targets_the_mid_and_upper_band()
     rev = [x for x in ep.candidates(ind, t) if x["setup"] == "reversion" and x["direction"] == "long"]
     assert len(rev) == 1
     p = rev[0]
-    assert p["entry"] == pytest.approx(ind["bb_lo"][t]) and p["targets"] == [pytest.approx(ind["bb_mid"][t]), pytest.approx(ind["bb_up"][t])]
+    a = ind["atr"][t]
+    e = ind["bb_lo"][t]
+    assert p["entry"] == pytest.approx(e)
+    assert p["targets"] == [pytest.approx(e + min(ind["bb_mid"][t] - e, ep.T1_MAX_ATR * a)), pytest.approx(e + min(ind["bb_up"][t] - e, ep.T2_MAX_ATR * a))]     # 볼린저 중심선·반대편 밴드, 단 현실적인 거리 안으로 제한
     assert p["stop"] < p["entry"] and ind["rsi"][t] < 35 and [k["ok"] for k in p["checks"]][:2] == [True, True]
-    assert p["rr"] == pytest.approx((ind["bb_mid"][t] - p["entry"]) / (p["entry"] - p["stop"]))
+    assert p["rr"] == pytest.approx((p["targets"][0] - p["entry"]) / (p["entry"] - p["stop"]))
 
 
 def test_a_reversion_with_too_little_reward_is_marked_poor_rr_and_far_prices_do_not_make_one():
@@ -85,10 +93,13 @@ def test_a_reversion_with_too_little_reward_is_marked_poor_rr_and_far_prices_do_
         snap = ep.snapshot(wind, k)
         for x in ep.candidates(wind, k):
             if x["setup"] == "reversion":
-                assert snap["pct_b"] <= 0.1 or snap["pct_b"] >= 0.9 or x["state"] in ("in_zone", "approaching", "poor_rr")      # poor_rr: 가까이 왔지만 이득이 위험보다 작아 대기
+                assert snap["pct_b"] <= 0.1 or snap["pct_b"] >= 0.9 or x["state"] in ("in_zone", "approaching", "poor_rr", "weak")      # poor_rr·weak: 가까이 왔지만 이득이 작거나 조건이 적어 대기
     t = len(c) - 1
     for p in ep.candidates(ind, t):
-        assert (p["state"] == "poor_rr") == (p["setup"] == "reversion" and p["rr"] < 1.0)
+        if p["state"] == "poor_rr":
+            assert p["rr"] < ep.MIN_RR                                  # 현실적으로 제한한 첫 목표의 손익비가 모자라면 대기
+        elif p["state"] in ("in_zone", "approaching", "waiting"):
+            assert p["rr"] >= ep.MIN_RR
 
 
 def test_nothing_uses_future_bars_and_short_series_give_nothing():
@@ -165,33 +176,47 @@ def test_the_api_payload_is_json_safe_cached_and_carries_the_study_summary(tmp_p
 
 # ---------------------------------------------------------------- 현실성 경고(손절 폭·비용·거리)
 def test_costs_break_even_win_rate_and_distance_are_computed_from_the_plan():
-    o, h, l, c = ohlc(path([(180, -0.004), (7, 0.006)]))
+    o, h, l, c = ohlc(path([(180, 0.004), (7, -0.006)], seed=6), seed=6)
     ind = ep.indicators(o, h, l, c)
-    p = next(x for x in ep.candidates(ind, len(c) - 1, price=c[-1] * 0.99) if x["setup"] == "pullback")
+    p = next(x for x in ep.candidates(ind, len(c) - 1, price=c[-1] * 1.01) if x["setup"] == "pullback")
     risk = abs(p["entry"] - p["stop"])
     assert p["cost_r"] == pytest.approx(p["entry"] * 2 * (ep.COST_FEE + ep.COST_SLIP) / risk)
     assert p["be_win_rate"] == pytest.approx((1 + p["cost_r"]) / (p["rr"] + 1))               # 비용을 뺀 뒤 본전이 되는 승률
-    assert p["dist_pct"] == pytest.approx((p["entry"] - p["price"]) / p["price"])                              # 진입가가 현재가보다 몇 % 위(+)/아래(-)인지
+    assert p["dist_pct"] == pytest.approx((p["entry"] - p["price"]) / p["price"])              # 진입가가 현재가보다 몇 % 위(+)/아래(-)인지
     assert isinstance(p["warnings"], list) and isinstance(p["severe"], bool)
 
 
-def test_a_plan_whose_stop_is_far_away_is_warned_and_never_becomes_the_favorable_timeframe():
-    o, h, l, c = ohlc(path([(180, -0.006), (7, 0.008)], noise=0.015, seed=1), seed=1, spread=0.015)           # 변동이 큰 종목(ATR이 커서 손절 폭 한도 4ATR 안에서도 10%를 넘을 수 있다)
+def test_a_plan_whose_stop_would_be_far_away_is_refused_instead_of_shown_with_unrealistic_prices():
+    o, h, l, c = ohlc(path([(180, -0.006), (7, 0.008)], noise=0.015, seed=1), seed=1, spread=0.015)           # 변동이 큰 종목
     h[-4] *= 1.1                                                        # 최근 10봉 안의 장대 고점이 손절 위치를 끌어올린다
     ind = ep.indicators(o, h, l, c)
-    wide = [x for x in ep.candidates(ind, len(c) - 1) if x["setup"] == "pullback"]
-    assert len(wide) == 1 and wide[0]["risk_pct"] > ep.SEVERE_RISK_PCT and wide[0]["severe"] is True
-    assert any("손절 폭이 큼" in w for w in wide[0]["warnings"])
+    assert [x for x in ep.candidates(ind, len(c) - 1) if x["setup"] == "pullback"] == []                      # 손절이 2.5 ATR·8%를 넘으면 계획을 만들지 않는다
     rows = [[T0 + i * 3600_000, o[i], h[i], l[i], c[i], 1.0] for i in range(len(c))]
     res = ep.plans(lambda iv, n: rows, T0 + len(c) * 3600_000)
-    fav = res["favorable"]
-    assert fav is None or not res["timeframes"][fav]["best"]["severe"]
-    shown = [tf for tf in res["timeframes"].values() if tf["best"] and tf["best"]["setup"] == "pullback" and tf["best"]["risk_pct"] > ep.SEVERE_RISK_PCT]
-    assert shown                                                        # 표에는 경고와 함께 남는다
+    for tf in res["timeframes"].values():
+        assert not any(x["setup"] == "pullback" and x["risk_pct"] > ep.MAX_STOP_PCT for x in tf["all"])
+
+
+def checks3(n_ok):
+    return [("a", i < n_ok, "") for i in range(3)]
+
+
+def test_finish_refuses_wide_stops_warns_on_moderate_ones_and_caps_far_targets():
+    kw = dict(zone=(99.0, 101.0), checks=checks3(3), state="in_zone", trend=1, price=100.0, notes=[])
+    assert ep._finish(1, "pullback", 100.0, 91.0, targets=[115.0, 130.0], a=4.0, **kw) is None              # 손절 폭 9% > 8%
+    assert ep._finish(1, "pullback", 100.0, 99.0, targets=[101.5, 103.0], a=2.0, **kw) is None              # 손절 폭이 0.8 ATR(1.6)보다 좁다
+    p = ep._finish(1, "pullback", 100.0, 93.0, targets=[110.5, 121.0], a=3.5, **kw)                          # 손절 폭 7%(2 ATR): 허용하되 경고
+    assert p is not None and any("손절 폭이 큼" in w for w in p["warnings"]) and p["severe"] is False
+    assert p["targets"] == [pytest.approx(100.0 + 2.5 * 3.5), pytest.approx(100.0 + min(21.0, 4.5 * 3.5))]     # 첫 목표 8.75, 둘째 15.75(ATR 제한)
+    assert p["rr"] == pytest.approx(8.75 / 7.0) and p["rr"] >= ep.MIN_RR and p["state"] == "in_zone"
+    poor = ep._finish(1, "pullback", 100.0, 95.0, targets=[107.5, 115.0], a=2.0, **kw)                      # 위험 5, 첫 목표가 2.5 ATR(5)로 제한 → 손익비 1.0 < 1.2
+    assert poor["rr"] == pytest.approx(1.0) and poor["state"] == "poor_rr"
+    weak = ep._finish(1, "pullback", 100.0, 98.0, targets=[103.0, 106.0], a=2.0, **{**kw, "checks": checks3(1)})
+    assert weak["state"] == "weak" and weak["score"] == 1
 
 
 def test_a_very_tight_stop_makes_costs_a_large_part_of_the_risk():
-    o, h, l, c = ohlc(path([(180, -0.004), (7, 0.006)]), spread=0.0004)
-    p = next(x for x in ep.candidates(ep.indicators(o, h, l, c), len(c) - 1) if x["setup"] == "pullback")
-    expected = p["entry"] * 2 * (ep.COST_FEE + ep.COST_SLIP) / abs(p["entry"] - p["stop"])
-    assert p["cost_r"] == pytest.approx(expected) and (p["cost_r"] > ep.WARN_COST_R) == any("수수료·슬리피지" in w for w in p["warnings"])
+    kw = dict(zone=(99.5, 100.2), checks=checks3(3), state="in_zone", trend=1, price=100.0, notes=[])
+    p = ep._finish(1, "pullback", 100.0, 99.6, targets=[100.6, 101.2], a=0.4, **kw)                         # 위험 0.4(0.4%)
+    assert p["cost_r"] == pytest.approx(100.0 * 2 * (ep.COST_FEE + ep.COST_SLIP) / 0.4) and p["cost_r"] > ep.SEVERE_COST_R
+    assert any("수수료·슬리피지" in w for w in p["warnings"]) and p["severe"] is True
