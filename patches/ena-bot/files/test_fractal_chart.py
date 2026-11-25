@@ -114,3 +114,56 @@ def test_wire_script_inserts_updates_and_refuses_without_structure(tmp_path):
     page.write_text("<script>let TRNC = null;</script>")
     r = run_wire()
     assert r.returncode != 0 and "wire_structure_chart" in (r.stderr + r.stdout) and "frcDraw" not in page.read_text()
+
+
+# ------------------------------------------------------------------ 단타 민감 모드
+HARNESS2 = r"""
+const fs = require('fs'), vm = require('vm');
+const sb = {console, document: {}, localStorage: {getItem() { return null; }, setItem() {}}, structDraw: function () {}};
+vm.createContext(sb);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + '\n' + fs.readFileSync(process.argv[2], 'utf8') + '\n' +
+  ';this.X = {stAnalyze, frcScalesFor, frcElliott, FRC, FRC_FINE_SCALES};', sb);
+const X = sb.X, d = JSON.parse(fs.readFileSync(process.argv[3], 'utf8')), out = {};
+const norm = X.stAnalyze(d.o, d.h, d.l, d.c), fine = X.stAnalyze(d.o, d.h, d.l, d.c, X.FRC_FINE_SCALES);
+out.status = [norm.elliott.status, fine.elliott.status];
+out.scales = [X.frcScalesFor('15m', true), X.frcScalesFor('30m', true), X.frcScalesFor('1h', true), X.frcScalesFor('4h', true), X.frcScalesFor('15m', false)];
+X.FRC.data['15m'] = {res: norm, resFine: fine}; X.FRC.data['1h'] = {res: norm, resFine: null};
+X.FRC.fine = false; out.off = [X.frcElliott('15m').status, X.frcElliott('1h').status, X.frcElliott('4h')];
+X.FRC.fine = true; out.on = [X.frcElliott('15m').status, X.frcElliott('1h').status];
+console.log(JSON.stringify(out));
+"""
+
+
+def _walk(seed, n=700, vol=0.003):
+    import math
+    import random
+    rnd = random.Random(seed)
+    c = [1.0]
+    for _ in range(n):
+        c.append(c[-1] * math.exp(rnd.gauss(0, vol)))
+    o = [c[0]] + c[:-1]
+    h = [max(a, b) * (1 + abs(rnd.gauss(0, 0.001))) for a, b in zip(o, c)]
+    l = [min(a, b) * (1 - abs(rnd.gauss(0, 0.001))) for a, b in zip(o, c)]
+    return o, h, l, c
+
+
+def test_fine_mode_finds_candidates_the_default_scales_miss_and_only_for_30m_and_15m(tmp_path):
+    from ena_bot import structure as st
+    found = None
+    for seed in range(1, 80):
+        o, h, l, c = _walk(seed)
+        a = st.analyze(o, h, l, c)["elliott"]["status"]
+        b = st.analyze(o, h, l, c, (1.5, 2.0, 3.0))["elliott"]["status"]
+        if a == "none" and b == "ok":
+            found = (seed, o, h, l, c)
+            break
+    assert found, "기본 크기로는 후보가 없고 민감 크기로는 있는 시세를 찾지 못했습니다"
+    f = tmp_path / "d.json"
+    f.write_text(json.dumps({"o": found[1], "h": found[2], "l": found[3], "c": found[4]}))
+    r = subprocess.run([NODE, "-e", HARNESS2, str(TOOLS / "structure_chart.js"), str(JS), str(f)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    o = json.loads(r.stdout)
+    assert o["status"] == ["none", "ok"]                                   # 파이썬 계산과 같은 결과
+    assert o["scales"] == [[1.5, 2.0, 3.0], [1.5, 2.0, 3.0], None, None, None]
+    assert o["off"] == ["none", "none", None]                              # 꺼짐: 기본 크기
+    assert o["on"] == ["ok", "none"]                                       # 켜짐: 15분만 민감(1시간은 그대로)

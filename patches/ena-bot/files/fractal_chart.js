@@ -1,14 +1,15 @@
 // ---- 프랙탈 엘리엇: 4시간·1시간·30분·15분의 엘리엇 후보를 한 차트에 겹쳐 그린다(참고용 가설). structure_chart.js 의 계산(stAnalyze)을 그대로 쓴다. ----
 const FRC_TFS = [['4h', '240', 14400, '#ffd54f', 3], ['1h', '60', 3600, '#4fc3f7', 2], ['30m', '30', 1800, '#ba68c8', 1], ['15m', '15', 900, '#81c784', 1]];
 const FRC_NAME = {'4h': '4시간', '1h': '1시간', '30m': '30분', '15m': '15분'};
-const FRC = {on: {'4h': true, '1h': true, '30m': true, '15m': true}, inval: true, collapsed: false, loaded: false, data: {}, busy: {}, rev: 0, key: '', series: [], box: null, drawn: {}};
+const FRC_FINE_SCALES = [1.5, 2.0, 3.0], FRC_FINE_TFS = ['30m', '15m'];   // 단타 민감 모드: 30분·15분에서 더 작은 스윙(1.5 ATR)도 인정
+const FRC = {on: {'4h': true, '1h': true, '30m': true, '15m': true}, fine: false, inval: true, collapsed: false, loaded: false, data: {}, busy: {}, rev: 0, key: '', series: [], box: null, drawn: {}};
 function frcStore() {
   try {
     if (!FRC.loaded) {
       FRC.loaded = true; const v = JSON.parse(localStorage.getItem('ena_fractal_v1') || '{}');
       for (const k of Object.keys(FRC.on)) if (v.on && typeof v.on[k] === 'boolean') FRC.on[k] = v.on[k];
-      if (typeof v.inval === 'boolean') FRC.inval = v.inval; if (typeof v.collapsed === 'boolean') FRC.collapsed = v.collapsed;
-    } else localStorage.setItem('ena_fractal_v1', JSON.stringify({on: FRC.on, inval: FRC.inval, collapsed: FRC.collapsed}));
+      if (typeof v.fine === 'boolean') FRC.fine = v.fine; if (typeof v.inval === 'boolean') FRC.inval = v.inval; if (typeof v.collapsed === 'boolean') FRC.collapsed = v.collapsed;
+    } else localStorage.setItem('ena_fractal_v1', JSON.stringify({on: FRC.on, fine: FRC.fine, inval: FRC.inval, collapsed: FRC.collapsed}));
   } catch (e) { /* 기억하지 못해도 동작한다 */ }
 }
 // times(오름차순) 중 t 이하의 가장 큰 값. 없으면 null. 작은 시간봉의 시각을 차트의 봉 시각에 맞출 때 쓴다.
@@ -102,6 +103,13 @@ function frcMergeLevels(items) {
   }
   return out;
 }
+// 이 시간봉에 쓸 스윙 크기(ATR 배수). 민감 모드는 30분·15분만 더 작게. null 이면 기본값(2·3·4.5).
+function frcScalesFor(name, fine) { return fine && FRC_FINE_TFS.indexOf(name) >= 0 ? FRC_FINE_SCALES : null; }
+// 한 시간봉의 지금 모드에 맞는 엘리엇 결과(없으면 null)
+function frcElliott(name) {
+  const d = FRC.data[name]; if (!d || !d.res) return null;
+  return (frcScalesFor(name, FRC.fine) && d.resFine ? d.resFine : d.res).elliott;
+}
 function frcMainSec() { return typeof barSec === 'function' ? barSec() : (bars.length > 1 ? bars[1].time - bars[0].time : 0); }
 function frcClear() { for (const s of FRC.series) { try { chart.removeSeries(s); } catch (err) { /* 이미 없음 */ } } FRC.series = []; }
 async function frcFetch(tf) {
@@ -113,7 +121,8 @@ async function frcFetch(tf) {
     const j = await r.json(); if (!r.ok || !Array.isArray(j) || j.length < 60) throw new Error('klines');
     const tb = j.map(x => ({time: x[0] / 1000, open: +x[1], high: +x[2], low: +x[3], close: +x[4]}));
     const res = stAnalyze(tb.map(b => b.open), tb.map(b => b.high), tb.map(b => b.low), tb.map(b => b.close));
-    FRC.data[name] = {at: Date.now(), bars: tb, res};
+    const arr = [tb.map(b => b.open), tb.map(b => b.high), tb.map(b => b.low), tb.map(b => b.close)];
+    FRC.data[name] = {at: Date.now(), bars: tb, res, resFine: FRC_FINE_TFS.indexOf(name) >= 0 ? stAnalyze(arr[0], arr[1], arr[2], arr[3], FRC_FINE_SCALES) : null};
   } catch (err) { FRC.data[name] = {at: Date.now(), bars: [], res: null, error: true}; }
   FRC.busy[name] = false; FRC.rev++; FRC.key = ''; frcDraw();
 }
@@ -134,6 +143,9 @@ function frcBox() {
   const lb = document.createElement('label'), cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = FRC.inval;
   cb.onchange = () => { FRC.inval = cb.checked; frcStore(); FRC.key = ''; frcDraw(); };
   lb.appendChild(cb); lb.appendChild(document.createTextNode(' 무효화선')); lb.style.cursor = 'pointer'; head.appendChild(lb);
+  const lf = document.createElement('label'), cf = document.createElement('input'); cf.type = 'checkbox'; cf.checked = FRC.fine;
+  cf.onchange = () => { FRC.fine = cf.checked; frcStore(); FRC.key = ''; frcDraw(); frcBox(); };
+  lf.appendChild(cf); lf.appendChild(document.createTextNode(' 단타 민감 모드(30분·15분)')); lf.style.cursor = 'pointer'; lf.title = '30분·15분에서 더 작은 스윙(평균 변동폭의 1.5배)도 파동으로 인정합니다. 후보가 자주 나오지만 의미가 약한 잡음 파동도 늘어납니다.'; head.appendChild(lf);
   const fold = mk('span', FRC.collapsed ? '▸ 펼치기' : '▾ 접기', 'margin-left:auto;cursor:pointer;opacity:.8');
   fold.onclick = () => { FRC.collapsed = !FRC.collapsed; frcStore(); frcBox(); }; head.appendChild(fold); box.appendChild(head);
   if (FRC.collapsed) return;
@@ -141,14 +153,14 @@ function frcBox() {
   const tbl = mk('table', undefined, 'border-collapse:collapse;width:100%;margin-top:6px'), th = tbl.insertRow();
   for (const h of ['시간봉', '현재 위치', '관점 (롱/숏)', '무효화 가격 (현재가 대비)', '5파 목표 구간', '차트']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:3px 8px;white-space:nowrap'));
   let ref = null; const sides = [];
-  for (const tf0 of FRC_TFS) { const name = tf0[0], d = FRC.data[name]; if (FRC.on[name] && d && d.res && d.res.elliott.status === 'ok') { ref = d.res.elliott; break; } }
+  for (const tf0 of FRC_TFS) { const name = tf0[0], e0 = frcElliott(name); if (FRC.on[name] && e0 && e0.status === 'ok') { ref = e0; break; } }
   for (const [name, iv, sec, color] of FRC_TFS) {
-    const d = FRC.data[name], e = d && d.res ? d.res.elliott : null, tr = tbl.insertRow(); tr.style.borderTop = '1px solid #2a2e39';
+    const d = FRC.data[name], e = frcElliott(name), tr = tbl.insertRow(); tr.style.borderTop = '1px solid #2a2e39';
     const c0 = tr.insertCell(), c = document.createElement('input'); c.type = 'checkbox'; c.checked = FRC.on[name];
     c.onchange = () => { FRC.on[name] = c.checked; frcStore(); FRC.key = ''; frcDraw(); frcBox(); };
     c0.appendChild(c); const chip = mk('span', ' ■ ', 'color:' + color + ';font-weight:700'); c0.appendChild(chip); c0.appendChild(document.createTextNode(FRC_NAME[name]));
     const ph = !d ? {text: '불러오는 중…'} : d.error ? {text: '시세를 받지 못함'} : frcPhase(e);
-    tr.insertCell().textContent = ph.text;
+    tr.insertCell().textContent = ph.text + (FRC.fine && frcScalesFor(name, true) ? ' · 민감' : '');
     const vc = tr.insertCell(), v = e && e.status === 'ok' ? frcSide(e, ref) : {side: 'wait', badge: '관망', why: !d ? '' : '후보 없음', counter: false};
     if (FRC.on[name]) sides.push({name, side: v.side});
     const bd = mk('span', v.badge, 'display:inline-block;min-width:34px;text-align:center;padding:0 7px;border-radius:5px;font-weight:700;color:#fff;margin-right:6px;background:' + (v.side === 'long' ? '#1e8e5a' : v.side === 'short' ? '#c62828' : '#4a5168'));
@@ -168,7 +180,7 @@ function frcBox() {
   }
   sum.appendChild(mk('span', ov.note, 'opacity:.9'));
   box.insertBefore(sum, tbl);
-  box.appendChild(mk('div', '차트의 시간봉(' + Math.round(mainSec / 60) + '분)보다 짧은 시간봉은 선이 겹쳐 그릴 수 없어 표에만 나옵니다. 15분 차트에서 보면 네 시간봉이 모두 겹쳐 그려집니다. 굵은 선일수록 큰 시간봉입니다.', 'opacity:.65;font-size:11px;margin-top:4px'));
+  box.appendChild(mk('div', '차트의 시간봉(' + Math.round(mainSec / 60) + '분)보다 짧은 시간봉은 선이 겹쳐 그릴 수 없어 표에만 나옵니다. 15분 차트에서 보면 네 시간봉이 모두 겹쳐 그려집니다. 굵은 선일수록 큰 시간봉입니다. 「단타 민감 모드」는 30분·15분에서 더 작은 스윙(1.5 ATR)도 인정해 후보가 늘지만 잡음도 늘어납니다.', 'opacity:.65;font-size:11px;margin-top:4px'));
   box.appendChild(mk('div', '엘리엇 파동 세기는 주관적이고 앞으로의 가격을 보장하지 않습니다. 이 규칙의 신호는 과거 통계로 검증되지 않았습니다. "관점"은 각 시간봉의 파동 위치에서 기대되는 방향일 뿐 매매 신호가 아닙니다. 손절 기준은 무효화 가격이며, 단타는 작은 시간봉의 무효화 가격을 짧은 손절 기준으로 참고하세요.', 'opacity:.65;font-size:11px'));
 }
 function frcDraw() {
@@ -176,13 +188,13 @@ function frcDraw() {
     frcStore();
     const L = bars.length; if (L < 2) return;
     for (const tf of FRC_TFS) if (FRC.on[tf[0]]) frcFetch(tf);
-    const key = L + ':' + bars[0].time + ':' + bars[L - 1].time + ':' + JSON.stringify(FRC.on) + FRC.inval + ':' + FRC.rev;
+    const key = L + ':' + bars[0].time + ':' + bars[L - 1].time + ':' + JSON.stringify(FRC.on) + FRC.inval + FRC.fine + ':' + FRC.rev;
     if (key === FRC.key) return;
     FRC.key = key; frcClear(); FRC.drawn = {};
     const mainTimes = bars.map(b => b.time), mainSec = frcMainSec(), plan = [];
     for (const [name, , sec, color, width] of FRC_TFS) {
-      const d = FRC.data[name]; if (!FRC.on[name] || !d || !d.res) continue;
-      const e = d.res.elliott, pts = frcSeriesData(d.bars, e, mainTimes, sec, mainSec); if (!pts) continue;
+      const d = FRC.data[name], e = frcElliott(name); if (!FRC.on[name] || !d || !e) continue;
+      const pts = frcSeriesData(d.bars, e, mainTimes, sec, mainSec); if (!pts) continue;
       plan.push({name, sec, color, width, e, pts});
     }
     // 큰 시간봉의 극점은 작은 시간봉에서도 같은 자리의 극점이다(프랙탈). 같은 자리의 표시는 하나로 합쳐 겹치지 않게 한다.
