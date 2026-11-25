@@ -58,6 +58,13 @@ pre.diff .a{color:#7ee2b0}pre.diff .d{color:#ff9aa5}pre.diff .h{color:#8fb4ff}
 .chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.chip{font-size:11px;border-radius:999px;padding:2px 9px;border:1px solid var(--line);background:#0d1826;color:var(--dim)}
 .chip.ai{cursor:pointer;color:var(--text)}.chip.ai:hover{border-color:#3a5b88}
 .meter{height:6px;border-radius:3px;background:#13202f;overflow:hidden;margin:4px 0}.meter i{display:block;height:100%}
+.gitgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px;margin-top:10px}
+.gcard{display:flex;flex-direction:column;gap:7px;border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:#0b141f}
+.gcard.bad{border-color:#7a3030}.gcard.warn{border-color:#6b5a26}.gcard h3{margin:0;font-size:14px}
+.gcard .loc,.gcard .rem,.gcard .last{font-size:12px;color:var(--dim);overflow-wrap:anywhere}.gcard .rem code,.gcard .loc code{color:var(--text)}
+.gcard .gw{font-size:12px;border-radius:8px;padding:5px 8px;background:#101c2c}.gcard .gw.bad{color:var(--bad);background:#2a1418}.gcard .gw.warn{color:var(--warn);background:#2a2412}.gcard .gw.info{color:var(--dim)}
+.gcard .chip.bad{color:var(--bad);border-color:#7a3030}.gcard .chip.warn{color:var(--warn);border-color:#6b5a26}.gcard .chip.ok{color:var(--ok);border-color:#1f5c47}
+.gcard .row{margin-top:2px}.gcard form{display:flex;gap:6px;flex-wrap:wrap}.gcard form input{min-width:0}
 .pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
 .pcard{display:flex;flex-direction:column;gap:9px}.pcard.busy{border-color:#2f74e6;box-shadow:0 0 0 1px #1c3a6b}
 .pcard .nm{font-size:17px;font-weight:700;cursor:pointer}.pcard .nm:hover{color:var(--gemini)}
@@ -655,6 +662,12 @@ textarea{min-height:84px}
     <div class="pcards" id="pjCards"></div>
     <div class="hint" id="pjRoot"></div>
   </section>
+  <section class="card" id="gitCard">
+    <div class="toolbar"><h2 style="margin:0">Git 저장소 현황 <span class="hint" style="font-weight:400">프로젝트별 위치 · 원격 · 변경 · 경고</span></h2><span class="spacer"></span><button id="gitRefresh">새로고침</button></div>
+    <div class="chips" id="gitSum"></div>
+    <div class="gitgrid" id="gitGrid"><div class="hint">불러오는 중…</div></div>
+    <div class="hint">읽기만 합니다. 바꿀 수 있는 것은 '원격 주소 설정'과 '원격 확인'(원격 정보만 새로 받음)뿐이며, 커밋·올리기·받아 합치기·삭제는 하지 않습니다. 30초마다 자동으로 다시 읽습니다.</div>
+  </section>
   <section class="card"><h2>단계별 AI 참여 도식 — 단계마다 최대 3개 AI</h2><div id="flowDiagram"></div>
     <div class="hint">칩을 누르면 대시보드의 역할 배정으로 이동합니다. 범위 검사와 테스트는 AI의 말이 아니라 기계가 판정하고, 적용은 사람이 합니다.</div></section>
   <section class="card" id="arbCard"><h2>👑 결정권자 성적표 — 판정을 사람의 결정과 비교</h2><div id="arbBody"></div></section>
@@ -887,7 +900,7 @@ function setTab(t){
   }
   try { history.replaceState(null, "", t === "dash" ? location.pathname : "#" + t); } catch (e) {}
   if (state) render();
-  if (t === "pj"){ renderProjects(); loadProjects(); loadTools(); }
+  if (t === "pj"){ renderProjects(); loadProjects(); loadTools(); loadGit(); }
   if (t === "rp") rpOpen();
 }
 
@@ -2535,6 +2548,80 @@ async function runTool(tool, label){
 }
 
 // ------------------------------------------------------------------ 프로젝트 탭 · 상단 현재 작업 표시줄
+// ------------------------------------------------------------------ 프로젝트 탭 · Git 저장소 현황 (읽기 전용 + 원격 주소 설정·원격 확인)
+let gitData = null, gitForm = null, gitBusy = new Set();
+async function loadGit(){
+  try { gitData = await api("/api/git"); renderGit(); } catch (e) { if (!e.offline) { gitData = null; $("gitGrid").textContent = ""; $("gitGrid").appendChild(el("div", "hint", e.message)); } }
+}
+function gitAgo(sec){
+  const d = Math.max(0, Date.now() / 1000 - sec);
+  return d < 90 ? "방금" : d < 5400 ? Math.round(d / 60) + "분 전" : d < 129600 ? Math.round(d / 3600) + "시간 전" : Math.round(d / 86400) + "일 전";
+}
+function gitChip(text, cls){ return el("span", "chip" + (cls ? " " + cls : ""), text); }
+function gitCard(i){
+  const worst = i.warnings.some(w => w.level === "bad") ? "bad" : i.warnings.some(w => w.level === "warn") ? "warn" : "";
+  const c = el("div", "gcard" + (worst ? " " + worst : ""));
+  const head = el("div", "row"); head.style.margin = "0"; head.style.justifyContent = "space-between";
+  head.appendChild(el("h3", "", i.alias ? i.alias + " (" + i.name + ")" : i.name));
+  if (i.state === "ready") head.appendChild(gitChip((i.detached ? "⎇ " : "⎇ ") + i.branch, i.detached ? "warn" : ""));
+  c.appendChild(head);
+  const chips = el("div", "chips"); chips.style.marginTop = "0";
+  if (i.state === "missing") chips.appendChild(gitChip("폴더 없음", "bad"));
+  else if (i.state === "none") chips.appendChild(gitChip("git 저장소 아님", "warn"));
+  else if (i.state === "empty") chips.appendChild(gitChip("커밋 없음", "warn"));
+  else {
+    chips.appendChild(gitChip(i.changed + i.untracked ? "변경 " + i.changed + " · 새 파일 " + i.untracked : "변경 없음", i.changed + i.untracked ? "warn" : "ok"));
+    if (i.upstream) chips.appendChild(gitChip(i.ahead || i.behind ? "올릴 " + i.ahead + " · 받을 " + i.behind : "원격과 같음", i.ahead || i.behind ? "warn" : "ok"));
+    if (i.stash) chips.appendChild(gitChip("stash " + i.stash));
+    if (i.worktrees) chips.appendChild(gitChip("작업트리 " + i.worktrees));
+    if (i.commits_7d != null) chips.appendChild(gitChip("7일 커밋 " + i.commits_7d));
+  }
+  c.appendChild(chips);
+  if (i.git_root){ const l = el("div", "loc"); l.appendChild(document.createTextNode("git 위치 ")); l.appendChild(el("code", "", i.git_root)); if (i.nested) l.appendChild(document.createTextNode(" (이 폴더는 하위 폴더)")); c.appendChild(l); }
+  if (i.state === "ready" || i.state === "empty"){
+    const r = el("div", "rem");
+    if (!i.remotes || !i.remotes.length) r.textContent = "원격: 없음";
+    else { r.appendChild(document.createTextNode("원격 ")); i.remotes.forEach((x, k) => { if (k) r.appendChild(document.createTextNode(" · ")); r.appendChild(document.createTextNode(x.name + " ")); r.appendChild(el("code", "", x.fetch || x.push)); }); if (i.upstream) r.appendChild(document.createTextNode(" · 추적 " + i.upstream)); }
+    c.appendChild(r);
+  }
+  if (i.last_commit) c.appendChild(el("div", "last", "마지막 커밋 " + i.last_commit.hash + " · " + i.last_commit.subject + " · " + i.last_commit.author + " · " + gitAgo(i.last_commit.time)));
+  if (i.fetched_at) c.appendChild(el("div", "last", "원격 정보를 받은 시각 " + gitAgo(i.fetched_at)));
+  i.warnings.forEach(w => c.appendChild(el("div", "gw " + w.level, (w.level === "bad" ? "⛔ " : w.level === "warn" ? "⚠ " : "ℹ ") + w.text)));
+  const row = el("div", "row");
+  if (i.state === "none" || i.state === "empty"){ const b = el("button", "primary", "git 시작하기"); b.onclick = () => openGitSetup(i.path); row.appendChild(b); }
+  if (i.state === "ready" || i.state === "empty"){
+    const f = el("button", "", gitBusy.has(i.path) ? "받는 중…" : "원격 확인"); f.disabled = gitBusy.has(i.path) || !(i.remotes && i.remotes.length);
+    f.title = "원격 정보만 새로 받습니다(내 파일·브랜치는 그대로)";
+    f.onclick = async () => { gitBusy.add(i.path); renderGit(); try { const r = await api("/api/git/fetch", {path: i.path}); toast(r.message); } catch (e) { toast(e.message, true); } gitBusy.delete(i.path); loadGit(); };
+    row.appendChild(f);
+    const s = el("button", "", "원격 주소 설정…"); s.onclick = () => { gitForm = gitForm === i.path ? null : i.path; renderGit(); }; row.appendChild(s);
+  }
+  if (i.state !== "missing"){ const o = el("button", "", "폴더 열기"); o.onclick = () => openOnDisk(i.path); row.appendChild(o); }
+  c.appendChild(row);
+  if (gitForm === i.path){
+    const form = el("form"), name = el("input"), url = el("input"), ok = el("button", "good", "저장"), no = el("button", "", "취소");
+    name.type = "text"; name.value = (i.remotes && i.remotes[0] && i.remotes[0].name) || "origin"; name.style.width = "90px"; name.setAttribute("aria-label", "원격 이름");
+    url.type = "text"; url.placeholder = "https://github.com/계정/저장소.git"; url.style.flex = "1"; url.setAttribute("aria-label", "원격 주소");
+    ok.type = "submit"; no.type = "button"; no.onclick = () => { gitForm = null; renderGit(); };
+    form.onsubmit = async (ev) => { ev.preventDefault(); try { const r = await api("/api/git/remote", {path: i.path, name: name.value, url: url.value}); toast(r.message); gitForm = null; loadGit(); } catch (e) { toast(e.message, true); } };
+    form.append(name, url, ok, no); c.appendChild(form);
+    c.appendChild(el("div", "hint", "주소만 저장하고 접속은 하지 않습니다. 토큰·비밀번호를 주소에 넣지 마세요(로그인은 git 자격 증명이나 ssh 키로)."));
+  }
+  return c;
+}
+function renderGit(){
+  if (!gitData || !$("gitGrid")) return;
+  const sm = gitData.summary, sum = $("gitSum"); sum.textContent = "";
+  sum.appendChild(gitChip("프로젝트 " + sm.projects));
+  [["bad", "비밀 파일 추적", "bad"], ["no_remote", "원격 없음", "warn"], ["dirty", "변경 있음", "warn"], ["unpushed", "올리지 않은 커밋", "warn"], ["behind", "받을 커밋", "warn"], ["no_git", "git 없음", "warn"]]
+    .forEach(([k, label, cls]) => { if (sm[k]) sum.appendChild(gitChip(label + " " + sm[k], cls)); });
+  if (!(sm.bad || sm.no_remote || sm.dirty || sm.unpushed || sm.behind || sm.no_git)) sum.appendChild(gitChip("모두 깨끗함", "ok"));
+  const grid = $("gitGrid"); grid.textContent = "";
+  if (!gitData.projects.length) grid.appendChild(el("div", "hint", "등록된 프로젝트가 없습니다."));
+  gitData.projects.forEach(i => grid.appendChild(gitCard(i)));
+}
+$("gitRefresh").onclick = loadGit;
+setInterval(() => { if (tab === "pj" && !document.hidden && !gitForm && !gitBusy.size) loadGit(); }, 30000);
 async function loadProjects(){
   try { [projectsInfo, portfolioData] = await Promise.all([api("/api/projects"), api("/api/portfolio")]); renderProjects(); } catch (e) { if (!e.offline) toast(e.message, true); }
 }
