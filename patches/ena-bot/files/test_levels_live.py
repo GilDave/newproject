@@ -131,4 +131,4 @@ def test_price_at_the_bottom_of_the_range_explains_which_side_is_missing():
         drift[i] = [r[0], r[1] * f, r[2] * f, r[3] * f, r[4] * f, r[5]]
     t = ll.plan_timeframe(drift, 60, NOW)
     assert t["status"] == "ok" and t["long"] is None and t["short"] is None
-    assert "아래에 지지 구간이 없음" in t["why"]["long"] and "아래에 지지 구간이 없음" in t["why"]["short"]
+    assert "지지 구간이 없음" in t["why"]["long"] and "지지 구간이 없음" in t["why"]["short"]

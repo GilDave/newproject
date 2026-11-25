@@ -95,8 +95,8 @@ def plan_timeframe(rows, minutes: int, now_ms: float, price: float | None = None
     out["status"] = "ok"
     out["atr"] = atr
     if not sup or not res:                                    # 가격이 최근 범위의 맨 아래(또는 위)라서 한쪽에 거래량 구간이 없으면 진입가·목표가를 만들 수 없다
-        no_sup = "현재가 아래에 지지 구간이 없음(가격이 최근 범위의 최저점 부근)"
-        no_res = "현재가 위에 저항 구간이 없음(가격이 최근 범위의 최고점 부근)"
+        no_sup = "현재가 아래에 거래량이 많이 쌓인 지지 구간이 없음(최근 하락이 빨라 아래쪽 거래가 적음)"
+        no_res = "현재가 위에 거래량이 많이 쌓인 저항 구간이 없음(최근 상승이 빨라 위쪽 거래가 적음)"
         why = no_sup if not sup else no_res
         out["why"] = {"long": why if not sup else no_res + " — 롱 목표가 없음", "short": no_sup + " — 숏 목표가 없음" if not sup else no_res}
         if not sup and not res:
