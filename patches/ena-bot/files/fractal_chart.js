@@ -25,14 +25,45 @@ function frcPhase(e) {
   if (last && last.provisional) return {key: 'w4', text: nm + ' 4파 진행 중(저점·고점 갱신 가능)'};
   return {key: 'w4end', text: nm + ' 4파 끝 → 5파 가능'};
 }
-// 가장 큰 시간봉(ref)의 방향과 비교한 한 줄 해석. 매매 신호가 아니라 '어디를 볼지'에 대한 가설이다.
-function frcHint(ref, e) {
-  if (!e || e.status !== 'ok') return '—';
-  if (!ref) return '—';
-  if (ref === e) return '기준 시간봉';
-  const k = frcPhase(e).key;
-  if (ref.direction === e.direction) return k === 'done' ? '큰 방향과 같음 · 5파 완성 → 짧은 조정 뒤 재개 관찰' : '큰 방향과 같음 · 추세 진행 구간';
-  return k === 'done' ? '큰 방향과 반대 · 5파 완성 → 되돌림 마무리 가능(큰 방향 재개 관찰)' : '큰 방향과 반대 · 되돌림 진행 중(대기)';
+// 한 시간봉의 '롱/숏 관점'. 그 시간봉의 엘리엇 위치에서 다음에 기대되는 방향이다(매매 신호가 아니라 가설).
+//  4파 끝 → 5파 가능: 파동 방향 · 5파 진행 중: 같은 방향(늦은 구간, 추격 주의) · 4파 조정 중: 관망 · 5파 완성: 조정 가능 → 반대 방향 · 후보 없음: 관망
+// ref(가장 큰 시간봉의 후보)가 있으면 큰 흐름과 반대인지(역추세 단타)도 알려준다.
+function frcSide(e, ref) {
+  const none = {side: 'wait', badge: '관망', why: '후보 없음', counter: false};
+  if (!e || e.status !== 'ok') return none;
+  const up = e.direction === 'up', k = frcPhase(e).key, own = up ? 'long' : 'short', opp = up ? 'short' : 'long';
+  let r;
+  if (k === 'w4end') r = {side: own, why: '4파가 끝나 5파가 이어질 수 있는 자리'};
+  else if (k === 'w5') r = {side: own, why: '5파 진행 중 — 늦은 구간이라 추격 주의'};
+  else if (k === 'w4') r = {side: 'wait', why: '4파 조정 중 — 조정이 끝나는 자리를 기다림'};
+  else if (k === 'done') r = {side: opp, why: '5파 완성 — 조정(되돌림)이 나올 수 있음'};
+  else return none;
+  r.badge = r.side === 'long' ? '롱' : r.side === 'short' ? '숏' : '관망';
+  const refSide = ref && ref !== e ? frcSideRaw(ref) : null;
+  r.counter = !!(refSide && r.side !== 'wait' && refSide !== 'wait' && r.side !== refSide);
+  return r;
+}
+function frcSideRaw(e) {
+  if (!e || e.status !== 'ok') return 'wait';
+  const up = e.direction === 'up', k = frcPhase(e).key;
+  return k === 'w4end' || k === 'w5' ? (up ? 'long' : 'short') : k === 'done' ? (up ? 'short' : 'long') : 'wait';
+}
+// 여러 시간봉의 관점을 한 줄로: 큰 흐름(4h·1h)과 단타(30m·15m)를 따로 합산(큰 시간봉일수록 무게). items: [{name, side}]
+const FRC_W = {'4h': 4, '1h': 3, '30m': 2, '15m': 1};
+function frcVote(items) {
+  let l = 0, sh = 0; for (const it of items) { const w = FRC_W[it.name] || 1; if (it.side === 'long') l += w; else if (it.side === 'short') sh += w; }
+  const side = l === sh ? 'wait' : (Math.abs(l - sh) <= 1 && l && sh) ? 'wait' : l > sh ? 'long' : 'short';
+  return {side, long: l, short: sh};
+}
+function frcOverall(items) {
+  const big = frcVote(items.filter(x => x.name === '4h' || x.name === '1h')), small = frcVote(items.filter(x => x.name === '30m' || x.name === '15m'));
+  const nm = (v) => v === 'long' ? '롱' : v === 'short' ? '숏' : '관망';
+  let note;
+  if (big.side === 'wait' && small.side === 'wait') note = '뚜렷한 방향이 없습니다 → 관망';
+  else if (big.side === 'wait') note = '큰 흐름은 불분명하고 단타 쪽만 ' + nm(small.side) + ' → 짧게, 작은 크기로만 참고';
+  else if (small.side === 'wait' || small.side === big.side) note = '큰 흐름 ' + nm(big.side) + (small.side === big.side ? ' · 단타도 같은 방향 → 눌림(되돌림) 뒤 ' + nm(big.side) + ' 재개를 관찰' : ' · 단타는 대기 → 단기 파동이 정리되길 기다림');
+  else note = '큰 흐름은 ' + nm(big.side) + ', 단타는 ' + nm(small.side) + ' → 단타 ' + nm(small.side) + '은 큰 흐름과 반대(역추세)라 짧게. 그 움직임이 끝나는 자리에서 ' + nm(big.side) + ' 재개를 관찰';
+  return {big, small, note};
 }
 // 한 시간봉의 엘리엇 후보를 차트의 봉 시각(mainTimes)에 맞춘 선·표시 데이터로 바꾼다. 차트보다 짧은 시간봉이면 null(겹쳐서 그릴 수 없음).
 function frcSeriesData(tfBars, e, mainTimes, tfSec, mainSec) {
@@ -108,8 +139,8 @@ function frcBox() {
   if (FRC.collapsed) return;
   const mainSec = frcMainSec(), price = bars.length ? bars[bars.length - 1].close : null;
   const tbl = mk('table', undefined, 'border-collapse:collapse;width:100%;margin-top:6px'), th = tbl.insertRow();
-  for (const h of ['시간봉', '현재 위치', '무효화 가격 (현재가 대비)', '5파 목표 구간', '큰 시간봉과 비교', '차트']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:3px 8px;white-space:nowrap'));
-  let ref = null;
+  for (const h of ['시간봉', '현재 위치', '관점 (롱/숏)', '무효화 가격 (현재가 대비)', '5파 목표 구간', '차트']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:3px 8px;white-space:nowrap'));
+  let ref = null; const sides = [];
   for (const tf0 of FRC_TFS) { const name = tf0[0], d = FRC.data[name]; if (FRC.on[name] && d && d.res && d.res.elliott.status === 'ok') { ref = d.res.elliott; break; } }
   for (const [name, iv, sec, color] of FRC_TFS) {
     const d = FRC.data[name], e = d && d.res ? d.res.elliott : null, tr = tbl.insertRow(); tr.style.borderTop = '1px solid #2a2e39';
@@ -118,15 +149,27 @@ function frcBox() {
     c0.appendChild(c); const chip = mk('span', ' ■ ', 'color:' + color + ';font-weight:700'); c0.appendChild(chip); c0.appendChild(document.createTextNode(FRC_NAME[name]));
     const ph = !d ? {text: '불러오는 중…'} : d.error ? {text: '시세를 받지 못함'} : frcPhase(e);
     tr.insertCell().textContent = ph.text;
+    const vc = tr.insertCell(), v = e && e.status === 'ok' ? frcSide(e, ref) : {side: 'wait', badge: '관망', why: !d ? '' : '후보 없음', counter: false};
+    if (FRC.on[name]) sides.push({name, side: v.side});
+    const bd = mk('span', v.badge, 'display:inline-block;min-width:34px;text-align:center;padding:0 7px;border-radius:5px;font-weight:700;color:#fff;margin-right:6px;background:' + (v.side === 'long' ? '#1e8e5a' : v.side === 'short' ? '#c62828' : '#4a5168'));
+    vc.appendChild(bd); vc.appendChild(document.createTextNode(v.why + (v.counter ? ' · 큰 흐름과 반대(역추세 단타, 짧게)' : '')));
     tr.insertCell().textContent = e && e.status === 'ok' ? frcFmt(e.invalidation.level) + (price ? ' (' + ((e.invalidation.level / price - 1) * 100).toFixed(1) + '%)' : '') + ' ' + (e.invalidation.side === 'above' ? '위로' : '아래로') + ' 벗어나면 무효' : '—';
     tr.insertCell().textContent = e && e.status === 'ok' && e.targets.length ? frcFmt(Math.min(...e.targets)) + ' ~ ' + frcFmt(Math.max(...e.targets)) : '—';
-    tr.insertCell().textContent = e && e.status === 'ok' ? frcHint(ref, e) : '—';
     const drawn = FRC.drawn[name]; tr.insertCell().textContent = !FRC.on[name] ? '꺼짐' : sec < mainSec ? '차트보다 짧아 생략' : drawn ? '그림' : '—';
     for (const td of tr.cells) td.style.cssText = 'padding:3px 8px;vertical-align:top;text-align:left';
   }
   box.appendChild(tbl);
+  const ov = frcOverall(sides), nmS = (v) => v === 'long' ? '롱' : v === 'short' ? '숏' : '관망', colS = (v) => v === 'long' ? '#1e8e5a' : v === 'short' ? '#c62828' : '#4a5168';
+  const sum = mk('div', undefined, 'margin-top:6px;padding:6px 8px;border-radius:6px;background:#1a1f2e;display:flex;gap:10px;align-items:center;flex-wrap:wrap');
+  sum.appendChild(mk('b', '종합 관점(가설)'));
+  for (const [label, v] of [['큰 흐름 4시간·1시간', ov.big], ['단타 30분·15분', ov.small]]) {
+    const c = mk('span', undefined, 'display:inline-flex;gap:5px;align-items:center'); c.appendChild(document.createTextNode(label));
+    c.appendChild(mk('span', nmS(v.side), 'padding:0 8px;border-radius:5px;font-weight:700;color:#fff;background:' + colS(v.side))); sum.appendChild(c);
+  }
+  sum.appendChild(mk('span', ov.note, 'opacity:.9'));
+  box.insertBefore(sum, tbl);
   box.appendChild(mk('div', '차트의 시간봉(' + Math.round(mainSec / 60) + '분)보다 짧은 시간봉은 선이 겹쳐 그릴 수 없어 표에만 나옵니다. 15분 차트에서 보면 네 시간봉이 모두 겹쳐 그려집니다. 굵은 선일수록 큰 시간봉입니다.', 'opacity:.65;font-size:11px;margin-top:4px'));
-  box.appendChild(mk('div', '엘리엇 파동 세기는 주관적이고 앞으로의 가격을 보장하지 않습니다. 이 규칙의 신호는 과거 통계로 검증되지 않았습니다. "큰 시간봉과 비교"는 매매 신호가 아니라 어디를 살펴볼지에 대한 가설입니다.', 'opacity:.65;font-size:11px'));
+  box.appendChild(mk('div', '엘리엇 파동 세기는 주관적이고 앞으로의 가격을 보장하지 않습니다. 이 규칙의 신호는 과거 통계로 검증되지 않았습니다. "관점"은 각 시간봉의 파동 위치에서 기대되는 방향일 뿐 매매 신호가 아닙니다. 손절 기준은 무효화 가격이며, 단타는 작은 시간봉의 무효화 가격을 짧은 손절 기준으로 참고하세요.', 'opacity:.65;font-size:11px'));
 }
 function frcDraw() {
   try {
