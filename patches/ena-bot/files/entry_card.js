@@ -19,7 +19,7 @@ function entStyle() {
     + '.entc .fav{font-size:14px;font-weight:700;margin:4px 0}.entc .sub{color:var(--mute,#8a8f98);margin:2px 0 6px}.entc .badge{display:inline-block;padding:2px 8px;border-radius:10px;margin:2px 0;font-weight:600}'
     + '.entc .badge.ok{background:#1b5e2040;color:#66bb6a}.entc .badge.warn{background:#ff8f0030;color:#ffb74d}.entc .badge.bad{background:#b71c1c30;color:#ef5350}'
     + '.entc .wrap{overflow-x:auto}.entc table{border-collapse:collapse;width:100%;min-width:760px}.entc th,.entc td{padding:4px 8px;border-top:1px solid #8884;text-align:left;vertical-align:top;white-space:nowrap}'
-    + '.entc th{color:var(--mute,#8a8f98);font-weight:600}.entc .long{color:#26a69a}.entc .short{color:#ef5350}.entc .dim{opacity:.65}.entc .chk{margin-top:2px}.entc details{margin-top:6px}';
+    + '.entc th{color:var(--mute,#8a8f98);font-weight:600}.entc .long{color:#26a69a}.entc .short{color:#ef5350}.entc .dim{opacity:.65}.entc .dir{display:inline-block;padding:2px 10px;border-radius:6px;margin-right:8px;font-weight:800;color:#fff}.entc .dir.long{background:#1e8e5a}.entc .dir.short{background:#c62828}.entc .dirs{display:inline-block;padding:0 6px;border-radius:4px;margin-right:6px;font-weight:700;color:#fff}.entc .dirs.long{background:#1e8e5a}.entc .dirs.short{background:#c62828}.entc .chk{margin-top:2px}.entc details{margin-top:6px}';
   document.head.appendChild(s);
 }
 function entVerdict(tf, setup) {
@@ -40,6 +40,12 @@ function entStudyLine() {
 function entPlanText(b) {
   return (b.direction === 'long' ? '롱' : '숏') + ' ' + ENT_SETUP[b.setup] + (b.aligned_trend ? '' : ' (추세와 반대)');
 }
+function entDirWord(b) { return b.direction === 'long' ? '롱(매수) ▲' : '숏(매도) ▼'; }
+function entDirHelp(b) {
+  return b.direction === 'long'
+    ? '롱 = 가격이 오를 때 이익. 진입가 ' + entFmt(b.entry) + ' 근처에서 매수 → 손절 ' + entFmt(b.stop) + ' 아래로 내려가면 청산, 목표 ' + entFmt(b.targets[0]) + ' 이상에서 이익 실현'
+    : '숏 = 가격이 내릴 때 이익. 진입가 ' + entFmt(b.entry) + ' 근처에서 매도 → 손절 ' + entFmt(b.stop) + ' 위로 올라가면 청산, 목표 ' + entFmt(b.targets[0]) + ' 이하에서 이익 실현';
+}
 function entCard() {
   const box = document.getElementById('entry-card'); if (!box) return;
   entStyle(); box.className = 'panel entc'; box.textContent = '';
@@ -52,7 +58,8 @@ function entCard() {
   if (pr) box.appendChild(entEl('div', 'sub', '현재가 ' + entFmt(pr.price) + ' (진입가까지의 거리는 현재가 기준: + 위, - 아래)'));
   if (fav && tfs[fav] && tfs[fav].best) {
     const b = tfs[fav].best, v = entVerdict(fav, b.setup);
-    box.appendChild(entEl('div', 'fav', (v.cls === 'ok' ? '지금 가장 유리한 시간봉: ' : '조건이 가장 많이 겹친 시간봉(과거 검증 미통과 · 참고용): ') + ENT_TF_KO[fav] + ' — ' + entPlanText(b)));
+    const fv = entEl('div', 'fav'); fv.appendChild(entEl('span', 'dir ' + b.direction, entDirWord(b))); fv.appendChild(document.createTextNode((v.cls === 'ok' ? '지금 가장 유리한 시간봉: ' : '조건이 가장 많이 겹친 시간봉(과거 검증 미통과 · 참고용): ') + ENT_TF_KO[fav] + ' — ' + ENT_SETUP[b.setup] + (b.aligned_trend ? '' : ' (추세와 반대)'))); box.appendChild(fv);
+    box.appendChild(entEl('div', 'sub', entDirHelp(b)));
     box.appendChild(entEl('div', null, '권장 진입 ' + entFmt(b.entry) + ' (구간 ' + entFmt(b.zone[0]) + ' ~ ' + entFmt(b.zone[1]) + ') · 손절 ' + entFmt(b.stop) + ' · 목표 ' + entFmt(b.targets[0]) + ' / ' + entFmt(b.targets[1])
       + ' · 진입까지 ' + entDist(b) + ' · 첫 목표 손익비 ' + b.rr.toFixed(2) + ' · 손절 폭 ' + (b.risk_pct * 100).toFixed(1) + '% · 조건 일치 ' + b.score + '/3' + (b.htf_aligned ? ' · 상위 시간봉 추세와 같은 방향' : '')));
     box.appendChild(entEl('div', 'sub', '왕복 비용은 위험의 ' + (b.cost_r * 100).toFixed(0) + '% · 비용을 빼고 본전이 되려면 첫 목표 기준 승률 ' + (b.be_win_rate * 100).toFixed(0) + '% 이상 필요'));
@@ -68,7 +75,7 @@ function entCard() {
     const b = p.best, s = p.snapshot;
     const snap = 'RSI ' + (s.rsi == null ? '-' : s.rsi.toFixed(0)) + ' · MACD ' + (s.macd_hist == null ? '-' : (s.macd_hist >= 0 ? '+' : '') + s.macd_hist.toPrecision(2)) + ' · %B ' + (s.pct_b == null ? '-' : s.pct_b.toFixed(2)) + ' · 추세 ' + (s.trend > 0 ? '상승' : '하락');
     if (!b) { tr.appendChild(entEl('td', null, '계획 없음')); const td = entEl('td', null, '조건 미충족'); td.colSpan = 7; tr.appendChild(td); tr.appendChild(entEl('td', null, snap)); tb.appendChild(tr); continue; }
-    const pc = entEl('td', b.direction, entPlanText(b) + ((b.warnings || []).length ? ' ⚠' : '')); if ((b.warnings || []).length) pc.title = b.warnings.join('\n'); tr.appendChild(pc);
+    const pc = entEl('td', null); pc.appendChild(entEl('span', 'dirs ' + b.direction, b.direction === 'long' ? '롱▲' : '숏▼')); pc.appendChild(document.createTextNode(ENT_SETUP[b.setup] + (b.aligned_trend ? '' : ' (추세와 반대)') + ((b.warnings || []).length ? ' ⚠' : ''))); if ((b.warnings || []).length) pc.title = b.warnings.join('\n'); tr.appendChild(pc);
     tr.appendChild(entEl('td', null, ENT_STATE[b.state] || b.state));
     tr.appendChild(entEl('td', null, entDist(b)));
     tr.appendChild(entEl('td', null, entFmt(b.entry) + ' (' + entFmt(b.zone[0]) + '~' + entFmt(b.zone[1]) + ')'));
@@ -109,7 +116,7 @@ function entDraw() {
     if (!ENT.lineOn || !tf || !d || !d.ok) return;
     const p = d.plans.timeframes[tf], b = p && p.status === 'ok' ? p.best : null;
     if (!b || !['in_zone', 'approaching', 'waiting'].includes(b.state)) return;
-    const a = b.state === 'waiting' ? '88' : '', side = b.direction === 'long' ? '롱' : '숏', ref = entVerdict(tf, b.setup).cls === 'ok' ? '' : ' (참고)';
+    const a = b.state === 'waiting' ? '88' : '', side = b.direction === 'long' ? '롱▲' : '숏▼', ref = entVerdict(tf, b.setup).cls === 'ok' ? '' : ' (참고)';
     const add = (price, color, style, title, label) => ENT.lines.push(candle.createPriceLine({price, color: color + a, lineWidth: 1, lineStyle: style, axisLabelVisible: label, title}));
     add(b.zone[0], '#64b5f6', 3, '', false); add(b.zone[1], '#64b5f6', 3, '', false);
     add(b.entry, '#42a5f5', 2, side + ' 진입' + ref, true); add(b.stop, '#ef5350', 2, '손절' + ref, true);
