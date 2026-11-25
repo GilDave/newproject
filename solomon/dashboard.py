@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, joblock, analysis as analysis_mod, alerts as alerts_mod, attachments as attach_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, manage, policy as policy_mod,
+from . import (__version__, joblock, analysis as analysis_mod, alerts as alerts_mod, attachments as attach_mod, autofix as autofix_mod, botlab as botlab_mod, exchange_keys as keys_mod, trading_mode as mode_mod, quota as quota_mod, folders, gitops, gitwatch, manage, policy as policy_mod,
                portfolio, projects as projects_mod, report as report_mod, shadow as shadow_mod, video as video_mod, vision as vision_mod)
 from .providers import PROVIDER_CLASSES, build_providers
 from .settings import ALL_ROLES, ROLES, Settings
@@ -95,6 +95,7 @@ class DashboardApp:
         self._launcher = launcher or _default_launcher
         self.trash_dir = self.store_path.parent / "trash"
         self._lock = threading.Lock()
+        self._gitwatch_cache: dict[str, tuple] = {}
         self._projects: dict[str, dict] = {}  # path -> {"test_command": [...]} (key absent = use the config default)
         self.job: Optional[dict] = None
         self._providers_cache: tuple[float, list[dict]] = (0.0, [])
@@ -251,6 +252,43 @@ class DashboardApp:
             self._save_store()
         self._fresh()
         return {"ok": True, "project": str(target), "message": f"폴더 이름을 바꿨습니다: {target.name}"}
+
+    def git_overview(self, project: str = "") -> dict:
+        """Git picture of every registered project (or one). Read-only; cached for a few seconds because it runs ~10 git commands each."""
+        now = time.time()
+        paths = [self._known(project)] if project else sorted(self._projects)
+        rows = []
+        for path in paths:
+            hit = self._gitwatch_cache.get(path)
+            if hit and now - hit[0] < 8:
+                info = hit[1]
+            else:
+                info = gitwatch.inspect(path)
+                self._gitwatch_cache[path] = (now, info)
+            rows.append({**info, "name": Path(path).name, "alias": self._projects[path].get("alias", ""), "busy": self._busy_here(path)})
+        rows.sort(key=lambda r: (-max([gitwatch.LEVEL_RANK[w["level"]] for w in r["warnings"]] or [-1]), r["name"].lower()))
+        return {"projects": rows, "summary": gitwatch.summarize(rows), "checked": int(now)}
+
+    def git_fetch(self, path: str, remote: str = "") -> dict:
+        path = self._known(path)
+        try:
+            res = gitwatch.fetch(path, remote)
+        except gitwatch.GitWatchError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        self._gitwatch_cache.pop(path, None)
+        return res
+
+    def git_set_remote(self, path: str, name: str, url: str) -> dict:
+        path = self._known(path)
+        if self._busy_here(path):
+            raise ApiError(409, "이 프로젝트에서 작업이 진행 중입니다. 끝난 뒤에 바꾸세요.")
+        try:
+            res = gitwatch.set_remote(path, name, url)
+        except gitwatch.GitWatchError as exc:
+            raise ApiError(exc.status, exc.message) from exc
+        self._gitwatch_cache.pop(path, None)
+        self._fresh()
+        return res
 
     def git_init_preview(self, path: str) -> dict:
         path = self._known(path)
@@ -1499,6 +1537,13 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, shadow_mod.evaluate(Path(proj), app.settings.state_dir))
                 except ApiError as exc:
                     return self._json(exc.status, exc.payload())
+            if url.path == "/api/git":
+                if not self._token_ok(query):
+                    return self._json(401, {"error": "토큰이 없습니다."})
+                try:
+                    return self._json(200, app.git_overview((query.get("project") or [""])[0]))
+                except ApiError as exc:
+                    return self._json(exc.status, exc.payload())
             if url.path == "/api/projects":
                 if not self._token_ok(query):
                     return self._json(401, {"error": "토큰이 없습니다."})
@@ -1598,6 +1643,10 @@ def make_handler(app: DashboardApp, token: str, allowed_hosts: set[str]):
                     return self._json(200, app.rename_project(str(body.get("path", "")), str(body.get("name", ""))))
                 if path == "/api/projects/git-init":
                     return self._json(200, app.git_init(str(body.get("path", "")), body.get("include")))
+                if path == "/api/git/fetch":
+                    return self._json(200, app.git_fetch(str(body.get("path", "")), str(body.get("remote", ""))))
+                if path == "/api/git/remote":
+                    return self._json(200, app.git_set_remote(str(body.get("path", "")), str(body.get("name", "")), str(body.get("url", ""))))
                 if path == "/api/open":
                     return self._json(200, app.open_path(str(body.get("path", ""))))
                 if path == "/api/tools/run":
