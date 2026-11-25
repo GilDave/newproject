@@ -118,3 +118,17 @@ def test_too_few_bars_gives_insufficient_and_bad_rows_are_ignored():
     assert t["status"] == "insufficient_data" and t["long"] is None
     messy = rows(60, 15) + [["x", 1], None, [1, 2, 3]]
     assert ll.plan_timeframe([r for r in messy if r], 15, NOW)["status"] in ("ok", "insufficient_data")
+
+
+def test_price_at_the_bottom_of_the_range_explains_which_side_is_missing():
+    base = rows(200, 60, base=0.1, amp=0.0, seed=3)
+    for r in base:                                              # 가격이 계속 내려 마지막 봉이 범위의 최저점
+        pass
+    n = len(base)
+    drift = [[r[0], r[1], r[2], r[3], r[4], r[5]] for r in base]
+    for i, r in enumerate(drift):
+        f = 1 - 0.25 * i / n
+        drift[i] = [r[0], r[1] * f, r[2] * f, r[3] * f, r[4] * f, r[5]]
+    t = ll.plan_timeframe(drift, 60, NOW)
+    assert t["status"] == "ok" and t["long"] is None and t["short"] is None
+    assert "아래에 지지 구간이 없음" in t["why"]["long"] and "아래에 지지 구간이 없음" in t["why"]["short"]
