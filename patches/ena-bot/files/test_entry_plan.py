@@ -135,7 +135,7 @@ def test_plans_pick_the_most_favorable_timeframe_and_isolate_failures():
     assert fav is None or tf[fav]["best"]["state"] in ("in_zone", "approaching")
     if fav:
         assert tf[fav]["best"]["score"] >= 2 and "htf_aligned" in tf[fav]["best"]
-    assert res["note"] is None if fav else "대기" in res["note"]
+    assert res["note"] is None if fav else "관망" in res["note"]
 
 
 def test_forming_bar_is_excluded_from_signals_but_gives_the_current_price():

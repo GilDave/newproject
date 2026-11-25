@@ -2,7 +2,7 @@
 const ENT = {data: null, lines: [], key: '', lineOn: true, loaded: false, started: false};
 const ENT_TF = {'15': '15m', '60': '1h', '240': '4h', 'D': '1d'};
 const ENT_TF_KO = {'15m': '15분', '1h': '1시간', '4h': '4시간', '1d': '1일'};
-const ENT_STATE = {in_zone: '진입 구간 안', approaching: '다가오는 중', waiting: '대기(아직 멀음)', broken: '구간 이탈', poor_rr: '손익비 부족', weak: '조건 부족'};
+const ENT_STATE = {in_zone: '진입 구간 안', approaching: '다가오는 중', waiting: '관망(아직 멀음)', broken: '구간 이탈', poor_rr: '손익비 부족', weak: '조건 부족'};
 const ENT_SETUP = {pullback: '추세 눌림목', reversion: '밴드 반전'};
 function entFmt(v) { return v == null ? '-' : (typeof fmt === 'function' ? fmt(v, 5) : Number(v).toFixed(5)); }
 function entEl(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
@@ -46,6 +46,20 @@ function entDirHelp(b) {
     ? '롱 = 가격이 오를 때 이익. 진입가 ' + entFmt(b.entry) + ' 근처에서 매수 → 손절 ' + entFmt(b.stop) + ' 아래로 내려가면 청산, 목표 ' + entFmt(b.targets[0]) + ' 이상에서 이익 실현'
     : '숏 = 가격이 내릴 때 이익. 진입가 ' + entFmt(b.entry) + ' 근처에서 매도 → 손절 ' + entFmt(b.stop) + ' 위로 올라가면 청산, 목표 ' + entFmt(b.targets[0]) + ' 이하에서 이익 실현';
 }
+function entBias(tfs) {
+  const ok = ['15m', '1h', '4h', '1d'].filter(k => tfs[k] && tfs[k].status === 'ok' && tfs[k].snapshot);
+  if (!ok.length) return null;
+  const down = ok.filter(k => tfs[k].snapshot.trend < 0).length, up = ok.length - down;
+  const dir = down > up ? 'short' : up > down ? 'long' : null;
+  const live = ok.map(k => tfs[k].best).filter(b => b && (b.state === 'in_zone' || b.state === 'approaching') && b.score >= 2);
+  const same = dir ? live.filter(b => b.direction === dir).length : 0, opp = live.length - same;
+  let act;
+  if (!dir) act = '시간봉 추세가 반반이라 방향이 없음 → 관망';
+  else if (same === 0) act = '추세 방향 계획이 없음 → 관망';
+  else if (opp > 0) act = '추세 방향 계획 ' + same + '개 · 반대 방향 ' + opp + '개(제외) → 기본은 관망, 하더라도 ' + (dir === 'short' ? '숏' : '롱') + ' 소액';
+  else act = '추세 방향 계획 ' + same + '개, 반대 방향 없음 → ' + (dir === 'short' ? '숏' : '롱') + ' 소액 가능(과거 검증은 미통과)';
+  return '방향 종합: ' + (dir ? '추세 ' + (dir === 'short' ? '하락 ' + down : '상승 ' + up) + '/' + ok.length + ' · ' : '') + act;
+}
 function entCard() {
   const box = document.getElementById('entry-card'); if (!box) return;
   entStyle(); box.className = 'panel entc'; box.textContent = '';
@@ -55,6 +69,7 @@ function entCard() {
   const tfs = d.plans.timeframes, fav = d.plans.favorable;
   const pr = ['1h', '4h', '15m', '1d'].map(k => tfs[k]).find(p => p && p.status === 'ok');
   box.appendChild(entEl('div', 'sub', entStudyLine()));
+  const bias = entBias(tfs); if (bias) box.appendChild(entEl('div', 'fav', bias));
   if (pr) box.appendChild(entEl('div', 'sub', '현재가 ' + entFmt(pr.price) + ' (진입가까지의 거리는 현재가 기준: + 위, - 아래)'));
   if (fav && tfs[fav] && tfs[fav].best) {
     const b = tfs[fav].best, v = entVerdict(fav, b.setup);
@@ -65,7 +80,7 @@ function entCard() {
     box.appendChild(entEl('div', 'sub', '왕복 비용은 위험의 ' + (b.cost_r * 100).toFixed(0) + '% · 비용을 빼고 본전이 되려면 첫 목표 기준 승률 ' + (b.be_win_rate * 100).toFixed(0) + '% 이상 필요'));
     for (const w of (b.warnings || [])) box.appendChild(entEl('div', 'badge warn', '⚠ ' + w));
     const bd = entEl('span', 'badge ' + v.cls, v.text); box.appendChild(bd);
-  } else box.appendChild(entEl('div', 'fav', d.plans.note || '지금은 조건이 충분히 겹친 시간봉이 없습니다(대기)'));
+  } else box.appendChild(entEl('div', 'fav', d.plans.note || '지금은 조건이 충분히 겹친 시간봉이 없습니다(관망)'));
   const wrap = entEl('div', 'wrap'), tb = entEl('table'), hd = entEl('tr');
   for (const h of ['시간봉', '계획', '상태', '진입까지', '권장 진입 (구간)', '손절', '목표 1 / 2', '손익비', '조건', '지표 현황']) hd.appendChild(entEl('th', null, h));
   tb.appendChild(hd);

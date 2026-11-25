@@ -245,5 +245,5 @@ def plans(fetch, now_ms: int, timeframes: dict | None = None, limit: int = 300) 
         if best_key is None or key > best_key:
             best, best_key = name, key
     out["favorable"] = best
-    out["note"] = None if best else "지금은 조건이 충분히 겹친 시간봉이 없습니다(대기)."
+    out["note"] = None if best else "지금은 조건이 충분히 겹친 시간봉이 없습니다(관망)."
     return out
