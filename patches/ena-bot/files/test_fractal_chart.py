@@ -15,7 +15,7 @@ const fs = require('fs'), vm = require('vm');
 const code = fs.readFileSync(process.argv[1], 'utf8');
 const sb = {console, document: {}, localStorage: {getItem() { return null; }, setItem() {}}, structDraw: function () {}, ST_CIRCLED: ['0', '①', '②', '③', '④', '⑤']};
 vm.createContext(sb);
-vm.runInContext(code + ';this.X = {frcSnapTime, frcPhase, frcSide, frcOverall, frcVote, frcSeriesData, frcMergeMarkers, frcMergeLevels, hooked: !!structDraw.__fr};', sb);
+vm.runInContext(code + ';this.X = {frcSnapTime, frcPhase, frcSide, frcOverall, frcVote, frcPlan, frcSeriesData, frcMergeMarkers, frcMergeLevels, hooked: !!structDraw.__fr};', sb);
 const X = sb.X;
 const P = (i, price, kind, label, prov) => ({i, price, kind, label: String(label), provisional: !!prov});
 const e = (o) => Object.assign({status: 'ok', direction: 'up', complete: false, forming5: false,
@@ -40,6 +40,22 @@ const o2 = X.frcOverall([{name: '4h', side: 'wait'}, {name: '1h', side: 'wait'},
 const o3 = X.frcOverall([{name: '4h', side: 'long'}, {name: '1h', side: 'long'}, {name: '30m', side: 'long'}, {name: '15m', side: 'long'}]);
 const o4 = X.frcOverall([{name: '4h', side: 'long'}, {name: '1h', side: 'long'}, {name: '30m', side: 'short'}, {name: '15m', side: 'short'}]);
 out.overall = [o1, o2, o3, o4].map(o => [o.big.side, o.small.side, o.note]);
+
+// 가설 진입 계획
+const up = (o) => e(Object.assign({targets: [3.0, 3.4]}, o));
+const six = (p5, prov, o) => Object.assign({pivots: e({}).pivots.concat([P(5, p5, 'H', 5, prov)])}, o);
+const rd = (x) => x === null ? null : Math.round(x * 10000) / 10000;
+const pl = (r) => r && {mode: r.mode, side: r.side, zone: r.zone.map(rd), stop: rd(r.stop), targets: r.targets.map(rd), rr: rd(r.rr), state: r.state};
+out.plan = {
+  w4end: pl(X.frcPlan(up({}), 2.5)), w4end_above: X.frcPlan(up({}), 3.1).state, w4end_below: X.frcPlan(up({}), 2.37).state, w4end_broken: X.frcPlan(up({}), 2.3).state,
+  w5: pl(X.frcPlan(up(six(3.2, true, {forming5: true, invalidation: {level: 2.4, side: 'below'}})), 3.2)),
+  done: pl(X.frcPlan(up(six(3.2, false, {complete: true, invalidation: {level: 3.2, side: 'above'}})), 3.15)),
+  watch: pl(X.frcPlan(up({pivots: e({}).pivots.map((p, i) => i === 4 ? Object.assign({}, p, {provisional: true}) : p)}), 2.7)),
+  down: pl(X.frcPlan(dn({targets: [1.0, 0.6], pivots: [P(0, 3, 'H', 0), P(1, 2, 'L', 1), P(2, 2.5, 'H', 2), P(3, 1, 'L', 3), P(4, 1.6, 'H', 4)], invalidation: {level: 2.0, side: 'above'}}), 1.5)),
+  none: X.frcPlan({status: 'none'}, 1), nul: X.frcPlan(null, 1),
+  bad_stop: X.frcPlan(up(six(3.2, true, {forming5: true, invalidation: {level: 2.85, side: 'below'}})), 2.9),
+  no_price: X.frcPlan(up({}), null).state,
+};
 const bars = [0, 1, 2, 3, 4].map(k => ({time: k * 900}));
 const main = [0, 900, 1800, 2700, 3600, 4500];
 out.series_ok = X.frcSeriesData(bars, e({}), main, 900, 900).map(p => [p.time, p.value]);
@@ -70,6 +86,14 @@ def test_fractal_helpers():
     assert o["hooked"] is True
     assert o["snap"] == [100, 100, None, 200, None]
     assert o["phase"] == ["none", "none", "w4end", "done", "w5", "w4"]
+    pl = o["plan"]
+    assert pl["w4end"] == {"mode": "with", "side": "long", "zone": [2.4, 2.58], "stop": 2.34, "targets": [3.0, 3.4], "rr": 3.4, "state": "in"}      # 4파 끝: 4파 저점~(3파 되돌림 30%) 진입, 손절은 저점 아래, 목표는 5파 목표
+    assert [pl["w4end_above"], pl["w4end_below"], pl["w4end_broken"], pl["no_price"]] == ["above", "below", "broken", "wait"]
+    assert pl["w5"] == {"mode": "pullback", "side": "long", "zone": [2.8, 2.8944], "stop": 2.4, "targets": [3.0, 3.4], "rr": 0.3417, "state": "above"}                 # 눌림 구간(2.8~2.89) 위에 이미 있음, 손익비는 낮음
+    assert pl["done"]["mode"] == "correction" and pl["done"]["side"] == "short" and pl["done"]["zone"] == [3.08, 3.2] and pl["done"]["stop"] == 3.28 and pl["done"]["targets"] == [2.3596, 1.8404] and pl["done"]["state"] == "in"
+    assert pl["watch"]["mode"] == "watch" and pl["watch"]["zone"] == [2.25, 2.646] and pl["watch"]["stop"] == 2 and pl["watch"]["state"] == "above"
+    assert pl["down"] == {"mode": "with", "side": "short", "zone": [1.42, 1.6], "stop": 1.66, "targets": [1.0, 0.6], "rr": 3.4, "state": "in"}                       # 하락은 위아래가 거울
+    assert pl["none"] is None and pl["nul"] is None and pl["bad_stop"] is None                                                                               # 손절이 진입 구간 안쪽이면 계획을 만들지 않는다
     sd = o["side"]
     assert [sd["w4end_up"]["side"], sd["w5_up"]["side"], sd["done_up"]["side"]] == ["long", "long", "short"]          # 4파 끝·5파 진행 → 같은 방향, 5파 완성 → 조정(반대)
     assert [sd["w4end_dn"]["side"], sd["done_dn"]["side"]] == ["short", "long"]

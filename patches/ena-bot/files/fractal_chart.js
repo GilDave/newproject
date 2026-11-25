@@ -66,6 +66,34 @@ function frcOverall(items) {
   else note = '큰 흐름은 ' + nm(big.side) + ', 단타는 ' + nm(small.side) + ' → 단타 ' + nm(small.side) + '은 큰 흐름과 반대(역추세)라 짧게. 그 움직임이 끝나는 자리에서 ' + nm(big.side) + ' 재개를 관찰';
   return {big, small, note};
 }
+// 한 시간봉의 '가설 진입 계획'(진입 구간 · 손절 · 목표 · 손익비). 파동 위치에서 정석적으로 쓰는 되돌림 비율로 만든 참고 가격이다(매매 신호가 아님).
+//  4파 끝(w4end): 4파 저점(고점) 근처 진입, 손절은 그 바깥 · 5파 진행(w5): 지금까지의 5파를 38~50% 되돌린 자리(눌림) · 5파 완성(done): 반대 방향, 고점(저점) 근처에서 전체 상승(하락)의 38.2%·61.8% 되돌림을 목표
+//  4파 조정 중(w4): 관망이지만 '4파가 끝날 수 있는 구간'(3파의 23.6~50% 되돌림)을 조건부 관찰 구간으로 보여준다
+function frcPlan(e, price) {
+  if (!e || e.status !== 'ok') return null;
+  const ph = frcPhase(e), k = ph.key, s = e.direction === 'up' ? 1 : -1, q = e.pivots.map(p => p.price);
+  let mode, zone, stop, targets, side;
+  if (k === 'w4end') {
+    const w = Math.abs(q[3] - q[4]); mode = 'with'; side = s > 0 ? 'long' : 'short';
+    zone = [q[4], q[4] + s * 0.3 * w]; stop = q[4] - s * 0.1 * w; targets = e.targets.slice();
+  } else if (k === 'w5') {
+    const w5 = Math.abs(q[5] - q[4]); mode = 'pullback'; side = s > 0 ? 'long' : 'short';
+    zone = [q[5] - s * 0.5 * w5, q[5] - s * 0.382 * w5]; stop = e.invalidation.level; targets = e.targets.slice();
+  } else if (k === 'done') {
+    const w5 = Math.abs(q[5] - q[4]), tot = Math.abs(q[5] - q[0]); mode = 'correction'; side = s > 0 ? 'short' : 'long';
+    zone = [q[5] - s * 0.15 * w5, q[5]]; stop = e.invalidation.level + s * 0.1 * w5; targets = [q[5] - s * 0.382 * tot, q[5] - s * 0.618 * tot];
+  } else if (k === 'w4') {
+    const w3 = Math.abs(q[3] - q[2]); mode = 'watch'; side = s > 0 ? 'long' : 'short';
+    zone = [q[3] - s * 0.5 * w3, q[3] - s * 0.236 * w3]; stop = e.invalidation.level; targets = e.targets.slice();
+  } else return null;
+  const lo = Math.min(zone[0], zone[1]), hi = Math.max(zone[0], zone[1]), long = side === 'long', mid = (lo + hi) / 2;
+  if (long ? !(stop < lo) : !(stop > hi)) return null;                                   // 손절이 진입 구간의 바깥이 아니면 만들 수 없음
+  targets = targets.filter(t => long ? t > hi : t < lo).sort((a, b) => long ? a - b : b - a);   // 이익 쪽에 있는 목표만, 가까운 것부터
+  const risk = Math.abs(mid - stop), rr = targets.length && risk > 0 ? Math.abs(targets[0] - mid) / risk : null;
+  let state = 'wait';
+  if (price != null) state = price >= lo && price <= hi ? 'in' : (long ? (price > hi ? 'above' : (price < stop ? 'broken' : 'below')) : (price < lo ? 'above' : (price > stop ? 'broken' : 'below')));
+  return {mode, side, zone: [lo, hi], stop, targets, rr, state};
+}
 // 한 시간봉의 엘리엇 후보를 차트의 봉 시각(mainTimes)에 맞춘 선·표시 데이터로 바꾼다. 차트보다 짧은 시간봉이면 null(겹쳐서 그릴 수 없음).
 function frcSeriesData(tfBars, e, mainTimes, tfSec, mainSec) {
   if (!e || e.status !== 'ok' || !mainTimes.length || tfSec < mainSec) return null;
@@ -151,7 +179,7 @@ function frcBox() {
   if (FRC.collapsed) return;
   const mainSec = frcMainSec(), price = bars.length ? bars[bars.length - 1].close : null;
   const tbl = mk('table', undefined, 'border-collapse:collapse;width:100%;margin-top:6px'), th = tbl.insertRow();
-  for (const h of ['시간봉', '현재 위치', '관점 (롱/숏)', '무효화 가격 (현재가 대비)', '5파 목표 구간', '차트']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:3px 8px;white-space:nowrap'));
+  for (const h of ['시간봉', '현재 위치', '관점 (롱/숏)', '진입 계획 (가설)', '무효화 가격 (현재가 대비)', '차트']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:3px 8px;white-space:nowrap'));
   let ref = null; const sides = [];
   for (const tf0 of FRC_TFS) { const name = tf0[0], e0 = frcElliott(name); if (FRC.on[name] && e0 && e0.status === 'ok') { ref = e0; break; } }
   for (const [name, iv, sec, color] of FRC_TFS) {
@@ -165,8 +193,13 @@ function frcBox() {
     if (FRC.on[name]) sides.push({name, side: v.side});
     const bd = mk('span', v.badge, 'display:inline-block;min-width:34px;text-align:center;padding:0 7px;border-radius:5px;font-weight:700;color:#fff;margin-right:6px;background:' + (v.side === 'long' ? '#1e8e5a' : v.side === 'short' ? '#c62828' : '#4a5168'));
     vc.appendChild(bd); vc.appendChild(document.createTextNode(v.why + (v.counter ? ' · 큰 흐름과 반대(역추세 단타, 짧게)' : '')));
+    const pc = tr.insertCell(), pl = e && e.status === 'ok' ? frcPlan(e, price) : null;
+    if (pl) {
+      const ML = {with: '4파 끝 진입', pullback: '눌림 진입(늦은 구간)', correction: '조정 진입(역방향)', watch: '조건부 관찰(4파 끝 확인 후)'}, STT = {in: '지금 구간 안', above: '구간 밖(' + (pl.side === 'long' ? '위' : '아래') + ') — 눌림·되돌림 대기', below: '구간 밖(' + (pl.side === 'long' ? '아래' : '위') + ')', broken: '손절 기준을 이미 벗어남', wait: ''};
+      pc.appendChild(mk('div', ML[pl.mode] + ' · 진입 ' + frcFmt(pl.zone[0]) + ' ~ ' + frcFmt(pl.zone[1]) + (STT[pl.state] ? ' · ' + STT[pl.state] : ''), pl.state === 'in' ? 'font-weight:700' : ''));
+      pc.appendChild(mk('div', '손절 ' + frcFmt(pl.stop) + ' · 목표 ' + (pl.targets.length ? pl.targets.map(frcFmt).join(' / ') : '이미 넘음') + (pl.rr != null ? ' · 손익비 ' + pl.rr.toFixed(2) : ''), 'opacity:.85'));
+    } else pc.textContent = '—';
     tr.insertCell().textContent = e && e.status === 'ok' ? frcFmt(e.invalidation.level) + (price ? ' (' + ((e.invalidation.level / price - 1) * 100).toFixed(1) + '%)' : '') + ' ' + (e.invalidation.side === 'above' ? '위로' : '아래로') + ' 벗어나면 무효' : '—';
-    tr.insertCell().textContent = e && e.status === 'ok' && e.targets.length ? frcFmt(Math.min(...e.targets)) + ' ~ ' + frcFmt(Math.max(...e.targets)) : '—';
     const drawn = FRC.drawn[name]; tr.insertCell().textContent = !FRC.on[name] ? '꺼짐' : sec < mainSec ? '차트보다 짧아 생략' : drawn ? '그림' : '—';
     for (const td of tr.cells) td.style.cssText = 'padding:3px 8px;vertical-align:top;text-align:left';
   }
@@ -181,7 +214,7 @@ function frcBox() {
   sum.appendChild(mk('span', ov.note, 'opacity:.9'));
   box.insertBefore(sum, tbl);
   box.appendChild(mk('div', '차트의 시간봉(' + Math.round(mainSec / 60) + '분)보다 짧은 시간봉은 선이 겹쳐 그릴 수 없어 표에만 나옵니다. 15분 차트에서 보면 네 시간봉이 모두 겹쳐 그려집니다. 굵은 선일수록 큰 시간봉입니다. 「단타 민감 모드」는 30분·15분에서 더 작은 스윙(1.5 ATR)도 인정해 후보가 늘지만 잡음도 늘어납니다.', 'opacity:.65;font-size:11px;margin-top:4px'));
-  box.appendChild(mk('div', '엘리엇 파동 세기는 주관적이고 앞으로의 가격을 보장하지 않습니다. 이 규칙의 신호는 과거 통계로 검증되지 않았습니다. "관점"은 각 시간봉의 파동 위치에서 기대되는 방향일 뿐 매매 신호가 아닙니다. 손절 기준은 무효화 가격이며, 단타는 작은 시간봉의 무효화 가격을 짧은 손절 기준으로 참고하세요.', 'opacity:.65;font-size:11px'));
+  box.appendChild(mk('div', '엘리엇 파동 세기는 주관적이고 앞으로의 가격을 보장하지 않습니다. 이 규칙의 신호는 과거 통계로 검증되지 않았습니다. "관점"은 각 시간봉의 파동 위치에서 기대되는 방향일 뿐 매매 신호가 아닙니다. "진입 계획"은 정석적인 되돌림 비율(23.6·38.2·50·61.8%)로 만든 가설 가격이며 체결을 보장하지 않습니다. 위의 진입 계획 카드(지표 기준)와는 계산이 다릅니다. 손절 기준은 무효화 가격이며, 단타는 작은 시간봉의 무효화 가격을 짧은 손절 기준으로 참고하세요.', 'opacity:.65;font-size:11px'));
 }
 function frcDraw() {
   try {
