@@ -779,7 +779,7 @@ class DashboardApp:
                "message": lab.last_message, "next_eval": (cfg["last_eval"] + cfg["interval_hours"] * 3600) if cfg["enabled"] and cfg["last_eval"] else None,
                "next_analyze": (cfg["last_analyze"] + cfg["analyze_hours"] * 3600) if cfg["auto_analyze"] and cfg["last_analyze"] else None,
                "default_protect": botlab_mod.DEFAULT_PROTECT, "latest": hist[-1] if hist else None, "series": lab.series(hist),
-               "services": lab.services(), "health": lab.health(proj) if proj else None, "policy": None, "arbiter_shadow": None,
+               "services": lab.services(), "stray": lab.stray_processes() if proj else None, "health": lab.health(proj) if proj else None, "policy": None, "arbiter_shadow": None,
                "ollama": next((p for p in self.providers_info() if p["name"] == "ollama"), None), "recommended_protect": botlab_mod.PAPER_PROTECT,
                "trading": None, "keys": None, "keys_check": self._keys_check(), "monitor": self.botlab.monitor() if proj else None,
                "alerts": self.alerts.public()}

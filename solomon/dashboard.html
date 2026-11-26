@@ -3336,7 +3336,7 @@ $("rp-print").onclick = () => { if (!rp.cur || !rp.cur.markdown) return toast("�
 const ENA_SVC = {"com.ena.dashboard": ["모니터 화면 (127.0.0.1:8787)", "화면과 모니터 서버 코드를 바꾼 뒤 재시작합니다. 거래에는 영향이 없습니다.", true],
   "com.ena.trend": ["거래 엔진 (추세 판단·주문)", "엔진 코드나 config.json(모드)을 바꾼 뒤 재시작합니다. 재시작하는 동안 판단이 잠깐 멈추고, 4시간 봉이 닫히는 시각과 겹치면 그 판단 1번을 놓칠 수 있습니다.", true],
   "com.ena.report": ["리포트", "보고서 작성 서비스입니다.", false],
-  "com.ena.ollama": ["로컬 모델 서버 (Ollama)", "재시작하면 올라와 있던 모델이 내려가 다음 사용 때 다시 올립니다. 솔로몬의 결정권자도 이 서버를 씁니다.", false]};
+  "com.ena.ollama": ["로컬 모델 서버 (Ollama)", "재시작하면 올라와 있던 모델이 내려가 다음 사용 때 다시 올립니다. 솔로몬의 결정권자를 켜면 이 서버를 씁니다.", false]};
 async function openEnaRestart(){
   let svc;
   try { const b = await api("/api/botlab"); svc = (b.services && b.services.items) || []; bot = b; } catch (e) { return toast(e.message, true); }
@@ -3352,6 +3352,14 @@ async function openEnaRestart(){
     row.appendChild(cb); row.appendChild(document.createTextNode(" " + info[0] + " — " + (x.running ? "● 실행 중" : "○ 중지") + " (" + x.label + ")"));
     body.appendChild(row); if (info[1]) body.appendChild(el("div", "hint", info[1]));
   });
+  const stray = (bot && bot.stray && bot.stray.items) || [];
+  if (stray.length) {
+    const w = el("div", "warnbox");
+    w.appendChild(el("div", "", "⚠ 서비스로 등록되지 않은 ENA 프로세스 " + stray.length + "개가 실행 중입니다 (재시작 대상 아님)"));
+    stray.forEach(x => w.appendChild(el("div", "hint", "PID " + x.pid + " · " + x.command + " · 실행 " + x.running_for +
+      (x.writer ? " · " + x.writer + ": 서비스와 같은 bot.db를 쓸 수 있습니다. 의도한 것이 아니면 터미널에서 종료하세요 (kill " + x.pid + ")" : ""))));
+    body.appendChild(w);
+  }
   const out = el("pre", "tail"); out.hidden = true;
   const go = el("button", "danger", "선택한 서비스 재시작"); go.style.marginTop = "10px";
   go.onclick = async () => {

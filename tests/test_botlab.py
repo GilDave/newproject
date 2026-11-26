@@ -346,3 +346,41 @@ def test_dashboard_endpoint_and_buttons(tmp_path, monkeypatch):
     for needle in ('id="t-ena-restart"', "ENA 봇 재시작", '"/api/botlab/restart"', "openEnaRestart", "com.ena.trend", "실거래 모드입니다", "거래 엔진은 맨 마지막"):
         assert needle in html, needle
     assert html.index('id="t-restart"') < html.index('id="t-ena-restart"')  # to the right of the dashboard's own restart button
+
+
+def _ps_run(ps_text, lc_text="100\t0\tcom.ena.trend\n"):
+    def run(args, **kw):
+        if args[0] == "ps":
+            return subprocess.CompletedProcess(args, 0, ps_text, "")
+        if args[0] == "launchctl":
+            return subprocess.CompletedProcess(args, 0, lc_text, "")
+        raise AssertionError(args)
+    return run
+
+
+PY = "/usr/bin/python3 -m ena_bot --config /b/config.json"
+
+
+def test_unmanaged_ena_processes_are_listed_but_launchd_ones_and_their_children_are_not(tmp_path):
+    ps = (f"  100     1 05:00:00 caffeinate -i {PY} trend-run\n"
+          f"  101   100 05:00:00 /b/.venv/bin/python -m ena_bot --config /b/config.json trend-run\n"
+          f"  200     1 7-01:10:00 {PY} run --env /b/.env\n"
+          f"  300     1 01:00 /usr/bin/python3 -m pytest\n"
+          f"  400     1 02:00 caffeinate -i /usr/bin/python3 -m ena_bot dashboard\n")
+    L = lab(tmp_path, _ps_run(ps))
+    out = L.stray_processes()
+    assert out["available"] is True
+    by_pid = {i["pid"]: i for i in out["items"]}
+    assert set(by_pid) == {200}
+    assert by_pid[200]["command"] == "run" and by_pid[200]["running_for"] == "7-01:10:00" and by_pid[200]["writer"]
+
+
+def test_a_failing_ps_never_breaks_the_page(tmp_path):
+    def boom(args, **kw):
+        raise OSError("no ps")
+    assert lab(tmp_path, boom).stray_processes() == {"available": False, "items": []}
+    assert lab(tmp_path).stray_processes()["available"] is False  # the shared FakeRun cannot answer ps: tolerated
+
+
+def test_nothing_stray_means_an_empty_list(tmp_path):
+    assert lab(tmp_path, _ps_run("  100     1 05:00:00 caffeinate -i x\n")).stray_processes() == {"available": True, "items": []}

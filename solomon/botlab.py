@@ -122,6 +122,52 @@ class BotLab:
                 items.append({"label": parts[2], "running": parts[0].strip() not in ("-", ""), "last_exit": parts[1].strip()})
         return {"available": True, "items": sorted(items, key=lambda x: x["label"])}
 
+    # An `ena_bot` process that launchd does not manage (started by hand, for example in a terminal). It is invisible in the
+    # service list above yet may write the same bot.db: the old 3-minute engine (`run`) once did this for a week unnoticed.
+    ENA_SUBCOMMANDS = ("run", "trend-run", "dashboard", "report", "trend", "trend-compare", "learn-train", "fetch", "backtest",
+                       "walkforward", "synth", "resume", "hayes")
+    WRITERS = {"run": "3분봉 엔진(v1)", "trend-run": "추세 엔진"}  # long-running writers of bot.db
+
+    def stray_processes(self) -> dict:
+        """Read-only. Returns {"available": bool, "items": [...]}: ena_bot processes that are not launchd services or their children."""
+        try:
+            ps = self._run(["ps", "-axww", "-o", "pid=,ppid=,etime=,command="], capture_output=True, text=True, timeout=10)
+            lc = self._run(["launchctl", "list"], capture_output=True, text=True, timeout=10)
+            rows = []
+            for line in (ps.stdout or "").splitlines():
+                m = re.match(r"\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$", line)
+                if m:
+                    rows.append((int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)))
+            managed = set()
+            for line in (lc.stdout or "").splitlines():
+                parts = line.split("\t")
+                if len(parts) == 3 and parts[2].startswith("com.ena.") and parts[0].strip().isdigit():
+                    managed.add(int(parts[0]))
+            kids: dict = {}
+            for pid, ppid, _e, _c in rows:
+                kids.setdefault(ppid, []).append(pid)
+            stack = list(managed)
+            while stack:  # the managed processes and everything they started
+                for k in kids.get(stack.pop(), []):
+                    if k not in managed:
+                        managed.add(k)
+                        stack.append(k)
+            me = os.getpid()
+            items = []
+            for pid, _pp, etime, cmd in rows:
+                toks = cmd.split()
+                if pid in managed or pid == me or "-m" not in toks or "ena_bot" not in toks:
+                    continue
+                if toks[0].endswith("caffeinate"):
+                    continue
+                rest = toks[toks.index("ena_bot") + 1:]
+                sub = next((t for t in rest if t in self.ENA_SUBCOMMANDS), "")
+                items.append({"pid": pid, "command": sub or "?", "running_for": etime, "line": re.sub(r"\s+", " ", cmd)[-160:],
+                              "writer": self.WRITERS.get(sub, "")})
+            return {"available": True, "items": items}
+        except Exception:  # a failing `ps` must never break the page
+            return {"available": False, "items": []}
+
     def restart_services(self, labels: list, sleep: Callable[[float], None] = time.sleep) -> dict:
         """Restart the bot's launchd services (`launchctl kickstart -k`). Only labels `launchctl list` shows AND that start with com.ena. are
         accepted, so nothing else on the computer can be touched; the trading engine goes last."""
