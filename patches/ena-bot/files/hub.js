@@ -4,11 +4,12 @@
 // 포지션 크기는 (계좌 × 위험 %) ÷ 손절 거리. 매매 신호가 아니며 이 규칙들은 과거 통계로 검증되지 않았다.
 const HUB_TABS = [['sum', '종합'], ['ent', '진입 계획 (지표)'], ['ell', '엘리엇'], ['prc', '가격 비교 · AI']];
 const HUB_FEE = 0.00055, HUB_SLIP = 0.0001, HUB_PASS = 7, HUB_WAIT = 5, HUB_MIN_RR = 1.5, HUB_MAX_COST = 0.15;
-const HUB = {tab: 'sum', acct: 1000, risk: 1, loaded: false, box: null, key: ''};
+const HUB_FS = [12, 13, 14, 15, 16, 18, 20];   // 글자 크기 단계(px). 기본 14
+const HUB = {tab: 'sum', acct: 1000, risk: 1, fs: 14, loaded: false, box: null, key: ''};
 function hubStore() {
   try {
-    if (!HUB.loaded) { HUB.loaded = true; const v = JSON.parse(localStorage.getItem('ena_hub_v1') || '{}'); if (['sum', 'ent', 'ell', 'prc'].indexOf(v.tab) >= 0) HUB.tab = v.tab; if (v.acct > 0) HUB.acct = v.acct; if (v.risk > 0) HUB.risk = v.risk; }
-    else localStorage.setItem('ena_hub_v1', JSON.stringify({tab: HUB.tab, acct: HUB.acct, risk: HUB.risk}));
+    if (!HUB.loaded) { HUB.loaded = true; const v = JSON.parse(localStorage.getItem('ena_hub_v1') || '{}'); if (['sum', 'ent', 'ell', 'prc'].indexOf(v.tab) >= 0) HUB.tab = v.tab; if (v.acct > 0) HUB.acct = v.acct; if (v.risk > 0) HUB.risk = v.risk; if (HUB_FS.indexOf(v.fs) >= 0) HUB.fs = v.fs; }
+    else localStorage.setItem('ena_hub_v1', JSON.stringify({tab: HUB.tab, acct: HUB.acct, risk: HUB.risk, fs: HUB.fs}));
   } catch (e) { /* 기억하지 못해도 동작한다 */ }
 }
 // 수수료·슬리피지(왕복)가 위험(손절까지 거리)의 몇 배인가
@@ -58,6 +59,23 @@ function hubSize(acct, riskPct, n) {
   const qty = riskUsd / per, notional = qty * n.mid;
   return {riskUsd, qty, notional, lev: notional / acct};
 }
+// 허브 안의 모든 탭(진입 계획 카드·엘리엇·가격 비교)이 같은 글자 크기를 쓰게 한다. 각 블록이 직접 정한 12px·11px 도 허브의 크기 단계에 맞춰 키운다.
+function hubStyle() {
+  if (document.getElementById('hub-style')) return;
+  const st = document.createElement('style'); st.id = 'hub-style';
+  st.textContent = '#analysis-hub{font-size:var(--hub-fs,14px);line-height:1.6}'
+    + '#analysis-hub #fractal-box,#analysis-hub #confluence-box,#analysis-hub .entc{font-size:var(--hub-fs,14px)!important;line-height:1.6!important}'
+    + '#analysis-hub .entc .fav{font-size:calc(var(--hub-fs,14px) + 3px)!important}'
+    + '#analysis-hub [style*="font-size:11px"]{font-size:calc(var(--hub-fs,14px) - 2px)!important}'
+    + '#analysis-hub table{font-size:inherit}#analysis-hub th,#analysis-hub td{vertical-align:top}'
+    + '#analysis-hub input[type=number]{font:inherit;padding:2px 6px;background:#0b0e14;color:#d1d4dc;border:1px solid #2a2e39;border-radius:6px}'
+    + '#analysis-hub button{font:inherit}'
+    + '#analysis-hub .hub-sum{display:grid;grid-template-columns:minmax(440px,1.15fr) minmax(380px,0.85fr);gap:12px 32px;align-items:start}'
+    + '@media(max-width:1000px){#analysis-hub .hub-sum{grid-template-columns:1fr}}';
+  document.head.appendChild(st);
+}
+function hubApplyFs() { const h = document.getElementById('analysis-hub'); if (h) h.style.setProperty('--hub-fs', HUB.fs + 'px'); }
+function hubFontStep(d) { const i = HUB_FS.indexOf(HUB.fs), j = Math.max(0, Math.min(HUB_FS.length - 1, i + d)); HUB.fs = HUB_FS[j]; hubStore(); hubApplyFs(); const l = document.getElementById('hub-fs-label'); if (l) l.textContent = HUB.fs + 'px'; }
 function hubSetTab(k) {
   HUB.tab = k; hubStore();
   for (const t of HUB_TABS) {
@@ -70,17 +88,22 @@ function hubSetTab(k) {
 function hubEnsure() {
   if (HUB.box && HUB.box.isConnected) return HUB.box;
   const cw = document.getElementById('chartwrap'), cbox = cw && cw.closest ? cw.closest('.chartbox') : null; if (!cbox) return null;
-  hubStore();
+  hubStore(); hubStyle();
   const hub = document.createElement('div'); hub.id = 'analysis-hub';
-  hub.style.cssText = 'margin:8px 0;border:1px solid #2a2e39;border-radius:10px;background:#101520;color:#d1d4dc;font:12px/1.6 sans-serif';
+  hub.style.cssText = 'margin:8px 0;border:1px solid #2a2e39;border-radius:10px;background:#101520;color:#d1d4dc;font-family:sans-serif';
+  hub.style.setProperty('--hub-fs', HUB.fs + 'px');
   const bar = document.createElement('div'); bar.setAttribute('role', 'tablist'); bar.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;padding:6px 8px;border-bottom:1px solid #2a2e39;align-items:center';
-  const ttl = document.createElement('b'); ttl.textContent = '분석 허브'; ttl.style.marginRight = '8px'; bar.appendChild(ttl);
+  const ttl = document.createElement('b'); ttl.textContent = '분석 허브'; ttl.style.cssText = 'margin-right:10px;font-size:calc(var(--hub-fs) + 2px)'; bar.appendChild(ttl);
   for (const t of HUB_TABS) {
     const b = document.createElement('button'); b.type = 'button'; b.id = 'hub-tab-' + t[0]; b.textContent = t[1]; b.setAttribute('role', 'tab');
-    b.style.cssText = 'padding:4px 12px;border-radius:7px;border:1px solid #2a2e39;cursor:pointer;font:inherit'; b.onclick = () => hubSetTab(t[0]); bar.appendChild(b);
+    b.style.cssText = 'padding:5px 14px;border-radius:7px;border:1px solid #2a2e39;cursor:pointer;font:inherit'; b.onclick = () => hubSetTab(t[0]); bar.appendChild(b);
   }
+  const fsw = document.createElement('span'); fsw.style.cssText = 'margin-left:auto;display:inline-flex;gap:4px;align-items:center;opacity:.9';
+  const fl = document.createElement('span'); fl.textContent = '글자'; fsw.appendChild(fl);
+  for (const [lab, d] of [['A−', -1], ['A+', 1]]) { const b = document.createElement('button'); b.type = 'button'; b.textContent = lab; b.title = '허브 안의 글자 크기'; b.style.cssText = 'padding:2px 9px;border-radius:7px;border:1px solid #2a2e39;background:transparent;color:#d1d4dc;cursor:pointer'; b.onclick = () => hubFontStep(d); fsw.appendChild(b); if (d < 0) { const lb = document.createElement('span'); lb.id = 'hub-fs-label'; lb.textContent = HUB.fs + 'px'; lb.style.cssText = 'min-width:36px;text-align:center'; fsw.appendChild(lb); } }
+  bar.appendChild(fsw);
   hub.appendChild(bar);
-  for (const t of HUB_TABS) { const p = document.createElement('div'); p.id = 'hub-pane-' + t[0]; p.style.cssText = 'padding:8px 10px'; hub.appendChild(p); }
+  for (const t of HUB_TABS) { const p = document.createElement('div'); p.id = 'hub-pane-' + t[0]; p.style.cssText = 'padding:10px 14px'; hub.appendChild(p); }
   const anchor = cbox.querySelector('.hint');
   if (anchor) anchor.insertAdjacentElement('afterend', hub); else cbox.appendChild(hub);
   const ec = document.getElementById('entry-card'), pe = document.getElementById('hub-pane-ent');
@@ -90,7 +113,7 @@ function hubEnsure() {
 }
 function hubBadge(side, text) {
   const b = document.createElement('span'); b.textContent = text !== undefined ? text : (side === 'long' ? '롱' : side === 'short' ? '숏' : '—');
-  b.style.cssText = 'display:inline-block;min-width:30px;text-align:center;padding:0 7px;border-radius:5px;font-weight:700;color:#fff;background:' + (side === 'long' ? '#1e8e5a' : side === 'short' ? '#c62828' : '#4a5168') + (side ? '' : ';opacity:.55');
+  b.style.cssText = 'display:inline-block;min-width:2.4em;text-align:center;padding:0 8px;border-radius:6px;font-weight:700;color:#fff;background:' + (side === 'long' ? '#1e8e5a' : side === 'short' ? '#c62828' : '#4a5168') + (side ? '' : ';opacity:.55');
   return b;
 }
 function hubFmt(v) { return typeof fmt === 'function' ? fmt(v, 5) : Number(v).toFixed(5); }
@@ -102,33 +125,38 @@ function hubRender(res, price) {
     if (key === HUB.key && pane.firstChild && pane.firstChild.id === 'hub-sum-root') return;
     HUB.key = key; pane.textContent = '';
     const mk = (tag, text, css) => { const d = document.createElement(tag); if (text !== undefined) d.textContent = text; if (css) d.style.cssText = css; return d; };
-    const root = mk('div', undefined, 'display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start'); root.id = 'hub-sum-root';
+    const root = mk('div'); root.className = 'hub-sum'; root.id = 'hub-sum-root';
     // ---- 왼쪽: 결론 · 체크리스트 · 추천 계획 · 크기
-    const left = mk('div', undefined, 'flex:1 1 430px;min-width:300px');
-    const head = mk('div', undefined, 'display:flex;gap:8px;align-items:center;flex-wrap:wrap');
-    const hb = hubBadge(ck.side || 'wait', ck.side ? (ck.side === 'long' ? '롱 우세' : '숏 우세') : '관망'); hb.style.fontSize = '15px'; hb.style.padding = '1px 12px'; head.appendChild(hb);
-    head.appendChild(mk('b', '진입 준비도 ' + (ck.total ? ck.pass + ' / ' + ck.total : '—'), 'font-size:14px'));
-    const stc = ck.status === 'ready' ? '#66bb6a' : ck.status === 'wait' ? '#ffb74d' : '#9aa3b5'; head.appendChild(mk('span', ck.text, 'font-weight:700;color:' + stc));
-    left.appendChild(head);
-    left.appendChild(mk('div', v.text, 'margin:4px 0;opacity:.9'));
+    const left = mk('div');
+    const head = mk('div', undefined, 'display:flex;gap:12px;align-items:center;flex-wrap:wrap');
+    const hb = hubBadge(ck.side || 'wait', ck.side ? (ck.side === 'long' ? '롱 우세' : '숏 우세') : '관망'); hb.style.fontSize = 'calc(var(--hub-fs) + 6px)'; hb.style.padding = '2px 16px'; head.appendChild(hb);
+    const sc = mk('div'); sc.appendChild(mk('div', '진입 준비도 ' + (ck.total ? ck.pass + ' / ' + ck.total : '—'), 'font-weight:700;font-size:calc(var(--hub-fs) + 3px)'));
+    if (ck.total) { const meter = mk('div', undefined, 'display:flex;gap:3px;margin-top:3px'); ck.items.forEach(it => meter.appendChild(mk('span', '', 'width:22px;height:7px;border-radius:3px;background:' + (it.ok ? '#43a047' : '#37404f')))); sc.appendChild(meter); }
+    head.appendChild(sc); left.appendChild(head);
+    const stc = ck.status === 'ready' ? '#66bb6a' : ck.status === 'wait' ? '#ffb74d' : '#9aa3b5';
+    left.appendChild(mk('div', ck.text, 'margin-top:6px;font-weight:700;font-size:calc(var(--hub-fs) + 1px);color:' + stc));
+    left.appendChild(mk('div', v.text, 'margin:2px 0 6px;opacity:.9'));
     if (ck.items.length) {
-      const ul = mk('div', undefined, 'margin-top:4px');
-      for (const it of ck.items) { const li = mk('div', undefined, 'display:flex;gap:6px'); li.appendChild(mk('span', it.ok ? '✓' : '✗', 'width:14px;font-weight:700;color:' + (it.ok ? '#66bb6a' : '#ef5350'))); li.appendChild(mk('span', it.label + (it.note ? ' — ' + it.note : ''), it.ok ? '' : 'color:#ffb74d')); ul.appendChild(li); }
-      if (ck.ai) { const li = mk('div', undefined, 'display:flex;gap:6px;opacity:.7'); li.appendChild(mk('span', ck.ai === 'opp' ? '△' : '·', 'width:14px')); li.appendChild(mk('span', '참고: AI 규칙 점수는 ' + (ck.ai === 'same' ? '같은 방향' : ck.ai === 'opp' ? '반대 방향' : '의견 없음') + ' (과거 검증에서 우위가 없어 판정에는 넣지 않음)')); ul.appendChild(li); }
+      const ul = mk('div', undefined, 'margin-top:6px;display:grid;gap:2px');
+      for (const it of ck.items) { const li = mk('div', undefined, 'display:flex;gap:6px'); li.appendChild(mk('span', it.ok ? '✓' : '✗', 'width:1.2em;font-weight:700;color:' + (it.ok ? '#66bb6a' : '#ef5350'))); li.appendChild(mk('span', it.label + (it.note ? ' — ' + it.note : ''), it.ok ? '' : 'color:#ffb74d')); ul.appendChild(li); }
+      if (ck.ai) { const li = mk('div', undefined, 'display:flex;gap:6px;opacity:.7'); li.appendChild(mk('span', ck.ai === 'opp' ? '△' : '·', 'width:1.2em')); li.appendChild(mk('span', '참고: AI 규칙 점수는 ' + (ck.ai === 'same' ? '같은 방향' : ck.ai === 'opp' ? '반대 방향' : '의견 없음') + ' (과거 검증에서 우위가 없어 판정에는 넣지 않음)')); ul.appendChild(li); }
       left.appendChild(ul);
     }
-    const plan = mk('div', undefined, 'margin-top:8px;padding:6px 8px;border-radius:7px;background:#161b28');
-    plan.appendChild(mk('b', '추천 계획'));
+    const plan = mk('div', undefined, 'margin-top:10px;padding:10px 12px;border-radius:9px;background:#161b28');
+    plan.appendChild(mk('b', '추천 계획', 'font-size:calc(var(--hub-fs) + 1px)'));
     if (!best) plan.appendChild(mk('div', ck.side ? '공통 규칙을 통과한 ' + (ck.side === 'long' ? '롱' : '숏') + ' 진입 계획이 없습니다.' : '방향이 없어 계획을 만들지 않았습니다.', 'opacity:.75'));
     else {
       const n = best.n, M = {entry: '지표(진입 계획)', levels: '거래량 구간', fractal: '엘리엇'}, KO = {'1d': '1일', '4h': '4시간', '1h': '1시간', '30m': '30분', '15m': '15분'};
       plan.appendChild(mk('div', KO[best.tf] + ' · ' + M[best.method] + (n.inZone ? ' · 지금 구간 안' : ' · 현재가 대비 ' + (n.distPct * 100).toFixed(1) + '%')));
-      plan.appendChild(mk('div', '진입 ' + (n.hi - n.lo > 1e-12 ? hubFmt(n.lo) + ' ~ ' + hubFmt(n.hi) : hubFmt(n.mid)) + ' · 손절 ' + hubFmt(n.stop) + ' · 목표 ' + hubFmt(n.t1) + (n.t2 != null ? ' / ' + hubFmt(n.t2) : '') + ' · 손익비 ' + n.rr.toFixed(2), 'font-weight:700'));
-      const sz = mk('div', undefined, 'margin-top:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap');
+      const kv = mk('div', undefined, 'display:grid;grid-template-columns:repeat(4,auto);gap:2px 18px;margin-top:4px;justify-content:start');
+      for (const [lab, val] of [['진입', n.hi - n.lo > 1e-12 ? hubFmt(n.lo) + ' ~ ' + hubFmt(n.hi) : hubFmt(n.mid)], ['손절', hubFmt(n.stop)], ['목표', hubFmt(n.t1) + (n.t2 != null ? ' / ' + hubFmt(n.t2) : '')], ['손익비', n.rr.toFixed(2)]]) kv.appendChild(mk('span', lab, 'opacity:.6'));
+      for (const val of [n.hi - n.lo > 1e-12 ? hubFmt(n.lo) + ' ~ ' + hubFmt(n.hi) : hubFmt(n.mid), hubFmt(n.stop), hubFmt(n.t1) + (n.t2 != null ? ' / ' + hubFmt(n.t2) : ''), n.rr.toFixed(2)]) kv.appendChild(mk('b', val, 'font-size:calc(var(--hub-fs) + 1px)'));
+      plan.appendChild(kv);
+      const sz = mk('div', undefined, 'margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap');
       sz.appendChild(document.createTextNode('포지션 크기: 계좌'));
-      const ai = mk('input', undefined, 'width:80px'); ai.type = 'number'; ai.min = '1'; ai.value = String(HUB.acct); ai.setAttribute('aria-label', '계좌 USDT'); sz.appendChild(ai);
+      const ai = mk('input', undefined, 'width:6.5em'); ai.type = 'number'; ai.min = '1'; ai.value = String(HUB.acct); ai.setAttribute('aria-label', '계좌 USDT'); sz.appendChild(ai);
       sz.appendChild(document.createTextNode('USDT × 위험'));
-      const ri = mk('input', undefined, 'width:55px'); ri.type = 'number'; ri.min = '0.1'; ri.step = '0.1'; ri.value = String(HUB.risk); ri.setAttribute('aria-label', '위험 %'); sz.appendChild(ri); sz.appendChild(document.createTextNode('%'));
+      const ri = mk('input', undefined, 'width:4.2em'); ri.type = 'number'; ri.min = '0.1'; ri.step = '0.1'; ri.value = String(HUB.risk); ri.setAttribute('aria-label', '위험 %'); sz.appendChild(ri); sz.appendChild(document.createTextNode('%'));
       const out = mk('div', undefined, 'margin-top:2px;opacity:.95'); plan.appendChild(sz); plan.appendChild(out);
       const upd = () => {
         HUB.acct = Number(ai.value) || HUB.acct; HUB.risk = Number(ri.value) || HUB.risk; hubStore();
@@ -139,10 +167,10 @@ function hubRender(res, price) {
     }
     left.appendChild(plan); root.appendChild(left);
     // ---- 오른쪽: 시간봉 × 방법 매트릭스
-    const right = mk('div', undefined, 'flex:1 1 380px;min-width:300px');
-    right.appendChild(mk('b', '시간봉 × 방법 한눈에'));
-    const tbl = mk('table', undefined, 'border-collapse:collapse;margin-top:4px'), th = tbl.insertRow();
-    for (const h of ['시간봉', '지표', '엘리엇', '거래량(참고)', 'AI(참고)', '판정']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:1px 12px 1px 0;white-space:nowrap'));
+    const right = mk('div');
+    right.appendChild(mk('b', '시간봉 × 방법 한눈에', 'font-size:calc(var(--hub-fs) + 1px)'));
+    const tbl = mk('table', undefined, 'border-collapse:collapse;margin-top:6px;width:100%;max-width:640px'), th = tbl.insertRow();
+    for (const h of ['시간봉', '지표', '엘리엇', '거래량(참고)', 'AI(참고)', '판정']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:2px 10px 4px 0;white-space:nowrap'));
     const KO = {'1d': '1일', '4h': '4시간', '1h': '1시간', '30m': '30분', '15m': '15분'}, ST = {agree: '일치', single: '한쪽만', conflict: '충돌', none: '—'};
     for (const tf of ['1d', '4h', '1h', '30m', '15m']) {
       const r = res.rows.find(x => x.tf === tf), vr = v.rows.find(x => x.tf === tf); if (!r || !vr) continue;
@@ -152,12 +180,12 @@ function hubRender(res, price) {
       if (lv.length) lv.forEach((sd, i) => { const b = hubBadge(sd); b.style.marginRight = '3px'; b.style.opacity = '.7'; lc.appendChild(b); }); else lc.appendChild(hubBadge(null));
       const ab = hubBadge(r.ai && r.ai.side ? r.ai.side : null); ab.style.opacity = '.7'; tr.insertCell().appendChild(ab);
       const jd = tr.insertCell(); jd.textContent = ST[vr.state] + (vr.side ? ' · ' + (vr.side === 'long' ? '롱' : '숏') : ''); jd.style.color = vr.state === 'conflict' ? '#ffb74d' : vr.state === 'none' ? '#8a8f98' : '';
-      for (const td of tr.cells) { td.style.padding = '2px 12px 2px 0'; td.style.whiteSpace = 'nowrap'; td.style.textAlign = 'left'; }
+      for (const td of tr.cells) { td.style.padding = '3px 10px 3px 0'; td.style.whiteSpace = 'nowrap'; td.style.textAlign = 'left'; }
     }
     right.appendChild(tbl);
-    right.appendChild(mk('div', '판정에는 지표와 엘리엇만 반영합니다(같은 시간봉에서 일치 2점·한쪽만 1점·충돌 0점 × 시간봉 무게). 거래량 구간은 가격 근거, AI는 검증상 우위가 없어 참고로만 표시합니다. 자세한 가격과 근거는 위 탭에서 봅니다.', 'margin-top:4px;opacity:.6;font-size:11px'));
+    right.appendChild(mk('div', '판정에는 지표와 엘리엇만 반영합니다(같은 시간봉에서 일치 2점·한쪽만 1점·충돌 0점 × 시간봉 무게). 거래량 구간은 가격 근거, AI는 검증상 우위가 없어 참고로만 표시합니다. 자세한 가격과 근거는 위 탭에서 봅니다.', 'margin-top:6px;opacity:.65;font-size:calc(var(--hub-fs) - 2px);max-width:640px'));
     root.appendChild(right); pane.appendChild(root);
-    pane.appendChild(mk('div', '이 허브는 분석을 한 곳에 모은 것이지 매매 신호가 아닙니다. 판정 규칙·체크리스트 기준·위험 %는 과거 통계로 검증되지 않았습니다. 큰 시간봉이 방향을 정하고 작은 시간봉은 진입 시점만 정하는 top-down 순서로 읽고, 시간봉을 바꿔 가며 내 생각에 맞는 답을 찾는 것(확증 편향)은 피하세요.', 'margin-top:8px;opacity:.55;font-size:11px'));
+    pane.appendChild(mk('div', '이 허브는 분석을 한 곳에 모은 것이지 매매 신호가 아닙니다. 판정 규칙·체크리스트 기준·위험 %는 과거 통계로 검증되지 않았습니다. 큰 시간봉이 방향을 정하고 작은 시간봉은 진입 시점만 정하는 top-down 순서로 읽고, 시간봉을 바꿔 가며 내 생각에 맞는 답을 찾는 것(확증 편향)은 피하세요.', 'margin-top:12px;opacity:.6;font-size:calc(var(--hub-fs) - 2px)'));
   } catch (err) { /* 허브 표시 실패가 차트를 깨뜨리지 않게 한다 */ }
 }
 setTimeout(function () { try { hubEnsure(); } catch (e) { /* 아직 화면이 없으면 첫 그리기에서 만든다 */ } }, 0);
