@@ -5,11 +5,11 @@ const CF_TFS = ['15m', '30m', '1h', '4h', '1d'];
 const CF_KO = {'15m': '15분', '30m': '30분', '1h': '1시간', '4h': '4시간', '1d': '1일'};
 const CF_RULE = {reachAtr: 3.0, minStopAtr: 0.8, maxStopAtr: 3.5, maxStopPct: 0.10, tpAtr: 4.5, minRR: 1.2, reachPct: 0.08, clusterPct: 0.006};
 const CF_MIN = {'15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440};
-const CF = {aiFit: false, aiFitSeries: null, aiOn: true, aiLines: [], aiSeries: [], ai: null, aiLearn: null, aiAt: 0, aiBusy: false, levels: null, levelsAt: 0, busy: false, collapsed: false, lineOn: false, loaded: false, box: null, lines: [], key: '', last: null};
+const CF = {aiDetail: false, aiFit: false, aiFitSeries: null, aiOn: true, aiLines: [], aiSeries: [], ai: null, aiLearn: null, aiAt: 0, aiBusy: false, levels: null, levelsAt: 0, busy: false, collapsed: false, lineOn: false, loaded: false, box: null, lines: [], key: '', last: null};
 function cfStore() {
   try {
-    if (!CF.loaded) { CF.loaded = true; const v = JSON.parse(localStorage.getItem('ena_confluence_v1') || '{}'); if (typeof v.collapsed === 'boolean') CF.collapsed = v.collapsed; if (typeof v.lineOn === 'boolean') CF.lineOn = v.lineOn; if (typeof v.aiOn === 'boolean') CF.aiOn = v.aiOn; if (typeof v.aiFit === 'boolean') CF.aiFit = v.aiFit; }
-    else localStorage.setItem('ena_confluence_v1', JSON.stringify({collapsed: CF.collapsed, lineOn: CF.lineOn, aiOn: CF.aiOn, aiFit: CF.aiFit}));
+    if (!CF.loaded) { CF.loaded = true; const v = JSON.parse(localStorage.getItem('ena_confluence_v1') || '{}'); if (typeof v.collapsed === 'boolean') CF.collapsed = v.collapsed; if (typeof v.lineOn === 'boolean') CF.lineOn = v.lineOn; if (typeof v.aiOn === 'boolean') CF.aiOn = v.aiOn; if (typeof v.aiFit === 'boolean') CF.aiFit = v.aiFit; if (typeof v.aiDetail === 'boolean') CF.aiDetail = v.aiDetail; }
+    else localStorage.setItem('ena_confluence_v1', JSON.stringify({collapsed: CF.collapsed, lineOn: CF.lineOn, aiOn: CF.aiOn, aiFit: CF.aiFit, aiDetail: CF.aiDetail}));
   } catch (e) { /* 기억하지 못해도 동작한다 */ }
 }
 // 공통 현실성 규칙. raw = {side, lo, hi, stop, targets[]} → {ok, ...} 또는 {ok:false, why}. atr 이 없으면(1일봉 등) 퍼센트 한도만 쓴다.
@@ -224,8 +224,9 @@ function cfAiDraw() {
       const sr = chart.addLineSeries({color, lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false});
       sr.setData([{time: t0, value: v0}, {time: t1, value: x.price}]);
       const pct = hasBase ? (x.price / x.base - 1) * 100 : null;
-      const txt = 'AI ' + x.label + ' ' + mark + (pct != null ? ' ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : '') + (x.score != null ? ' · 점수 ' + x.score.toFixed(2) : '') + (hasBase ? ' · 기준 ' + cfFmt(x.base) : '') + (x.trail ? '' : ' →');
-      sr.setMarkers([{time: t0, position: 'inBar', color, shape: 'circle', text: ''}, {time: t1, position: 'inBar', color, shape: x.side === 'long' ? 'arrowUp' : x.side === 'short' ? 'arrowDown' : 'circle', text: txt}]);
+      // 라벨은 짧게(겹침 방지). 점수·기준가는 「AI 점선 라벨 자세히」를 켤 때만 붙인다.
+      const txt = 'AI ' + x.label + ' ' + mark + (pct != null ? ' ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : '') + (CF.aiDetail ? (x.score != null ? ' · 점수 ' + x.score.toFixed(2) : '') + (hasBase ? ' · 기준 ' + cfFmt(x.base) : '') : '') + (x.trail ? '' : ' →');
+      sr.setMarkers([{time: t0, position: 'inBar', color, shape: 'circle', text: ''}, {time: t1, position: x.side === 'long' ? 'aboveBar' : x.side === 'short' ? 'belowBar' : 'inBar', color, shape: x.side === 'long' ? 'arrowUp' : x.side === 'short' ? 'arrowDown' : 'circle', text: txt}]);
       CF.aiSeries.push(sr);
     }
   }
@@ -281,7 +282,7 @@ function cfDraw() {
     cfStore(); const price = cfPrice(); if (!price) return;
     cfLoadLevels(); cfLoadAi();
     const res = cfBuild(price); CF.last = res; cfVerdictRender();
-    const key = JSON.stringify([price.toFixed(5), res.rows.map(r => [r.op.ind, r.op.ell]), CF.collapsed, CF.lineOn, CF.aiOn, CF.aiFit, (CF.ai && CF.ai.forecast && CF.ai.forecast.horizons || []).map(h => h && [h.minutes, h.expected]), bars.length, res.rows.map(r => r.ai ? [r.ai.side, r.ai.score] : null), !!CF.aiLearn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
+    const key = JSON.stringify([price.toFixed(5), res.rows.map(r => [r.op.ind, r.op.ell]), CF.collapsed, CF.lineOn, CF.aiOn, CF.aiFit, CF.aiDetail, (CF.ai && CF.ai.forecast && CF.ai.forecast.horizons || []).map(h => h && [h.minutes, h.expected]), bars.length, res.rows.map(r => r.ai ? [r.ai.side, r.ai.score] : null), !!CF.aiLearn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
     if (key === CF.key) return; CF.key = key;
     cfBox(res, price);
     if (typeof hubRender === 'function') hubRender(res, price);
@@ -316,6 +317,9 @@ function cfBox(res, price) {
   const lz = document.createElement('label'), cz = document.createElement('input'); cz.type = 'checkbox'; cz.checked = CF.aiFit;
   cz.onchange = () => { CF.aiFit = cz.checked; cfStore(); CF.key = ''; cfDraw(); };
   lz.appendChild(cz); lz.appendChild(document.createTextNode(' 예측선이 모두 보이게 가격 축 넓히기')); lz.style.cursor = 'pointer'; lz.title = '1주·1달 예측처럼 현재가에서 먼 예측선이 화면 밖에 있을 때, 가격 축을 넓혀서 모두 보이게 합니다. 캔들은 상대적으로 작아집니다.'; head.appendChild(lz);
+  const ld = document.createElement('label'), cd = document.createElement('input'); cd.type = 'checkbox'; cd.checked = CF.aiDetail;
+  cd.onchange = () => { CF.aiDetail = cd.checked; cfStore(); CF.key = ''; cfDraw(); };
+  ld.appendChild(cd); ld.appendChild(document.createTextNode(' AI 점선 라벨 자세히(점수·기준가)')); ld.style.cursor = 'pointer'; ld.title = '끄면 차트 라벨이 짧아져 겹치지 않습니다. 점수와 기준가는 아래 표에서도 볼 수 있습니다.'; head.appendChild(ld);
   const fold = mk('span', CF.collapsed ? '▸ 펼치기' : '▾ 접기', 'margin-left:auto;cursor:pointer;opacity:.8'); fold.onclick = () => { CF.collapsed = !CF.collapsed; cfStore(); CF.key = ''; cfDraw(); }; head.appendChild(fold); box.appendChild(head);
   if (CF.collapsed) return;
   box.appendChild(mk('div', '공통 규칙 · 현재가 ' + cfFmt(price) + ' 하나로 거리를 계산 · 진입은 3 ATR(평균 변동폭의 3배) 이내 · 손절 0.8~3.5 ATR(최대 10%) · 목표는 4.5 ATR 이내(↧ 제한됨) · 손익비 1.2 미만은 "(낮음)" · 손절을 넓혔으면 ↔', 'opacity:.7;font-size:11px;margin-top:4px'));

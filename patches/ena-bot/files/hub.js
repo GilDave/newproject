@@ -5,11 +5,11 @@
 const HUB_TABS = [['sum', '종합'], ['ent', '진입 계획 (지표)'], ['ell', '엘리엇'], ['prc', '가격 비교 · AI']];
 const HUB_FEE = 0.00055, HUB_SLIP = 0.0001, HUB_PASS = 7, HUB_WAIT = 5, HUB_MIN_RR = 1.5, HUB_MAX_COST = 0.15;
 const HUB_FS = [12, 13, 14, 15, 16, 18, 20];   // 글자 크기 단계(px). 기본 14
-const HUB = {tab: 'sum', acct: 1000, risk: 1, fs: 14, loaded: false, box: null, key: ''};
+const HUB = {tab: 'sum', acct: 1000, risk: 1, fs: 14, fitC: true, loaded: false, box: null, key: ''};
 function hubStore() {
   try {
-    if (!HUB.loaded) { HUB.loaded = true; const v = JSON.parse(localStorage.getItem('ena_hub_v1') || '{}'); if (['sum', 'ent', 'ell', 'prc'].indexOf(v.tab) >= 0) HUB.tab = v.tab; if (v.acct > 0) HUB.acct = v.acct; if (v.risk > 0) HUB.risk = v.risk; if (HUB_FS.indexOf(v.fs) >= 0) HUB.fs = v.fs; }
-    else localStorage.setItem('ena_hub_v1', JSON.stringify({tab: HUB.tab, acct: HUB.acct, risk: HUB.risk, fs: HUB.fs}));
+    if (!HUB.loaded) { HUB.loaded = true; const v = JSON.parse(localStorage.getItem('ena_hub_v1') || '{}'); if (['sum', 'ent', 'ell', 'prc'].indexOf(v.tab) >= 0) HUB.tab = v.tab; if (v.acct > 0) HUB.acct = v.acct; if (v.risk > 0) HUB.risk = v.risk; if (HUB_FS.indexOf(v.fs) >= 0) HUB.fs = v.fs; if (typeof v.fitC === 'boolean') HUB.fitC = v.fitC; }
+    else localStorage.setItem('ena_hub_v1', JSON.stringify({tab: HUB.tab, acct: HUB.acct, risk: HUB.risk, fs: HUB.fs, fitC: HUB.fitC}));
   } catch (e) { /* 기억하지 못해도 동작한다 */ }
 }
 // 수수료·슬리피지(왕복)가 위험(손절까지 거리)의 몇 배인가
@@ -76,6 +76,24 @@ function hubStyle() {
 }
 function hubApplyFs() { const h = document.getElementById('analysis-hub'); if (h) h.style.setProperty('--hub-fs', HUB.fs + 'px'); }
 function hubFontStep(d) { const i = HUB_FS.indexOf(HUB.fs), j = Math.max(0, Math.min(HUB_FS.length - 1, i + d)); HUB.fs = HUB_FS[j]; hubStore(); hubApplyFs(); const l = document.getElementById('hub-fs-label'); if (l) l.textContent = HUB.fs + 'px'; }
+// 이평선·볼린저·일목 같은 지표 선이 가격 축 범위를 넓혀 캔들이 납작해지지 않게, 캔들 기준으로만 축을 맞춘다(지표 선은 범위 밖이면 잘려 보인다).
+function hubApplyFit() {
+  try {
+    if (typeof IND === 'undefined' || !IND) return;
+    const list = [].concat(IND.ma || [], IND.bb || [], Object.keys(IND.ich || {}).map(k => IND.ich[k])); let changed = false;
+    for (const sr of list) { if (sr && sr._hubFit !== HUB.fitC) { sr.applyOptions({autoscaleInfoProvider: HUB.fitC ? () => null : (orig) => orig()}); sr._hubFit = HUB.fitC; changed = true; } }
+    if (changed && typeof chart !== 'undefined') chart.priceScale('right').applyOptions({autoScale: true});
+  } catch (e) { /* 적용하지 못해도 차트는 그대로 */ }
+}
+function hubFitBox(cbox) {
+  if (document.getElementById('hub-fit-label')) return;
+  const foot = cbox.querySelector('.chartfooter'); if (!foot) return;
+  const lb = document.createElement('label'), cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = HUB.fitC; lb.id = 'hub-fit-label';
+  lb.title = '켜면 이평선·볼린저·일목 같은 지표 선이 가격 축 범위를 넓히지 않아 캔들이 크게 보입니다(지표 선이 범위 밖이면 잘려 보임).';
+  lb.style.cssText = 'cursor:pointer;margin-right:12px;white-space:nowrap'; cb.onchange = () => { HUB.fitC = cb.checked; hubStore(); hubApplyFit(); };
+  lb.appendChild(cb); lb.appendChild(document.createTextNode(' 가격 축을 캔들에 맞춤(지표 선 제외)'));
+  const first = foot.querySelector('label'); if (first) foot.insertBefore(lb, first); else foot.appendChild(lb);
+}
 function hubSetTab(k) {
   HUB.tab = k; hubStore();
   for (const t of HUB_TABS) {
@@ -108,6 +126,7 @@ function hubEnsure() {
   if (anchor) anchor.insertAdjacentElement('afterend', hub); else cbox.appendChild(hub);
   const ec = document.getElementById('entry-card'), pe = document.getElementById('hub-pane-ent');
   if (ec && pe && !pe.contains(ec)) pe.appendChild(ec);
+  hubFitBox(cbox);
   HUB.box = hub; document.getElementById('hub-pane-sum').textContent = '분석을 불러오는 중…'; hubSetTab(HUB.tab);
   return hub;
 }
@@ -188,5 +207,6 @@ function hubRender(res, price) {
     pane.appendChild(mk('div', '이 허브는 분석을 한 곳에 모은 것이지 매매 신호가 아닙니다. 판정 규칙·체크리스트 기준·위험 %는 과거 통계로 검증되지 않았습니다. 큰 시간봉이 방향을 정하고 작은 시간봉은 진입 시점만 정하는 top-down 순서로 읽고, 시간봉을 바꿔 가며 내 생각에 맞는 답을 찾는 것(확증 편향)은 피하세요.', 'margin-top:12px;opacity:.6;font-size:calc(var(--hub-fs) - 2px)'));
   } catch (err) { /* 허브 표시 실패가 차트를 깨뜨리지 않게 한다 */ }
 }
+setInterval(hubApplyFit, 2000);
 setTimeout(function () { try { hubEnsure(); } catch (e) { /* 아직 화면이 없으면 첫 그리기에서 만든다 */ } }, 0);
 // ---- /분석 허브 ----

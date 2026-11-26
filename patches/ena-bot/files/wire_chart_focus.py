@@ -29,6 +29,8 @@ body.chart-focus{overflow:hidden!important}
 body.chart-focus>header,body.chart-focus .views{display:none!important}
 body.chart-focus #vp-chart{position:fixed!important;inset:0;z-index:1000;display:flex!important;flex-direction:column;padding:6px;background:var(--bg,#0b0e14);overflow:hidden!important}
 body.chart-focus #vp-chart>*:not(.chartbox){display:none!important}
+body.chart-focus #vp-chart{align-items:stretch!important;justify-content:flex-start!important}
+body.chart-focus #vp-chart .chartbox{width:100%!important;max-width:none!important;box-sizing:border-box}
 body.chart-focus #vp-chart .chartbox{flex:1 1 auto;min-height:0!important;overflow-y:auto;overflow-x:hidden}
 body.chart-focus #vp-chart .chartbox>*{flex:none}
 body.chart-focus #vp-chart .chartwrap{flex:none;height:max(340px,58vh)!important}
