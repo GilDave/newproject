@@ -43,6 +43,17 @@ JS = """<!-- CHART-GRID-SCRIPT-START -->
 </script>
 <!-- CHART-GRID-SCRIPT-END -->"""
 
+def put_script(text, start, end, block):
+    """<script> 블록을 넣는다. 가장 긴 <script>(= 메인 스크립트) 바로 앞에 넣어서, 메인 스크립트가 계속 페이지의 마지막 <script> 로 남게 한다
+    (저장소 테스트가 마지막 <script> 를 메인으로 읽는다). 이미 있으면 지우고 같은 자리에 다시 넣으므로 옛 위치(맨 뒤)에서도 자동으로 옮겨진다."""
+    pat = re.compile(re.escape(start) + r".*?" + re.escape(end) + r"\n?", re.S)
+    text = pat.sub("", text, count=1)
+    blocks = [(m.start(), len(m.group(1))) for m in re.finditer(r"<script>(.*?)</script>", text, re.S)]
+    if not blocks:
+        raise SystemExit("index.html 에서 메인 <script> 를 찾지 못했습니다. 아무것도 바꾸지 않았습니다.")
+    pos = max(blocks, key=lambda b: b[1])[0]
+    return text[:pos] + block + "\n" + text[pos:]
+
 def put(text, start, end, block, anchor):
     pat = re.compile(re.escape(start) + r".*?" + re.escape(end), re.S)
     if pat.search(text):
@@ -52,7 +63,7 @@ def put(text, start, end, block, anchor):
     return text.replace(anchor, block + "\n" + anchor)
 
 new = put(src, "<!-- CHART-GRID-START -->", "<!-- CHART-GRID-END -->", CSS, "</head>")
-new = put(new, "<!-- CHART-GRID-SCRIPT-START -->", "<!-- CHART-GRID-SCRIPT-END -->", JS, "</body>")
+new = put_script(new, "<!-- CHART-GRID-SCRIPT-START -->", "<!-- CHART-GRID-SCRIPT-END -->", JS)
 if new == src:
     print("이미 적용되어 있습니다. 아무것도 바꾸지 않았습니다.")
     raise SystemExit(0)

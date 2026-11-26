@@ -49,13 +49,16 @@ if "version_info" not in d:
         if d.count(old) != 1:
             raise SystemExit(f"dashboard.py 에서 {name} 위치를 찾지 못했습니다({d.count(old)}곳). 아무것도 바꾸지 않았습니다.")
     nd = d.replace(IMP, IMP2, 1).replace(GET, GET2, 1)
-pat = re.compile(r"<!-- VERSION-BADGE-START -->.*?<!-- VERSION-BADGE-END -->", re.S)
-if pat.search(p):
-    np_ = pat.sub(lambda m: BADGE, p, count=1)
-else:
-    if p.count("</body>") != 1:
-        raise SystemExit(f"index.html 에서 </body> 를 한 곳에서만 찾지 못했습니다({p.count('</body>')}곳). 아무것도 바꾸지 않았습니다.")
-    np_ = p.replace("</body>", BADGE + "\n</body>", 1)
+pat = re.compile(r"<!-- VERSION-BADGE-START -->.*?<!-- VERSION-BADGE-END -->\n?", re.S)
+def put_script(text, block):
+    """가장 긴 <script>(메인 스크립트) 앞에 넣어서 메인이 계속 마지막 <script> 로 남게 한다. 이미 있으면 지우고 다시 넣는다(옛 위치에서도 옮겨짐)."""
+    text = pat.sub("", text, count=1)
+    blocks = [(m.start(), len(m.group(1))) for m in re.finditer(r"<script>(.*?)</script>", text, re.S)]
+    if not blocks:
+        raise SystemExit("index.html 에서 메인 <script> 를 찾지 못했습니다. 아무것도 바꾸지 않았습니다.")
+    pos = max(blocks, key=lambda b: b[1])[0]
+    return text[:pos] + block + "\n" + text[pos:]
+np_ = put_script(p, BADGE)
 if nd == d and np_ == p:
     print("이미 적용되어 있습니다. 아무것도 바꾸지 않았습니다.")
     raise SystemExit(0)
