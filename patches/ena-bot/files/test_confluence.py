@@ -14,7 +14,7 @@ HARNESS = r"""
 const fs = require('fs'), vm = require('vm');
 const sb = {console, document: {}, localStorage: {getItem() { return null; }, setItem() {}}, structDraw: function () {}, setInterval() {}};
 vm.createContext(sb);
-vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfNorm, cfClusters, CF_RULE, hooked: !!structDraw.__cf};', sb);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfNorm, cfClusters, cfAiFor, cfAiVerdict, CF_RULE, hooked: !!structDraw.__cf};', sb);
 const X = sb.X, out = {};
 const r = (v) => v === null || v === undefined ? v : Math.round(v * 10000) / 10000;
 const n = (raw, price, atr) => { const o = X.cfNorm(raw, price, atr); return o.ok ? {ok: true, side: o.side, mid: r(o.mid), stop: r(o.stop), t1: r(o.t1), t2: r(o.t2), rr: r(o.rr), poor: o.poor, widened: o.widened, capped: o.capped, inZone: o.inZone, distPct: r(o.distPct)} : o;
@@ -39,6 +39,11 @@ const cl = X.cfClusters([it('15m', 'entry', 'long', 100), it('1h', 'levels', 'lo
 out.cl = cl.map(c => [c.side, c.members.length, c.kinds.sort(), r(c.mid)]);
 const cl2 = X.cfClusters([it('15m', 'entry', 'long', 100), it('1h', 'entry', 'short', 100.1)], 100);
 out.cl2 = cl2.length;
+const fc = {forecast: {horizons: [{minutes: 1, direction: 'down', label_ko: '하락', expected_return: -0.000267, expected: 0.10247, score: -0.545, status: 'ok'},
+  {minutes: 15, direction: 'up', label_ko: '상승', expected_return: 0.001, expected: 0.1031, score: 0.4, status: 'ok'}, {minutes: 60, status: 'insufficient', reason: '봉 부족'}, {minutes: 240, direction: 'flat', status: 'ok', expected_return: 0}]}};
+out.ai = [X.cfAiFor(fc, '15m'), X.cfAiFor(fc, '1h'), X.cfAiFor(fc, '30m'), X.cfAiFor(null, '15m'), X.cfAiFor({forecast: {}}, '15m'), X.cfAiFor(fc, '4h')];
+const lf = (o) => ({series: [Object.assign({status: 'ok', horizon_label: '3분 뒤 종가', current: {hit: 0.5049315619967794, mae: 0.000321401763548984, base_mae: 0.000321533816425121}, trading: {cum_return: -0.9824011901251959}}, o)]});
+out.verdict = [X.cfAiVerdict(lf({})), X.cfAiVerdict(lf({current: {hit: 0.56, mae: 0.0003, base_mae: 0.00033}, trading: {cum_return: 0.1}})), X.cfAiVerdict(null), X.cfAiVerdict({series: [{status: 'error'}]})];
 console.log(JSON.stringify(out));
 """
 
@@ -65,6 +70,18 @@ def test_common_rules_apply_the_same_way_to_every_source():
     assert o["short"]["ok"] and o["short"]["side"] == "short" and o["short"]["t1"] == 98.5 and o["short"]["rr"] == 1.7619
     assert o["poor"]["ok"] and o["poor"]["poor"] is True                                 # 손익비 1.2 미만은 표시하되 '낮음'
     assert o["none"] == [False, False]
+
+
+def test_ai_forecast_is_matched_by_horizon_and_its_verdict_warns_when_there_is_no_edge():
+    o = run()
+    a = o["ai"]
+    assert a[0]["side"] == "long" and a[0]["label"] == "상승" and a[0]["expected"] == 0.1031                 # 15분 = 15분 예측
+    assert a[1] == {"why": "봉 부족"} and a[2] is None and a[3] is None and a[4] is None                    # 1시간은 예측 불가 이유, 30분·없는 값은 null
+    assert a[5]["side"] is None and a[5]["label"] == "횡보"
+    v = o["verdict"]
+    assert v[0]["bad"] is True and "50.5%" in v[0]["text"] and "0.04%" in v[0]["text"] and "-98.2%" in v[0]["text"] and "우위가 확인되지 않았습니다" in v[0]["text"]
+    assert v[1]["bad"] is False and "표본 밖 검증" in v[1]["text"]
+    assert v[2] is None and v[3] is None
 
 
 def test_confluence_clusters_group_nearby_entries_of_the_same_side():

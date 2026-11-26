@@ -4,7 +4,8 @@
 const CF_TFS = ['15m', '30m', '1h', '4h', '1d'];
 const CF_KO = {'15m': '15분', '30m': '30분', '1h': '1시간', '4h': '4시간', '1d': '1일'};
 const CF_RULE = {reachAtr: 3.0, minStopAtr: 0.8, maxStopAtr: 3.5, maxStopPct: 0.10, tpAtr: 4.5, minRR: 1.2, reachPct: 0.08, clusterPct: 0.006};
-const CF = {levels: null, levelsAt: 0, busy: false, collapsed: false, lineOn: false, loaded: false, box: null, lines: [], key: '', last: null};
+const CF_MIN = {'15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440};
+const CF = {ai: null, aiLearn: null, aiAt: 0, aiBusy: false, levels: null, levelsAt: 0, busy: false, collapsed: false, lineOn: false, loaded: false, box: null, lines: [], key: '', last: null};
 function cfStore() {
   try {
     if (!CF.loaded) { CF.loaded = true; const v = JSON.parse(localStorage.getItem('ena_confluence_v1') || '{}'); if (typeof v.collapsed === 'boolean') CF.collapsed = v.collapsed; if (typeof v.lineOn === 'boolean') CF.lineOn = v.lineOn; }
@@ -67,6 +68,31 @@ function cfClusters(items, price) {
   for (const c of out) c.kinds = Array.from(new Set(c.members.map(m => m.method)));
   return out.filter(c => c.members.length >= 2).sort((a, b) => b.kinds.length - a.kinds.length || b.members.length - a.members.length || Math.abs(a.mid - price) - Math.abs(b.mid - price));
 }
+// AI 예측(/api/forecast 의 horizons)에서 이 시간봉과 같은 길이(분)의 예측을 꺼낸다. 없으면 null.
+function cfAiFor(fc, tf) {
+  const hs = fc && fc.forecast && Array.isArray(fc.forecast.horizons) ? fc.forecast.horizons : null; if (!hs) return null;
+  const h = hs.find(x => x && x.minutes === CF_MIN[tf]); if (!h) return null;
+  if (h.status && h.status !== 'ok') return {why: h.reason || '예측 불가'};
+  const side = h.direction === 'up' ? 'long' : h.direction === 'down' ? 'short' : null;
+  return {side, label: h.label_ko || (side === 'long' ? '상승' : side === 'short' ? '하락' : '횡보'), ret: h.expected_return, expected: h.expected, score: h.score};
+}
+// 학습 예측의 과거 검증 요약(/api/learn-forecast): 적중률 · 기준선 대비 오차 개선 · 수수료 포함 모의 매매 누적 수익률. 우위가 없으면 경고 문구를 붙인다.
+function cfAiVerdict(lf) {
+  const s0 = lf && Array.isArray(lf.series) ? lf.series.find(x => x && x.status === 'ok' && x.current) : null; if (!s0) return null;
+  const c = s0.current, t = s0.trading || {};
+  const improve = c.base_mae > 0 ? (c.base_mae - c.mae) / c.base_mae * 100 : null;
+  const bad = !(c.hit > 0.52) || !(improve > 1) || (t.cum_return != null && t.cum_return < 0);
+  let text = '과거 검증(' + (s0.horizon_label || '') + '): 방향 적중 ' + (c.hit * 100).toFixed(1) + '%' + (improve != null ? ' · 기준선 대비 오차 개선 ' + improve.toFixed(2) + '%' : '') + (t.cum_return != null ? ' · 수수료 포함 모의 매매 누적 ' + (t.cum_return * 100).toFixed(1) + '%' : '');
+  text += bad ? ' → 우위가 확인되지 않았습니다. 방향 일치의 근거로 쓰지 마세요.' : ' → 기준선보다 낫지만 표본 밖 검증을 계속 확인하세요.';
+  return {text, bad};
+}
+async function cfLoadAi() {
+  if (CF.aiBusy || Date.now() - CF.aiAt < 60000) return;
+  CF.aiBusy = true;
+  try { const r = await fetch('/api/forecast'); const j = await r.json(); if (r.ok && !j.error) CF.ai = j; } catch (e) { /* AI 열 없이도 나머지는 보인다 */ }
+  try { const r = await fetch('/api/learn-forecast'); const j = await r.json(); if (r.ok && !j.error) CF.aiLearn = j; } catch (e) { /* 검증 요약 없이도 동작 */ }
+  CF.aiAt = Date.now(); CF.aiBusy = false; CF.key = ''; cfDraw();
+}
 async function cfLoadLevels() {
   if (CF.busy || Date.now() - CF.levelsAt < 30000) return;
   CF.busy = true;
@@ -97,6 +123,7 @@ function cfBuild(price) {
     for (const m of ['entry', 'fractal']) if (row.cells[m].ok) all.push({tf, method: m, n: row.cells[m]});
     for (const c of okL) all.push({tf, method: 'levels', n: c});
     const sides = ['entry', 'levels', 'levels2', 'fractal'].map(k => row.cells[k]).filter(c => c && c.ok).map(c => c.side);
+    row.ai = cfAiFor(CF.ai, tf);
     row.agree = !sides.length ? null : sides.every(s => s === sides[0]) ? {side: sides[0], n: sides.length} : {mixed: true, long: sides.filter(s => s === 'long').length, short: sides.filter(s => s === 'short').length};
     rows.push(row);
   }
@@ -105,9 +132,9 @@ function cfBuild(price) {
 function cfDraw() {
   try {
     cfStore(); const price = cfPrice(); if (!price) return;
-    cfLoadLevels();
+    cfLoadLevels(); cfLoadAi();
     const res = cfBuild(price); CF.last = res;
-    const key = JSON.stringify([price.toFixed(5), CF.collapsed, CF.lineOn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
+    const key = JSON.stringify([price.toFixed(5), CF.collapsed, CF.lineOn, res.rows.map(r => r.ai ? [r.ai.side, r.ai.score] : null), !!CF.aiLearn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
     if (key === CF.key) return; CF.key = key;
     cfBox(res, price);
     cfClearLines();
@@ -131,23 +158,37 @@ function cfBox(res, price) {
   const box = cfBoxEl(); if (!box) return; box.textContent = '';
   const mk = (tag, text, css) => { const d = document.createElement(tag); if (text !== undefined) d.textContent = text; if (css) d.style.cssText = css; return d; };
   const head = mk('div', undefined, 'display:flex;gap:12px;align-items:center;flex-wrap:wrap');
-  head.appendChild(mk('b', '가격 종합 — 지표 · 거래량 · 엘리엇의 진입 가격을 같은 규칙으로 비교 (참고용 가설)'));
+  head.appendChild(mk('b', '가격 종합 — 지표 · 거래량 · 엘리엇의 진입 가격을 같은 규칙으로 비교, AI 예측과 함께 보기 (참고용 가설)'));
   const lb = document.createElement('label'), cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = CF.lineOn;
   cb.onchange = () => { CF.lineOn = cb.checked; cfStore(); CF.key = ''; cfDraw(); };
   lb.appendChild(cb); lb.appendChild(document.createTextNode(' 합의 구간을 차트에 선으로')); lb.style.cursor = 'pointer'; head.appendChild(lb);
   const fold = mk('span', CF.collapsed ? '▸ 펼치기' : '▾ 접기', 'margin-left:auto;cursor:pointer;opacity:.8'); fold.onclick = () => { CF.collapsed = !CF.collapsed; cfStore(); CF.key = ''; cfDraw(); }; head.appendChild(fold); box.appendChild(head);
   if (CF.collapsed) return;
   box.appendChild(mk('div', '공통 규칙 · 현재가 ' + cfFmt(price) + ' 하나로 거리를 계산 · 진입은 3 ATR(평균 변동폭의 3배) 이내 · 손절 0.8~3.5 ATR(최대 10%) · 목표는 4.5 ATR 이내(↧ 제한됨) · 손익비 1.2 미만은 "(낮음)" · 손절을 넓혔으면 ↔', 'opacity:.7;font-size:11px;margin-top:4px'));
+  const vd = cfAiVerdict(CF.aiLearn);
+  if (vd) box.appendChild(mk('div', 'AI 예측 열은 모멘텀·EMA 추세·평균회귀를 가중합한 규칙 점수입니다. ' + vd.text, 'margin-top:4px;padding:4px 8px;border-radius:6px;font-size:11px;background:' + (vd.bad ? '#2a1d12' : '#12251b') + ';color:' + (vd.bad ? '#ffb74d' : '#a5d6a7')));
   const tbl = mk('table', undefined, 'border-collapse:collapse;width:100%;margin-top:6px'), th = tbl.insertRow();
-  for (const h of ['시간봉', '지표 (진입 계획 카드)', '거래량 (매물대)', '엘리엇 (프랙탈)', '방향 일치']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:3px 8px;white-space:nowrap'));
+  for (const h of ['시간봉', '지표 (진입 계획 카드)', '거래량 (매물대)', '엘리엇 (프랙탈)', 'AI 예측 (규칙 점수)', '방향 일치']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:3px 8px;white-space:nowrap'));
   for (const r of res.rows) {
     const tr = tbl.insertRow(); tr.style.borderTop = '1px solid #2a2e39';
     cfCell(tr.insertCell(), null); tr.cells[0].textContent = CF_KO[r.tf] + (r.atr ? '' : ''); tr.cells[0].style.cssText = 'padding:3px 8px;vertical-align:top;white-space:nowrap;font-weight:600';
     cfCell(tr.insertCell(), r.cells.entry);
     const lc = tr.insertCell(); cfCell(lc, r.cells.levels); if (r.cells.levels2) { const hr = document.createElement('div'); hr.style.cssText = 'height:3px'; lc.appendChild(hr); const x = document.createElement('td'); cfCell(x, r.cells.levels2); while (x.firstChild) lc.appendChild(x.firstChild); }
     cfCell(tr.insertCell(), r.cells.fractal);
+    const ai = tr.insertCell(); ai.style.cssText = 'padding:3px 8px;vertical-align:top;text-align:left';
+    if (!r.ai) { ai.textContent = '—'; ai.style.opacity = '.55'; }
+    else if (r.ai.why) { ai.textContent = r.ai.why; ai.style.opacity = '.55'; }
+    else {
+      const ab = document.createElement('span'); ab.textContent = r.ai.side === 'long' ? '▲ 상승' : r.ai.side === 'short' ? '▼ 하락' : '− 횡보';
+      ab.style.cssText = 'display:inline-block;padding:0 6px;border-radius:5px;font-weight:700;color:#fff;margin-right:5px;background:' + (r.ai.side === 'long' ? '#1e8e5a' : r.ai.side === 'short' ? '#c62828' : '#4a5168') + ';opacity:.75';
+      const dv = document.createElement('div'); dv.appendChild(ab);
+      dv.appendChild(document.createTextNode((r.ai.expected != null ? '예상 ' + cfFmt(r.ai.expected) : '') + (r.ai.ret != null ? ' (' + (r.ai.ret >= 0 ? '+' : '') + (r.ai.ret * 100).toFixed(2) + '%)' : '')));
+      ai.appendChild(dv);
+      if (r.ai.score != null) { const sc = document.createElement('div'); sc.textContent = '점수 ' + r.ai.score.toFixed(2) + ' (모멘텀·EMA·평균회귀의 가중합)'; sc.style.cssText = 'opacity:.55;font-size:11px'; ai.appendChild(sc); }
+    }
     const ac = tr.insertCell(); ac.style.cssText = 'padding:3px 8px;vertical-align:top;white-space:nowrap';
-    if (!r.agree) ac.textContent = '—'; else if (r.agree.mixed) { ac.textContent = '엇갈림 (롱 ' + r.agree.long + ' · 숏 ' + r.agree.short + ')'; ac.style.color = '#ffb74d'; } else { ac.textContent = (r.agree.side === 'long' ? '롱' : '숏') + ' 일치 ' + r.agree.n + '개'; ac.style.color = r.agree.side === 'long' ? '#66bb6a' : '#ef5350'; }
+    const aiNote = (a) => { if (!r.ai || !r.ai.side || !r.agree || r.agree.mixed) return ''; return r.ai.side === r.agree.side ? ' · AI도 같음' : ' · AI는 반대'; };
+    if (!r.agree) ac.textContent = '—'; else if (r.agree.mixed) { ac.textContent = '엇갈림 (롱 ' + r.agree.long + ' · 숏 ' + r.agree.short + ')'; ac.style.color = '#ffb74d'; } else { ac.textContent = (r.agree.side === 'long' ? '롱' : '숏') + ' 일치 ' + r.agree.n + '개' + aiNote(); ac.style.color = r.agree.side === 'long' ? '#66bb6a' : '#ef5350'; }
   }
   box.appendChild(tbl);
   const cl = mk('div', undefined, 'margin-top:6px;padding:6px 8px;border-radius:6px;background:#1a1f2e');
