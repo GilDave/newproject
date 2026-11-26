@@ -99,7 +99,7 @@ def test_ai_forecast_lines_skip_horizons_shorter_than_a_bar_and_limit_the_trail_
     assert o["lines"] == [[15, "15분", "long", 0.1031, 1, True], [60, "1시간", "short", 0.102, 4, True], [240, "4시간", None, 0.1026, 16, True], [1440, "1일", "long", 0.11, 96, False]]
     # 실제 ENA 응답(1·3·5·15·30분·1·4시간·1일·1주·1달): 15분 차트에서는 1분·3분·5분(한 봉보다 짧음)과, 이미 고른 가격과 0.1% 이내인 30분·4시간 예측을 빼고 5개를 그린다
     assert o["real"] == [[15, "short", 1, True], [60, None, 4, True], [1440, "long", 96, False], [10080, "short", 672, False], [43200, "short", 2880, False]]
-    assert o["real_1m"][:3] == [1, 15, 1440]                                               # 1분 차트에서는 1분 예측부터(3·5분은 1분 예측과 같은 가격이라 제외)
+    assert o["real_1m"] == [1, 1440, 10080, 43200]                                         # 1분 차트: 1분 예측부터, 3·5·15·30·60분·4시간은 1분 예측과 0.1% 이내라 제외
     assert o["lines_empty"] == [0, 0, 0]                                                   # 데이터 없음·너무 짧음·오류/잘못된 가격은 그리지 않는다
 
 
