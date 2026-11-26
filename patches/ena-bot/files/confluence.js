@@ -28,6 +28,82 @@ function cfNorm(raw, price, atr) {
   const rr = Math.abs(ts[0] - mid) / risk;
   return {ok: true, side: raw.side, lo, hi, mid, stop, t1: ts[0], t2: ts[1] != null ? ts[1] : null, rr, poor: rr < CF_RULE.minRR, widened, capped, distPct, inZone: dist === 0};
 }
+// ---- 종합 판정: 지표(진입 계획)와 엘리엇의 방향 의견을 '한 곳, 한 규칙'으로 합친다. ----
+// 같은 시간봉에서 두 방법이 일치하면 2점, 한쪽만 의견이 있으면 1점, 충돌하면 0점에 시간봉 무게(1일 5 · 4시간 4 · 1시간 3 · 30분 2 · 15분 1)를 곱해 합친다.
+// 큰 흐름(1일·4시간·1시간)과 단타(30분·15분)를 따로 합산하고, 합이 ±3 미만이면 관망이다. 거래량 매물대는 가격 근거로만 쓰고 방향 투표에는 넣지 않으며 AI 예측은 검증상 우위가 없어 넣지 않는다.
+const CF_W = {'1d': 5, '4h': 4, '1h': 3, '30m': 2, '15m': 1}, CF_BIG = ['1d', '4h', '1h'], CF_SMALL = ['30m', '15m'], CF_TH = 3;
+function cfSideKo(v) { return v === 'long' ? '롱' : v === 'short' ? '숏' : '관망'; }
+function cfTfState(ind, ell) {
+  if (ind && ell) return ind === ell ? {state: 'agree', side: ind, unit: 2} : {state: 'conflict', side: null, unit: 0};
+  if (ind || ell) return {state: 'single', side: ind || ell, unit: 1};
+  return {state: 'none', side: null, unit: 0};
+}
+function cfGroup(rows, tfs) {
+  let sum = 0, n = 0;
+  for (const r of rows) if (tfs.indexOf(r.tf) >= 0 && r.side) { sum += (r.side === 'long' ? 1 : -1) * r.unit * (CF_W[r.tf] || 1); n++; }
+  return {sum, n, side: Math.abs(sum) >= CF_TH ? (sum > 0 ? 'long' : 'short') : 'wait'};
+}
+function cfVerdict(items) {
+  const rows = items.map(it => Object.assign({tf: it.tf, ind: it.ind || null, ell: it.ell || null}, cfTfState(it.ind || null, it.ell || null)));
+  const big = cfGroup(rows, CF_BIG), small = cfGroup(rows, CF_SMALL), conflicts = rows.filter(r => r.state === 'conflict');
+  let text;
+  if (big.side === 'wait' && small.side === 'wait') text = '뚜렷한 방향이 없습니다 → 관망';
+  else if (big.side === 'wait') text = '큰 흐름은 불분명하고 단타만 ' + cfSideKo(small.side) + ' → 짧게, 작은 크기로만 참고';
+  else if (small.side === 'wait') text = '큰 흐름 ' + cfSideKo(big.side) + ', 단타는 대기 → 단기 파동이 정리되길 기다림';
+  else if (small.side === big.side) text = cfSideKo(big.side) + ' 우세 — 큰 흐름과 단타가 같은 방향(눌림·되돌림 뒤 ' + cfSideKo(big.side) + ' 재개를 관찰)';
+  else text = '큰 흐름 ' + cfSideKo(big.side) + ', 단타 ' + cfSideKo(small.side) + '(역추세) → 단타 ' + cfSideKo(small.side) + '은 짧게, 그 움직임이 끝나는 자리에서 ' + cfSideKo(big.side) + ' 재개를 관찰';
+  const head = big.side !== 'wait' ? big.side : small.side;
+  return {rows, big, small, conflicts, text, head};
+}
+function cfVerdictFill(el, v) {
+  el.textContent = '';
+  const mk = (tag, text, css) => { const d = document.createElement(tag); if (text !== undefined) d.textContent = text; if (css) d.style.cssText = css; return d; };
+  const col = (sd) => sd === 'long' ? '#1e8e5a' : sd === 'short' ? '#c62828' : '#4a5168';
+  const badge = (sd, label, big) => mk('span', label !== undefined ? label : cfSideKo(sd), 'display:inline-block;padding:' + (big ? '1px 12px' : '0 7px') + ';border-radius:6px;font-weight:800;color:#fff;margin:0 5px;background:' + col(sd) + (big ? ';font-size:14px' : ''));
+  const l1 = mk('div', undefined, 'display:flex;gap:6px;align-items:center;flex-wrap:wrap');
+  l1.appendChild(mk('b', '종합 판정 (지표 + 엘리엇, 한 규칙)')); l1.appendChild(badge(v.head, v.head === 'wait' ? '관망' : cfSideKo(v.head) + ' 우세', true));
+  l1.appendChild(document.createTextNode('큰 흐름 1일·4시간·1시간')); l1.appendChild(badge(v.big.side)); l1.appendChild(document.createTextNode('단타 30분·15분')); l1.appendChild(badge(v.small.side));
+  el.appendChild(l1);
+  el.appendChild(mk('div', v.text, 'margin-top:3px;font-weight:600'));
+  const tbl = mk('table', undefined, 'border-collapse:collapse;margin-top:5px;font-size:12px'), th = tbl.insertRow();
+  for (const h of ['시간봉', '지표(진입 계획)', '엘리엇', '판정']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:1px 14px 1px 0'));
+  const KO = {'1d': '1일', '4h': '4시간', '1h': '1시간', '30m': '30분', '15m': '15분'}, ST = {agree: '일치', single: '한쪽만', conflict: '충돌', none: '의견 없음'};
+  for (const tf of ['1d', '4h', '1h', '30m', '15m']) {
+    const r = v.rows.find(x => x.tf === tf); if (!r) continue;
+    const tr = tbl.insertRow(); tr.insertCell().textContent = KO[tf];
+    for (const sd of [r.ind, r.ell]) { const td = tr.insertCell(); td.appendChild(sd ? badge(sd) : mk('span', '—', 'opacity:.5')); td.firstChild.style.margin = '0'; }
+    const jd = tr.insertCell(); jd.textContent = ST[r.state] + (r.side ? ' · ' + cfSideKo(r.side) : ''); jd.style.color = r.state === 'conflict' ? '#ffb74d' : r.state === 'none' ? '#8a8f98' : '';
+    for (const td of tr.cells) td.style.padding = '1px 14px 1px 0';
+  }
+  el.appendChild(tbl);
+  if (v.conflicts.length) el.appendChild(mk('div', '충돌: ' + v.conflicts.map(r => KO[r.tf] + ' 지표 ' + cfSideKo(r.ind) + ' ↔ 엘리엇 ' + cfSideKo(r.ell)).join(' · ') + ' — 같은 시간봉에서 반대면 방향 근거가 부족한 것이라 그 시간봉은 0점으로 계산합니다.', 'margin-top:3px;color:#ffb74d'));
+  el.appendChild(mk('div', '시간봉이 다른 의견은 충돌이 아닙니다(예: 15분 지표 롱 = 단기 반등, 4시간 엘리엇 숏 = 큰 하락 흐름). 규칙: 같은 시간봉에서 일치 2점·한쪽만 1점·충돌 0점 × 시간봉 무게(1일 5·4시간 4·1시간 3·30분 2·15분 1), 큰 흐름·단타를 따로 합해 ±3 미만이면 관망. 거래량은 가격 근거로만 쓰고 AI 예측은 검증상 우위가 없어 넣지 않았습니다. 매매 신호가 아니며 과거 통계로 검증되지 않았습니다.', 'margin-top:4px;opacity:.6;font-size:11px'));
+}
+function cfVerdictSlot() {
+  const d = document.createElement('div'); d.id = 'unified-verdict';
+  d.style.cssText = 'margin:6px 0;padding:8px 10px;border:1px solid #2a2e39;border-radius:8px;background:#161b28;color:#d1d4dc;font:12px/1.6 sans-serif';
+  if (CF.last && CF.last.verdict) cfVerdictFill(d, CF.last.verdict); else d.textContent = '종합 판정을 계산하는 중…';
+  return d;
+}
+function cfVerdictRender() { const d = document.getElementById('unified-verdict'); if (d && CF.last && CF.last.verdict) cfVerdictFill(d, CF.last.verdict); }
+// 지표(진입 계획 카드)가 이 시간봉에 대해 가진 방향 의견: 가장 좋은 계획의 방향(조건이 너무 적은 'weak' 계획은 의견 없음)
+function cfEntrySide(tf) {
+  const p = typeof ENT !== 'undefined' && ENT && ENT.data && ENT.data.plans && ENT.data.plans.timeframes ? ENT.data.plans.timeframes[tf] : null;
+  if (!p || p.status !== 'ok' || !p.best || p.best.state === 'weak') return null;
+  return p.best.direction === 'long' || p.best.direction === 'short' ? p.best.direction : null;
+}
+// 엘리엇의 방향 의견: 4파 끝·5파 진행은 파동 방향, 5파 완성은 반대, 4파 조정 중·후보 없음은 의견 없음. 꺼 둔 시간봉은 의견 없음.
+function cfEllSide(tf, ref) {
+  if (typeof frcElliott !== 'function' || typeof FRC === 'undefined' || FRC.on[tf] === undefined || !FRC.on[tf]) return null;
+  const e = frcElliott(tf); if (!e || e.status !== 'ok') return null;
+  const sd = frcSide(e, ref).side; return sd === 'long' || sd === 'short' ? sd : null;
+}
+function cfEllRef() {
+  if (typeof FRC_TFS === 'undefined' || typeof frcElliott !== 'function') return null;
+  for (const t of FRC_TFS) { if (FRC.on[t[0]]) { const e = frcElliott(t[0]); if (e && e.status === 'ok') return e; } }
+  return null;
+}
+// ---- /종합 판정 ----
 function cfAtr(name) {
   try { const d = FRC.data[name]; if (!d || !d.bars || d.bars.length < 30) return null; const a = stAtr(d.bars.map(b => b.high), d.bars.map(b => b.low), d.bars.map(b => b.close)); return a[a.length - 1]; } catch (e) { return null; }
 }
@@ -156,7 +232,7 @@ function cfBoxEl() {
 }
 function cfClearLines() { for (const l of CF.lines) { try { candle.removePriceLine(l); } catch (e) { /* 이미 없음 */ } } CF.lines = []; }
 function cfBuild(price) {
-  const rows = [], all = [];
+  const rows = [], all = [], ref = cfEllRef();
   for (const tf of CF_TFS) {
     const atr = cfAtr(tf), row = {tf, atr, cells: {}};
     const none = (raw) => ({ok: false, why: raw.why || (tf === '30m' ? '이 방법은 30분봉을 계산하지 않음' : '계획 없음')});
@@ -171,17 +247,18 @@ function cfBuild(price) {
     for (const c of okL) all.push({tf, method: 'levels', n: c});
     const sides = ['entry', 'levels', 'levels2', 'fractal'].map(k => row.cells[k]).filter(c => c && c.ok).map(c => c.side);
     row.ai = cfAiFor(CF.ai, tf);
+    row.op = {tf, ind: cfEntrySide(tf), ell: cfEllSide(tf, ref)};
     row.agree = !sides.length ? null : sides.every(s => s === sides[0]) ? {side: sides[0], n: sides.length} : {mixed: true, long: sides.filter(s => s === 'long').length, short: sides.filter(s => s === 'short').length};
     rows.push(row);
   }
-  return {rows, clusters: cfClusters(all, price)};
+  return {rows, clusters: cfClusters(all, price), verdict: cfVerdict(rows.map(r => r.op))};
 }
 function cfDraw() {
   try {
     cfStore(); const price = cfPrice(); if (!price) return;
     cfLoadLevels(); cfLoadAi();
-    const res = cfBuild(price); CF.last = res;
-    const key = JSON.stringify([price.toFixed(5), CF.collapsed, CF.lineOn, CF.aiOn, CF.aiFit, (CF.ai && CF.ai.forecast && CF.ai.forecast.horizons || []).map(h => h && [h.minutes, h.expected]), bars.length, res.rows.map(r => r.ai ? [r.ai.side, r.ai.score] : null), !!CF.aiLearn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
+    const res = cfBuild(price); CF.last = res; cfVerdictRender();
+    const key = JSON.stringify([price.toFixed(5), res.rows.map(r => [r.op.ind, r.op.ell]), CF.collapsed, CF.lineOn, CF.aiOn, CF.aiFit, (CF.ai && CF.ai.forecast && CF.ai.forecast.horizons || []).map(h => h && [h.minutes, h.expected]), bars.length, res.rows.map(r => r.ai ? [r.ai.side, r.ai.score] : null), !!CF.aiLearn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
     if (key === CF.key) return; CF.key = key;
     cfBox(res, price);
     cfClearLines(); cfAiDraw();

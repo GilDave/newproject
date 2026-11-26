@@ -217,7 +217,8 @@ function frcBox() {
     c.appendChild(mk('span', nmS(v.side), 'padding:0 8px;border-radius:5px;font-weight:700;color:#fff;background:' + colS(v.side))); sum.appendChild(c);
   }
   sum.appendChild(mk('span', ov.note, 'opacity:.9'));
-  box.insertBefore(sum, tbl);
+  if (typeof cfVerdictSlot === 'function') box.insertBefore(mk('div', '이 표는 엘리엇만의 의견입니다. 지표·엘리엇을 한 규칙으로 합친 종합 판정은 위 진입 계획 카드의 「종합 판정」 한 곳에서 보세요.', 'margin-top:6px;padding:4px 8px;border-radius:6px;background:#1a1f2e;opacity:.8;font-size:11px'), tbl);
+  else box.insertBefore(sum, tbl);
   box.appendChild(mk('div', '차트의 시간봉(' + Math.round(mainSec / 60) + '분)보다 짧은 시간봉은 선이 겹쳐 그릴 수 없어 표에만 나옵니다. 15분 차트에서 보면 네 시간봉이 모두 겹쳐 그려집니다. 굵은 선일수록 큰 시간봉입니다. 「단타 민감 모드」는 30분·15분에서 더 작은 스윙(1.5 ATR)도 인정해 후보가 늘지만 잡음도 늘어납니다.', 'opacity:.65;font-size:11px;margin-top:4px'));
   box.appendChild(mk('div', '엘리엇 파동 세기는 주관적이고 앞으로의 가격을 보장하지 않습니다. 이 규칙의 신호는 과거 통계로 검증되지 않았습니다. "관점"은 각 시간봉의 파동 위치에서 기대되는 방향일 뿐 매매 신호가 아닙니다. "진입 계획"은 정석적인 되돌림 비율(23.6·38.2·50·61.8%)로 만든 가설 가격이며 체결을 보장하지 않습니다. 위의 진입 계획 카드(지표 기준)와는 계산이 다릅니다. 손절 기준은 무효화 가격이며, 단타는 작은 시간봉의 무효화 가격을 짧은 손절 기준으로 참고하세요.', 'opacity:.65;font-size:11px'));
 }

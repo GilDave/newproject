@@ -14,7 +14,7 @@ HARNESS = r"""
 const fs = require('fs'), vm = require('vm');
 const sb = {console, document: {}, localStorage: {getItem() { return null; }, setItem() {}}, structDraw: function () {}, setInterval() {}};
 vm.createContext(sb);
-vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfNorm, cfClusters, cfAiFor, cfAiVerdict, cfAiLines, cfAiRange, CF_RULE, hooked: !!structDraw.__cf};', sb);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfNorm, cfClusters, cfAiFor, cfAiVerdict, cfAiLines, cfAiRange, cfVerdict, cfTfState, CF_RULE, hooked: !!structDraw.__cf};', sb);
 const X = sb.X, out = {};
 const r = (v) => v === null || v === undefined ? v : Math.round(v * 10000) / 10000;
 const n = (raw, price, atr) => { const o = X.cfNorm(raw, price, atr); return o.ok ? {ok: true, side: o.side, mid: r(o.mid), stop: r(o.stop), t1: r(o.t1), t2: r(o.t2), rr: r(o.rr), poor: o.poor, widened: o.widened, capped: o.capped, inZone: o.inZone, distPct: r(o.distPct)} : o;
@@ -53,6 +53,14 @@ const real = ['1:1분:down:0.10243014', '3:3분:down:0.10242556', '5:5분:down:0
 out.real = X.cfAiLines({forecast: {horizons: real}}, 900, 26).map(l => [l.minutes, l.side, l.k, l.trail]);
 out.real_1m = X.cfAiLines({forecast: {horizons: real}}, 60, 26).map(l => l.minutes);
 out.many = X.cfAiLines({forecast: {horizons: [15, 60, 240, 1440, 10080, 43200, 129600].map((m, i) => ({minutes: m, label: m + '분', direction: 'up', expected: 0.1 * (1 + 0.01 * (i + 1)), status: 'ok'}))}}, 900, 26).map(l => l.minutes);
+const V = (arr) => X.cfVerdict(arr.map(([tf, ind, ell]) => ({tf, ind, ell})));
+const vv = (v) => ({head: v.head, big: [v.big.side, v.big.sum], small: [v.small.side, v.small.sum], states: v.rows.map(r => r.tf + ':' + r.state + ':' + (r.side || '-')), conflicts: v.conflicts.map(r => r.tf), text: v.text});
+out.v_user = vv(V([['15m', 'long', null], ['30m', null, null], ['1h', 'long', null], ['4h', 'short', 'short'], ['1d', null, null]]));
+out.v_conflict = vv(V([['15m', null, null], ['30m', null, null], ['1h', 'long', 'short'], ['4h', null, null]]));
+out.v_none = vv(V([['15m', null, null], ['1h', null, null]]));
+out.v_same = vv(V([['15m', 'long', 'long'], ['30m', 'long', 'long'], ['1h', 'long', 'long'], ['4h', 'long', null]]));
+out.v_opp = vv(V([['15m', 'short', 'short'], ['30m', 'short', 'short'], ['4h', 'long', 'long']]));
+out.v_small_only = vv(V([['30m', 'long', 'long'], ['15m', 'long', null], ['4h', null, null]]));
 out.range = [X.cfAiRange(X.cfAiLines({forecast: {horizons: real}}, 900, 26), 0.10215), X.cfAiRange([], 0.1), X.cfAiRange(null, 0.1), X.cfAiRange([{price: 0.1}], 0.1)];
 out.lines_empty = [X.cfAiLines(null, 900, 26).length, X.cfAiLines({forecast: {horizons: [{minutes: 1, expected: 0.1, status: 'ok'}]}}, 900, 26).length, X.cfAiLines({forecast: {horizons: [{minutes: 15, expected: 0.1, status: 'error'}, {minutes: 15, expected: -1, status: 'ok'}]}}, 900, 26).length];
 console.log(JSON.stringify(out));
@@ -103,6 +111,18 @@ def test_ai_forecast_lines_skip_horizons_shorter_than_a_bar_and_limit_the_trail_
     assert o["real"] == [[15, "short", 1, True], [60, None, 4, True], [1440, "long", 96, False], [10080, "short", 672, False], [43200, "short", 2880, False]]
     assert o["real_1m"] == [1, 1440, 10080, 43200]                                         # 1분 차트: 1분 예측부터, 3·5·15·30·60분·4시간은 1분 예측과 0.1% 이내라 제외
     assert o["many"] == [15, 60, 10080, 43200, 129600]                                      # 서로 다른 가격이 5개를 넘으면 가까운 2개 + 가장 먼 3개
+    u = o["v_user"]                                                                          # 실제 화면의 상황: 15분 지표 롱·1시간 지표 롱·4시간 지표/엘리엇 숏
+    assert u["head"] == "short" and u["big"] == ["short", -5] and u["small"] == ["wait", 1]
+    assert u["states"] == ["15m:single:long", "30m:none:-", "1h:single:long", "4h:agree:short", "1d:none:-"] and u["conflicts"] == [] and "큰 흐름 숏, 단타는 대기" in u["text"]
+    c = o["v_conflict"]
+    assert c["conflicts"] == ["1h"] and c["head"] == "wait" and c["big"] == ["wait", 0] and "관망" in c["text"]           # 같은 시간봉에서 반대면 0점
+    assert o["v_none"]["head"] == "wait" and o["v_none"]["text"] == "뚜렷한 방향이 없습니다 → 관망"
+    s = o["v_same"]
+    assert s["head"] == "long" and s["big"][0] == "long" and s["small"] == ["long", 6] and "롱 우세" in s["text"]       # 30분 일치 4점 + 15분 일치 2점 = 6
+    d = o["v_opp"]
+    assert d["head"] == "long" and d["big"][0] == "long" and d["small"][0] == "short" and "역추세" in d["text"]
+    so = o["v_small_only"]
+    assert so["head"] == "long" and so["big"] == ["wait", 0] and so["small"][0] == "long" and "큰 흐름은 불분명" in so["text"]
     r0 = o["range"][0]
     assert r0["lo"] == 0.09357405 and r0["hi"] == 0.10382156 and o["range"][1:] == [None, None, None]        # 축을 넓힐 범위: 가장 낮은(1달) ~ 가장 높은(1일) 예측, 현재가 포함. 선이 없거나 범위가 0이면 없음
     assert o["lines_empty"] == [0, 0, 0]                                                   # 데이터 없음·너무 짧음·오류/잘못된 가격은 그리지 않는다

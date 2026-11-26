@@ -69,11 +69,13 @@ function entCard() {
   const tfs = d.plans.timeframes, fav = d.plans.favorable;
   const pr = ['1h', '4h', '15m', '1d'].map(k => tfs[k]).find(p => p && p.status === 'ok');
   box.appendChild(entEl('div', 'sub', entStudyLine()));
-  const bias = entBias(tfs); if (bias) box.appendChild(entEl('div', 'fav', bias));
+  if (typeof cfVerdictSlot === 'function') box.appendChild(cfVerdictSlot());      // 지표·엘리엇을 한 규칙으로 합친 종합 판정(가격 종합 블록이 있을 때) — 방향 종합 줄을 대신한다
+  else { const bias = entBias(tfs); if (bias) box.appendChild(entEl('div', 'fav', bias)); }
   if (pr) box.appendChild(entEl('div', 'sub', '현재가 ' + entFmt(pr.price) + ' (진입가까지의 거리는 현재가 기준: + 위, - 아래)'));
   if (fav && tfs[fav] && tfs[fav].best) {
     const b = tfs[fav].best, v = entVerdict(fav, b.setup);
     const fv = entEl('div', 'fav'); fv.appendChild(entEl('span', 'dir ' + b.direction, entDirWord(b))); fv.appendChild(document.createTextNode((v.cls === 'ok' ? '지금 가장 유리한 시간봉: ' : '조건이 가장 많이 겹친 시간봉(과거 검증 미통과 · 참고용): ') + ENT_TF_KO[fav] + ' — ' + ENT_SETUP[b.setup] + (b.aligned_trend ? '' : ' (추세와 반대)'))); box.appendChild(fv);
+    if (typeof cfVerdictSlot === 'function') box.appendChild(entEl('div', 'sub', '※ 이 줄은 지표(RSI·MACD·볼린저) 한 가지로 본 ' + ENT_TF_KO[fav] + ' 계획입니다. 방향 판단은 위 「종합 판정」을 따르세요(시간봉이 달라 서로 다를 수 있습니다).'));
     box.appendChild(entEl('div', 'sub', entDirHelp(b)));
     box.appendChild(entEl('div', null, '권장 진입 ' + entFmt(b.entry) + ' (구간 ' + entFmt(b.zone[0]) + ' ~ ' + entFmt(b.zone[1]) + ') · 손절 ' + entFmt(b.stop) + ' · 목표 ' + entFmt(b.targets[0]) + ' / ' + entFmt(b.targets[1])
       + ' · 진입까지 ' + entDist(b) + ' · 첫 목표 손익비 ' + b.rr.toFixed(2) + ' · 손절 폭 ' + (b.risk_pct * 100).toFixed(1) + '% · 조건 일치 ' + b.score + '/3' + (b.htf_aligned ? ' · 상위 시간봉 추세와 같은 방향' : '')));
