@@ -157,10 +157,12 @@ async function frcFetch(tf) {
 function frcFmt(v) { return typeof fmt === 'function' ? fmt(v, 5) : Number(v).toFixed(5); }
 function frcBoxEl() {
   if (FRC.box && FRC.box.isConnected) return FRC.box;
+  if (typeof hubEnsure === 'function') hubEnsure();
   const wrap = document.getElementById('chartwrap') || document.getElementById('chart'); if (!wrap) return null;
   const box = document.createElement('div'); box.id = 'fractal-box';
   box.style.cssText = 'margin:6px 0;padding:8px 10px;border:1px solid #2a2e39;border-radius:8px;background:#131722;color:#d1d4dc;font:12px/1.6 sans-serif';
-  wrap.insertAdjacentElement('afterend', box); FRC.box = box; return box;
+  const pane = document.getElementById('hub-pane-ell'); if (pane) pane.appendChild(box); else wrap.insertAdjacentElement('afterend', box);
+  FRC.box = box; return box;
 }
 function frcBox() {
   const box = frcBoxEl(); if (!box) return;

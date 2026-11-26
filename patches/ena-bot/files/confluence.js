@@ -80,6 +80,11 @@ function cfVerdictFill(el, v) {
   el.appendChild(mk('div', '시간봉이 다른 의견은 충돌이 아닙니다(예: 15분 지표 롱 = 단기 반등, 4시간 엘리엇 숏 = 큰 하락 흐름). 규칙: 같은 시간봉에서 일치 2점·한쪽만 1점·충돌 0점 × 시간봉 무게(1일 5·4시간 4·1시간 3·30분 2·15분 1), 큰 흐름·단타를 따로 합해 ±3 미만이면 관망. 거래량은 가격 근거로만 쓰고 AI 예측은 검증상 우위가 없어 넣지 않았습니다. 매매 신호가 아니며 과거 통계로 검증되지 않았습니다.', 'margin-top:4px;opacity:.6;font-size:11px'));
 }
 function cfVerdictSlot() {
+  if (document.getElementById('analysis-hub')) {      // 분석 허브가 있으면 종합 판정은 허브의 「종합」 탭 한 곳에서만 본다
+    const n = document.createElement('div'); n.id = 'unified-verdict-note'; n.style.cssText = 'margin:4px 0;padding:6px 10px;border:1px dashed #2a2e39;border-radius:8px;font-size:12px;opacity:.85;cursor:pointer';
+    n.textContent = '※ 이 탭은 지표(RSI·MACD·볼린저)만의 의견입니다. 종합 판정·체크리스트·가격 비교는 「종합」 탭에서 한 곳으로 봅니다. (눌러서 이동)';
+    n.onclick = () => { if (typeof hubSetTab === 'function') hubSetTab('sum'); }; return n;
+  }
   const d = document.createElement('div'); d.id = 'unified-verdict';
   d.style.cssText = 'margin:6px 0;padding:8px 10px;border:1px solid #2a2e39;border-radius:8px;background:#161b28;color:#d1d4dc;font:12px/1.6 sans-serif';
   if (CF.last && CF.last.verdict) cfVerdictFill(d, CF.last.verdict); else d.textContent = '종합 판정을 계산하는 중…';
@@ -169,7 +174,8 @@ function cfAiLines(fc, mainSec, futureBars) {
   for (const h of hs) {
     if (!h || (h.status && h.status !== 'ok') || !(h.expected > 0) || !(h.minutes > 0) || h.minutes * 60 < mainSec * 0.99) continue;
     const side = h.direction === 'up' ? 'long' : h.direction === 'down' ? 'short' : null, k = Math.max(1, Math.round(h.minutes * 60 / mainSec));
-    all.push({minutes: h.minutes, label: h.label || h.minutes + '분', side, price: h.expected, base: h.base_price > 0 ? h.base_price : null, k, trail: k <= futureBars - 1, kEnd: Math.max(1, Math.min(k, futureBars - 1))});
+    all.push({minutes: h.minutes, label: h.label || h.minutes + '분', side, price: h.expected, base: h.base_price > 0 ? h.base_price : null, k, trail: k <= futureBars - 1, kEnd: Math.max(1, Math.min(k, futureBars - 1)),
+      baseTs: h.base_ts > 0 ? h.base_ts / 1000 : null, score: typeof h.score === 'number' ? h.score : null, sigma: typeof h.sigma_h === 'number' ? h.sigma_h : null});
   }
   all.sort((a, b) => a.minutes - b.minutes);
   let out = [];
@@ -183,6 +189,13 @@ function cfAiRange(lines, price) {
   let lo = price > 0 ? price : Infinity, hi = price > 0 ? price : -Infinity;
   for (const x of lines) { if (x.price < lo) lo = x.price; if (x.price > hi) hi = x.price; }
   return lo < hi ? {lo, hi} : null;
+}
+// 차트 봉 시각(오름차순) 중 t(초) 이하의 가장 큰 값. t 가 첫 봉보다 앞이면 첫 봉.
+function cfSnapBar(t) {
+  if (typeof bars === 'undefined' || !bars.length) return null;
+  let lo = 0, hi = bars.length - 1, ans = 0;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (bars[mid].time <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+  return bars[ans].time;
 }
 function cfAiClear() {
   if (CF.aiFitSeries) { try { chart.removeSeries(CF.aiFitSeries); } catch (e) { /* 이미 없음 */ } CF.aiFitSeries = null; }
@@ -205,9 +218,14 @@ function cfAiDraw() {
     // 마지막 봉에서 예측 가격까지 이어지는 점선. 예측 시점이 화면 오른쪽 여백보다 멀면(x.trail === false) 오른쪽 끝까지만 그리고 끝에 '→' 를 붙인다(시간 축척이 아님).
     if (fut >= 2 && typeof timeAt === 'function') {
       const t1 = timeAt(bars.length - 1 + x.kEnd); if (!(t1 > last.time)) continue;
+      // 출발점 = 예측이 만들어진 '기준가·기준 시각'(마지막 확정 캔들의 종가). 기준 정보가 없으면 마지막 봉.
+      const hasBase = x.base > 0 && x.baseTs > 0, t0 = hasBase ? cfSnapBar(x.baseTs) : last.time, v0 = hasBase ? x.base : last.close;
+      if (t0 == null || !(t1 > t0)) continue;
       const sr = chart.addLineSeries({color, lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false});
-      sr.setData([{time: last.time, value: last.close}, {time: t1, value: x.price}]);
-      sr.setMarkers([{time: t1, position: 'inBar', color, shape: x.side === 'long' ? 'arrowUp' : x.side === 'short' ? 'arrowDown' : 'circle', text: 'AI ' + x.label + (x.trail ? '' : ' →')}]);
+      sr.setData([{time: t0, value: v0}, {time: t1, value: x.price}]);
+      const pct = hasBase ? (x.price / x.base - 1) * 100 : null;
+      const txt = 'AI ' + x.label + ' ' + mark + (pct != null ? ' ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : '') + (x.score != null ? ' · 점수 ' + x.score.toFixed(2) : '') + (hasBase ? ' · 기준 ' + cfFmt(x.base) : '') + (x.trail ? '' : ' →');
+      sr.setMarkers([{time: t0, position: 'inBar', color, shape: 'circle', text: ''}, {time: t1, position: 'inBar', color, shape: x.side === 'long' ? 'arrowUp' : x.side === 'short' ? 'arrowDown' : 'circle', text: txt}]);
       CF.aiSeries.push(sr);
     }
   }
@@ -228,10 +246,12 @@ async function cfLoadLevels() {
 function cfFmt(v) { return typeof fmt === 'function' ? fmt(v, 5) : Number(v).toFixed(5); }
 function cfBoxEl() {
   if (CF.box && CF.box.isConnected) return CF.box;
+  if (typeof hubEnsure === 'function') hubEnsure();
   const anchor = document.getElementById('fractal-box') || document.getElementById('chartwrap'); if (!anchor) return null;
   const box = document.createElement('div'); box.id = 'confluence-box';
   box.style.cssText = 'margin:6px 0;padding:8px 10px;border:1px solid #2a2e39;border-radius:8px;background:#131722;color:#d1d4dc;font:12px/1.6 sans-serif';
-  anchor.insertAdjacentElement('afterend', box); CF.box = box; return box;
+  const pane = document.getElementById('hub-pane-prc'); if (pane) pane.appendChild(box); else anchor.insertAdjacentElement('afterend', box);
+  CF.box = box; return box;
 }
 function cfClearLines() { for (const l of CF.lines) { try { candle.removePriceLine(l); } catch (e) { /* 이미 없음 */ } } CF.lines = []; }
 function cfBuild(price) {
@@ -264,6 +284,7 @@ function cfDraw() {
     const key = JSON.stringify([price.toFixed(5), res.rows.map(r => [r.op.ind, r.op.ell]), CF.collapsed, CF.lineOn, CF.aiOn, CF.aiFit, (CF.ai && CF.ai.forecast && CF.ai.forecast.horizons || []).map(h => h && [h.minutes, h.expected]), bars.length, res.rows.map(r => r.ai ? [r.ai.side, r.ai.score] : null), !!CF.aiLearn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
     if (key === CF.key) return; CF.key = key;
     cfBox(res, price);
+    if (typeof hubRender === 'function') hubRender(res, price);
     cfClearLines(); cfAiDraw();
     if (CF.lineOn && typeof candle !== 'undefined') for (const c of res.clusters.slice(0, 4)) CF.lines.push(candle.createPriceLine({price: c.mid, color: c.side === 'long' ? '#26a69a' : '#ef5350', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: '합의 ' + c.members.length + ' ' + (c.side === 'long' ? '롱' : '숏')}));
   } catch (err) { /* 종합 표 실패가 차트를 깨뜨리지 않게 한다 */ }
