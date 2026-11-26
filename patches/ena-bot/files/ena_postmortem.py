@@ -122,7 +122,7 @@ PROMPT = ("당신은 퀀트 트레이딩 리뷰어입니다. 아래는 ENAUSDT �
 
 def ask_ollama(stats: dict, model: str, host: str, timeout: int = 300) -> str:
     body = json.dumps({"model": model, "prompt": PROMPT + json.dumps(stats, ensure_ascii=False, indent=1),
-                       "stream": False, "think": False, "options": {"temperature": 0.2}}).encode()
+                       "stream": False, "think": False, "options": {"temperature": 0.2, "num_ctx": 8192}}).encode()
     req = urllib.request.Request(host.rstrip("/") + "/api/generate", body, {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())["response"].strip()
@@ -146,10 +146,98 @@ def render(s: dict) -> str:
     return "\n".join(L)
 
 
+# ---- v1(3분봉 엔진) 거래: entry / trade_closed 이벤트 ----
+def load_v1(db: str, since_ms: int = 0) -> list[dict]:
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        rows = con.execute("select ts_ms, kind, data from events where kind in ('entry','trade_closed') order by id").fetchall()
+    finally:
+        con.close()
+    out, pend = [], None
+    for ts, kind, data in rows:
+        d = json.loads(data)
+        if kind == "entry":
+            pend = dict(d, ts_ms=ts)
+        elif pend is not None:
+            notional = (pend.get("qty") or 0) * (pend.get("price") or 0)
+            stop = pend.get("stop")
+            t = {"ts_ms": pend["ts_ms"], "exit_ts": ts, "side": pend.get("side"), "signal": str(pend.get("signal", "")),
+                 "bars": d.get("bars") or 0, "pnl": float(d.get("pnl") or 0.0),
+                 "ret_pct": float(d.get("pnl") or 0.0) / notional * 100 if notional else 0.0,
+                 "stop_pct": abs(pend["price"] - stop) / pend["price"] * 100 if stop and pend.get("price") else None}
+            pend = None
+            if t["ts_ms"] >= since_ms:
+                out.append(t)
+    return out
+
+
+def _rsi(sig: str):
+    import re
+    m = re.search(r"rsi=([0-9.]+)", sig)
+    return float(m.group(1)) if m else None
+
+
+def _grp_v1(trades, key) -> dict:
+    g = defaultdict(list)
+    for t in trades:
+        g[key(t)].append(t)
+    return {k: {"n": len(v), "win": sum(x["pnl"] > 0 for x in v), "pnl": round(sum(x["pnl"] for x in v), 3),
+                "avg_ret_pct": round(st.mean(x["ret_pct"] for x in v), 3)} for k, v in sorted(g.items())}
+
+
+def analyze_v1(trades: list[dict]) -> dict:
+    if not trades:
+        return {"trades": 0}
+    streak = best = 0
+    for t in trades:
+        streak = streak + 1 if t["pnl"] <= 0 else 0
+        best = max(best, streak)
+    wins = [t for t in trades if t["pnl"] > 0]
+    losses = [t for t in trades if t["pnl"] <= 0]
+    def rb(t):
+        r = _rsi(t["signal"])
+        return "rsi 없음" if r is None else "rsi<40" if r < 40 else "rsi 40~60" if r <= 60 else "rsi>60"
+    return {
+        "trades": len(trades), "period": [fmt(trades[0]["ts_ms"]), fmt(trades[-1]["exit_ts"])],
+        "wins": len(wins), "losses": len(losses), "win_rate_pct": round(len(wins) / len(trades) * 100, 1),
+        "total_pnl": round(sum(t["pnl"] for t in trades), 3),
+        "avg_win_pnl": round(st.mean(t["pnl"] for t in wins), 3) if wins else None,
+        "avg_loss_pnl": round(st.mean(t["pnl"] for t in losses), 3) if losses else None,
+        "longest_loss_streak": best,
+        "median_stop_pct": round(st.median(t["stop_pct"] for t in trades if t["stop_pct"]), 3) if any(t["stop_pct"] for t in trades) else None,
+        "by_side": _grp_v1(trades, lambda t: "롱(Buy)" if t["side"] == "Buy" else "숏(Sell)"),
+        "by_signal": _grp_v1(trades, lambda t: t["signal"].split(" ")[0] or "?"),
+        "by_rsi": _grp_v1(trades, rb),
+        "by_bars_held": _grp_v1(trades, lambda t: "0~2봉" if t["bars"] <= 2 else "3~9봉" if t["bars"] < 10 else "10봉 이상"),
+        "by_hour_block": _grp_v1(trades, lambda t: f"{_lt(t['ts_ms']).tm_hour // 6 * 6:02d}시대 진입"),
+        "by_day": _grp_v1(trades, lambda t: time.strftime("%m-%d", _lt(t["ts_ms"]))),
+        "worst": [{"in": fmt(t["ts_ms"]), "side": t["side"], "signal": t["signal"][:24], "bars": t["bars"], "pnl": round(t["pnl"], 3)}
+                  for t in sorted(trades, key=lambda x: x["pnl"])[:5]],
+    }
+
+
+def render_v1(s: dict) -> str:
+    if not s.get("trades"):
+        return "분석할 entry/trade_closed 기록이 없습니다."
+    L = [f"[3분봉 엔진 v1] 기간 {s['period'][0]} ~ {s['period'][1]} · 거래 {s['trades']}건 · 승 {s['wins']} / 패 {s['losses']} (승률 {s['win_rate_pct']}%)",
+         f"손익 합계 {s['total_pnl']} USDT · 평균 이익 {s['avg_win_pnl']} · 평균 손실 {s['avg_loss_pnl']} · 최장 연패 {s['longest_loss_streak']} · 손절폭 중앙값 {s['median_stop_pct']}%", ""]
+    for title, k in (("방향별", "by_side"), ("신호별", "by_signal"), ("진입 시 RSI별", "by_rsi"), ("보유 봉수별", "by_bars_held"),
+                     ("진입 시간대별", "by_hour_block"), ("날짜별", "by_day")):
+        L.append(f"[{title}]  (건수 · 승 · 손익합 · 평균수익률%)")
+        for name, v in s[k].items():
+            L.append(f"  {name:14s} n={v['n']:3d} 승={v['win']:3d} 손익={v['pnl']:+8.3f} 평균={v['avg_ret_pct']:+.3f}%")
+        L.append("")
+    L.append("[최악 거래 5건]")
+    for w in s["worst"]:
+        L.append(f"  {w['in']} {w['side']} {w['signal']} {w['bars']}봉 {w['pnl']:+.3f}")
+    return "\n".join(L)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default="data/bot.db")
     ap.add_argument("--since", help="MM-DD 이후만 (현재 연도, 로컬 시간)")
+    ap.add_argument("--source", choices=("trend", "v1"), default="trend", help="trend: 4시간 추세 봇 사이클 / v1: 3분봉 엔진 거래")
     ap.add_argument("--llm", action="store_true", help="올라마 해설 추가")
     ap.add_argument("--model", default="qwen3:8b")
     ap.add_argument("--host", default="http://127.0.0.1:11434")
@@ -157,9 +245,15 @@ def main(argv=None) -> int:
     since = 0
     if a.since:
         since = int(time.mktime(time.strptime(f"{time.localtime().tm_year}-{a.since}", "%Y-%m-%d")) * 1000)
-    s = analyze(load_cycles(a.db, since))
-    print(render(s))
-    if a.llm and s["cycles"]:
+    if a.source == "v1":
+        s = analyze_v1(load_v1(a.db, since))
+        print(render_v1(s))
+        has = bool(s.get("trades"))
+    else:
+        s = analyze(load_cycles(a.db, since))
+        print(render(s))
+        has = bool(s["cycles"])
+    if a.llm and has:
         print(f"\n[올라마 해설 · {a.model}] (가설일 뿐 사실이 아닙니다)")
         try:
             print(ask_ollama(s, a.model, a.host))

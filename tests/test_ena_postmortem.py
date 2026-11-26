@@ -40,3 +40,25 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V1(unittest.TestCase):
+    def test_v1_pairing_and_groups(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = d + "/b.db"
+            c = sqlite3.connect(db); c.execute("create table events(id integer primary key, ts_ms int, kind text, data text)")
+            def ev(i, k, **dd): c.execute("insert into events(ts_ms,kind,data) values(?,?,?)", (T0 + i * 180000, k, json.dumps(dd)))
+            ev(0, "entry", side="Buy", qty=100, price=1.0, stop=0.98, signal="ema_cross_up rsi=61.0")
+            ev(1, "trade_closed", pnl=-0.5, side="Buy", bars=3)
+            ev(2, "skip", why="x")
+            ev(3, "entry", side="Sell", qty=100, price=1.0, stop=1.02, signal="ema_cross_down rsi=44.0")
+            ev(4, "trade_closed", pnl=1.0, side="Sell", bars=12)
+            ev(5, "trade_closed", pnl=9.9, side="Sell", bars=1)   # 짝 없는 청산은 무시
+            c.commit(); c.close()
+            s = pm.analyze_v1(pm.load_v1(db))
+        self.assertEqual((s["trades"], s["wins"], s["losses"]), (2, 1, 1))
+        self.assertEqual(s["by_signal"]["ema_cross_up"]["n"], 1)
+        self.assertEqual(s["by_rsi"]["rsi>60"]["n"], 1)
+        self.assertEqual(s["median_stop_pct"], 2.0)
+        self.assertIn("거래 2건", pm.render_v1(s))
+        self.assertEqual(pm.render_v1(pm.analyze_v1([])), "분석할 entry/trade_closed 기록이 없습니다.")
