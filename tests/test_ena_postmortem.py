@@ -42,6 +42,26 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CheckNumbers(unittest.TestCase):
+    STATS = {"trades": 34, "by_side": {"롱": {"n": 15, "win": 9, "pnl": 25.561, "avg_ret_pct": 0.219},
+                                      "숏": {"n": 19, "win": 4, "pnl": -62.897, "avg_ret_pct": -0.227}},
+             "win_rate_pct": 38.2, "worst": [{"signal": "ema_cross_down rsi=45.0"}], "period": ["11-21 02:57", "11-24 11:09"]}
+
+    def test_catches_the_hundredfold_error_and_accepts_correct_numbers(self):
+        txt = "롱 평균 수익률은 21.9%이고 숏은 -22.7%다. 성공률은 60%, 21%, 롱 손익 +25.561, 평균 0.22%, rsi=45.0"
+        checked, bad = pm.check_numbers(txt, self.STATS)
+        self.assertEqual(bad, ["-22.7%", "21.9%"])
+        self.assertEqual(checked, 7)
+
+    def test_ignores_integers_dates_and_list_markers(self):
+        checked, bad = pm.check_numbers("1. 34건, 11월 21일 02:57 부터 15건 중 9건", self.STATS)
+        self.assertEqual((checked, bad), (0, []))
+
+    def test_derived_ratios_are_allowed_and_made_up_ones_are_not(self):
+        self.assertEqual(pm.check_numbers("승률 60.0%, 전체의 55.9%", self.STATS)[1], [])   # 9/15, 19/34
+        self.assertEqual(pm.check_numbers("승률 72.5%", self.STATS)[1], ["72.5%"])
+
+
 class V1(unittest.TestCase):
     def test_v1_pairing_and_groups(self):
         with tempfile.TemporaryDirectory() as d:

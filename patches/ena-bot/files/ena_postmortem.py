@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import statistics as st
 import sys
@@ -128,6 +129,57 @@ def ask_ollama(stats: dict, model: str, host: str, timeout: int = 300) -> str:
     req = urllib.request.Request(host.rstrip("/") + "/api/generate", body, {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())["response"].strip()
+
+
+_NUM = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
+
+
+def _allowed_numbers(stats: dict) -> set:
+    """통계 JSON 에 들어 있는 모든 숫자 + 건수에서 계산되는 비율(승률, 전체 대비 비중)."""
+    vals: set = set()
+    total = stats.get("trades") or stats.get("cycles") or 0
+
+    def walk(x):
+        if isinstance(x, bool):
+            return
+        if isinstance(x, (int, float)):
+            vals.add(abs(float(x)))
+        elif isinstance(x, str):
+            vals.update(abs(float(m)) for m in _NUM.findall(x))
+        elif isinstance(x, dict):
+            n, w = x.get("n"), x.get("win")
+            if isinstance(n, int) and n:
+                vals.add(n / total * 100 if total else 0.0)
+                if isinstance(w, int):
+                    vals.add(w / n * 100)
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                walk(v)
+    walk(stats)
+    return vals
+
+
+def check_numbers(text: str, stats: dict) -> tuple[int, list[str]]:
+    """해설 속 소수점·% 숫자가 통계(또는 건수에서 계산한 비율)에 있는지 대조한다. (검사한 개수, 없는 숫자 목록).
+
+    정수만 있는 숫자(날짜·번호·건수)는 검사하지 않는다. 마지막 자리의 반올림 오차(±0.5 단위)는 허용한다.
+    한계: 정수 %는 허용 폭이 ±0.5 라 우연히 다른 값과 맞을 수 있다(놓침은 있어도 없는 숫자를 만들어 내지는 않는다)."""
+    allowed = _allowed_numbers(stats)
+    checked, bad = 0, []
+    for m in re.finditer(r"(?<![\w.])-?\d+(?:\.\d+)?(\s*%)?", text):
+        raw = m.group(0)
+        num = m.group(0).replace("%", "").strip()
+        if "." not in num and not m.group(1):
+            continue
+        checked += 1
+        dec = len(num.split(".")[1]) if "." in num else 0
+        tol = 0.5 * 10 ** (-dec) + 1e-9
+        x = abs(float(num))
+        if not any(abs(x - v) <= tol for v in allowed):
+            bad.append(raw.strip())
+    return checked, sorted(set(bad))
 
 
 def render(s: dict) -> str:
@@ -266,7 +318,11 @@ def main(argv=None) -> int:
     if a.llm and has:
         print(f"\n[올라마 해설 · {a.model}] (가설일 뿐 사실이 아닙니다)")
         try:
-            print(ask_ollama(s, a.model, a.host))
+            text = ask_ollama(s, a.model, a.host)
+            print(text)
+            checked, bad = check_numbers(text, s)
+            print("\n[자동 검산] " + (f"⚠ 통계에서 확인되지 않은 숫자: {', '.join(bad)} (해설의 이 부분은 믿지 마세요 · 검사 {checked}개)" if bad
+                  else f"해설의 소수·% 숫자 {checked}개가 모두 통계와 일치합니다 (해석의 옳고 그름은 검사하지 않습니다)"))
         except Exception as exc:  # noqa: BLE001
             print(f"올라마 호출 실패: {exc}", file=sys.stderr)
             return 1
