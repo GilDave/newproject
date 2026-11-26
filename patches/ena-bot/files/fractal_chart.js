@@ -194,10 +194,15 @@ function frcBox() {
     const bd = mk('span', v.badge, 'display:inline-block;min-width:34px;text-align:center;padding:0 7px;border-radius:5px;font-weight:700;color:#fff;margin-right:6px;background:' + (v.side === 'long' ? '#1e8e5a' : v.side === 'short' ? '#c62828' : '#4a5168'));
     vc.appendChild(bd); vc.appendChild(document.createTextNode(v.why + (v.counter ? ' · 큰 흐름과 반대(역추세 단타, 짧게)' : '')));
     const pc = tr.insertCell(), pl = e && e.status === 'ok' ? frcPlan(e, price) : null;
-    if (pl) {
+    const nm = pl && typeof cfNorm === 'function' ? cfNorm({side: pl.side, lo: pl.zone[0], hi: pl.zone[1], stop: pl.stop, targets: pl.targets}, price, typeof cfAtr === 'function' ? cfAtr(name) : null) : null;
+    if (pl && nm && !nm.ok) {      // 가격 종합과 같은 공통 규칙을 통과하지 못한 가설은 이유와 함께 흐리게만 보여준다
+      pc.appendChild(mk('div', '공통 규칙 미통과 — ' + nm.why, 'opacity:.6'));
+      pc.appendChild(mk('div', '(원안) 진입 ' + frcFmt(pl.zone[0]) + ' ~ ' + frcFmt(pl.zone[1]) + ' · 손절 ' + frcFmt(pl.stop), 'opacity:.4;font-size:11px'));
+    } else if (pl) {
+      const q = nm && nm.ok ? {stop: nm.stop, targets: [nm.t1].concat(nm.t2 != null ? [nm.t2] : []), rr: nm.rr} : pl;
       const ML = {with: '4파 끝 진입', pullback: '눌림 진입(늦은 구간)', correction: '조정 진입(역방향)', watch: '조건부 관찰(4파 끝 확인 후)'}, STT = {in: '지금 구간 안', above: '구간 밖(' + (pl.side === 'long' ? '위' : '아래') + ') — 눌림·되돌림 대기', below: '구간 밖(' + (pl.side === 'long' ? '아래' : '위') + ')', broken: '손절 기준을 이미 벗어남', wait: ''};
       pc.appendChild(mk('div', ML[pl.mode] + ' · 진입 ' + frcFmt(pl.zone[0]) + ' ~ ' + frcFmt(pl.zone[1]) + (STT[pl.state] ? ' · ' + STT[pl.state] : ''), pl.state === 'in' ? 'font-weight:700' : ''));
-      pc.appendChild(mk('div', '손절 ' + frcFmt(pl.stop) + ' · 목표 ' + (pl.targets.length ? pl.targets.map(frcFmt).join(' / ') : '이미 넘음') + (pl.rr != null ? ' · 손익비 ' + pl.rr.toFixed(2) : ''), 'opacity:.85'));
+      pc.appendChild(mk('div', '손절 ' + frcFmt(q.stop) + ' · 목표 ' + (q.targets.length ? q.targets.map(frcFmt).join(' / ') : '이미 넘음') + (q.rr != null ? ' · 손익비 ' + q.rr.toFixed(2) : ''), 'opacity:.85'));
     } else pc.textContent = '—';
     tr.insertCell().textContent = e && e.status === 'ok' ? frcFmt(e.invalidation.level) + (price ? ' (' + ((e.invalidation.level / price - 1) * 100).toFixed(1) + '%)' : '') + ' ' + (e.invalidation.side === 'above' ? '위로' : '아래로') + ' 벗어나면 무효' : '—';
     const drawn = FRC.drawn[name]; tr.insertCell().textContent = !FRC.on[name] ? '꺼짐' : sec < mainSec ? '차트보다 짧아 생략' : drawn ? '그림' : '—';
