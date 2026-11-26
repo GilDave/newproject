@@ -21,6 +21,9 @@ CSS = """<!-- CHART-FOCUS-START -->
 #vp-chart .chartbox>.chartreadout{position:sticky!important;top:calc(var(--vtabs-h,0px) + var(--tf-h,40px))!important;z-index:18!important;background:var(--panel,#131722)!important;padding-top:4px;padding-bottom:4px;border-bottom:1px solid #2a2e39}
 #vp-chart,.chartpanel{overflow:visible}
 #vp-chart:fullscreen{overflow:auto}
+/* 도구 줄 ⛶ 버튼으로 브라우저 전체화면에 들어가면 격자 배치와 겹치지 않게 한 줄 배치로 되돌린다 */
+#vp-chart:fullscreen{display:block!important}
+#vp-chart:fullscreen>*{margin-bottom:10px}
 /* 2) 집중 모드 */
 body.chart-focus{overflow:hidden!important}
 body.chart-focus>header,body.chart-focus .views{display:none!important}
@@ -28,7 +31,7 @@ body.chart-focus #vp-chart{position:fixed!important;inset:0;z-index:1000;display
 body.chart-focus #vp-chart>*:not(.chartbox){display:none!important}
 body.chart-focus #vp-chart .chartbox{flex:1 1 auto;min-height:0!important;overflow-y:auto;overflow-x:hidden}
 body.chart-focus #vp-chart .chartbox>*{flex:none}
-body.chart-focus #vp-chart .chartwrap{flex:1 1 auto;height:auto!important;min-height:240px}
+body.chart-focus #vp-chart .chartwrap{flex:none;height:max(340px,58vh)!important}
 body.chart-focus #vp-chart .chartbox>#tf{top:0!important}
 body.chart-focus #vp-chart .chartbox>.chartreadout{top:var(--tf-h,40px)!important}
 #chart-focus-btn{margin-left:8px}
@@ -59,6 +62,14 @@ JS = """<!-- CHART-FOCUS-SCRIPT-START -->
     setTimeout(function(){ window.dispatchEvent(new Event('resize')); }, 60);
   }
   btn.onclick = function(){ set(!body.classList.contains('chart-focus')); };
+  /* 도구 줄의 ⛶ 전체화면 버튼도 같은 집중 모드로 연결한다(메인 스크립트가 chartAction 을 만든 뒤에 바꿔 끼운다) */
+  window.addEventListener('load', function(){
+    if (typeof window.chartAction === 'function' && !window.chartAction.__focus) {
+      const base = window.chartAction;
+      window.chartAction = function(a){ if (a === 'full') { set(!body.classList.contains('chart-focus')); return; } return base.apply(this, arguments); };
+      window.chartAction.__focus = true;
+    }
+  });
   const foot = document.querySelector('#vp-chart .chartfooter');
   if (foot) foot.insertBefore(btn, foot.firstChild); else vp.appendChild(btn);
   paint();

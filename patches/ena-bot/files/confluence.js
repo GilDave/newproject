@@ -169,7 +169,7 @@ function cfAiLines(fc, mainSec, futureBars) {
   for (const h of hs) {
     if (!h || (h.status && h.status !== 'ok') || !(h.expected > 0) || !(h.minutes > 0) || h.minutes * 60 < mainSec * 0.99) continue;
     const side = h.direction === 'up' ? 'long' : h.direction === 'down' ? 'short' : null, k = Math.max(1, Math.round(h.minutes * 60 / mainSec));
-    all.push({minutes: h.minutes, label: h.label || h.minutes + '분', side, price: h.expected, base: h.base_price > 0 ? h.base_price : null, k, trail: k <= futureBars - 1});
+    all.push({minutes: h.minutes, label: h.label || h.minutes + '분', side, price: h.expected, base: h.base_price > 0 ? h.base_price : null, k, trail: k <= futureBars - 1, kEnd: Math.max(1, Math.min(k, futureBars - 1))});
   }
   all.sort((a, b) => a.minutes - b.minutes);
   let out = [];
@@ -202,10 +202,13 @@ function cfAiDraw() {
   for (const x of drawn) {
     const color = x.side === 'long' ? '#66bb6a' : x.side === 'short' ? '#ef5350' : '#9aa3b5', mark = x.side === 'long' ? '▲' : x.side === 'short' ? '▼' : '−';
     CF.aiLines.push(candle.createPriceLine({price: x.price, color, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'AI ' + x.label + ' ' + mark}));
-    if (x.trail && typeof timeAt === 'function') {
-      const t1 = timeAt(bars.length - 1 + x.k); if (!(t1 > last.time)) continue;
-      const sr = chart.addLineSeries({color, lineWidth: 1, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false});
-      sr.setData([{time: last.time, value: last.close}, {time: t1, value: x.price}]); CF.aiSeries.push(sr);
+    // 마지막 봉에서 예측 가격까지 이어지는 점선. 예측 시점이 화면 오른쪽 여백보다 멀면(x.trail === false) 오른쪽 끝까지만 그리고 끝에 '→' 를 붙인다(시간 축척이 아님).
+    if (fut >= 2 && typeof timeAt === 'function') {
+      const t1 = timeAt(bars.length - 1 + x.kEnd); if (!(t1 > last.time)) continue;
+      const sr = chart.addLineSeries({color, lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false});
+      sr.setData([{time: last.time, value: last.close}, {time: t1, value: x.price}]);
+      sr.setMarkers([{time: t1, position: 'inBar', color, shape: x.side === 'long' ? 'arrowUp' : x.side === 'short' ? 'arrowDown' : 'circle', text: 'AI ' + x.label + (x.trail ? '' : ' →')}]);
+      CF.aiSeries.push(sr);
     }
   }
 }

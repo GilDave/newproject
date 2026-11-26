@@ -48,6 +48,7 @@ const lines = X.cfAiLines({forecast: {horizons: [{minutes: 1, label_ko: '하락'
   {minutes: 15, label: '15분', direction: 'up', expected: 0.1031, base_price: 0.1025, status: 'ok'}, {minutes: 60, label: '1시간', direction: 'down', expected: 0.1020, status: 'ok'},
   {minutes: 240, label: '4시간', direction: 'flat', expected: 0.1026, status: 'ok'}, {minutes: 1440, label: '1일', direction: 'up', expected: 0.11, status: 'ok'}, {minutes: 30, status: 'insufficient'}]}}, 900, 26);
 out.lines = lines.map(l => [l.minutes, l.label, l.side, l.price, l.k, l.trail]);
+out.kend = lines.map(l => l.kEnd);
 const real = ['1:1분:down:0.10243014', '3:3분:down:0.10242556', '5:5분:down:0.10242007', '15:15분:down:0.10236401', '30:30분:neutral:0.10243989', '60:1시간:neutral:0.10248999', '240:4시간:neutral:0.10250251', '1440:1일:up:0.10382156', '10080:1주:down:0.09888259', '43200:1달:down:0.09357405']
   .map(s => { const [m, l, d, p] = s.split(':'); return {minutes: +m, label: l, direction: d, expected: +p, status: 'ok'}; });
 out.real = X.cfAiLines({forecast: {horizons: real}}, 900, 26).map(l => [l.minutes, l.side, l.k, l.trail]);
@@ -125,6 +126,7 @@ def test_ai_forecast_lines_skip_horizons_shorter_than_a_bar_and_limit_the_trail_
     assert so["head"] == "long" and so["big"] == ["wait", 0] and so["small"][0] == "long" and "큰 흐름은 불분명" in so["text"]
     r0 = o["range"][0]
     assert r0["lo"] == 0.09357405 and r0["hi"] == 0.10382156 and o["range"][1:] == [None, None, None]        # 축을 넓힐 범위: 가장 낮은(1달) ~ 가장 높은(1일) 예측, 현재가 포함. 선이 없거나 범위가 0이면 없음
+    assert o["kend"] == [1, 4, 16, 25]                                                       # 궤적 끝: 예측 시점(봉 수)과 미래 여백(25봉) 중 작은 쪽. 1일(96봉)은 오른쪽 끝(25봉)까지만
     assert o["lines_empty"] == [0, 0, 0]                                                   # 데이터 없음·너무 짧음·오류/잘못된 가격은 그리지 않는다
 
 
