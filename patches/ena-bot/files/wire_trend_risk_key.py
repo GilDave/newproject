@@ -16,6 +16,9 @@ EDITS = {
         ('RiskState.from_dict(store.kv_get("risk_state", {}))', 'RiskState.from_dict(store.kv_get(TREND_RISK_KEY, {}))'),
         ('self._set_state("risk_state", self.risk.state.to_dict())', 'self._set_state(TREND_RISK_KEY, self.risk.state.to_dict())'),
     ],
+    "tests/test_ollama_fault_injection.py": [
+        ('eng.store.kv_get("risk_state")["halted"] is True', 'eng.store.kv_get("trend_risk_state")["halted"] is True'),
+    ],
     "ena_bot/scores.py": [
         ('st = store.kv_get("risk_state", {}) or {}',
          'st = store.kv_get("trend_risk_state") or store.kv_get("risk_state", {}) or {}  # 추세 봇 전용 상태 우선'),
