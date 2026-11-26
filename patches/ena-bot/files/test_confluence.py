@@ -14,7 +14,7 @@ HARNESS = r"""
 const fs = require('fs'), vm = require('vm');
 const sb = {console, document: {}, localStorage: {getItem() { return null; }, setItem() {}}, structDraw: function () {}, setInterval() {}};
 vm.createContext(sb);
-vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfNorm, cfClusters, cfAiFor, cfAiVerdict, CF_RULE, hooked: !!structDraw.__cf};', sb);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfNorm, cfClusters, cfAiFor, cfAiVerdict, cfAiLines, CF_RULE, hooked: !!structDraw.__cf};', sb);
 const X = sb.X, out = {};
 const r = (v) => v === null || v === undefined ? v : Math.round(v * 10000) / 10000;
 const n = (raw, price, atr) => { const o = X.cfNorm(raw, price, atr); return o.ok ? {ok: true, side: o.side, mid: r(o.mid), stop: r(o.stop), t1: r(o.t1), t2: r(o.t2), rr: r(o.rr), poor: o.poor, widened: o.widened, capped: o.capped, inZone: o.inZone, distPct: r(o.distPct)} : o;
@@ -44,6 +44,11 @@ const fc = {forecast: {horizons: [{minutes: 1, direction: 'down', label_ko: '하
 out.ai = [X.cfAiFor(fc, '15m'), X.cfAiFor(fc, '1h'), X.cfAiFor(fc, '30m'), X.cfAiFor(null, '15m'), X.cfAiFor({forecast: {}}, '15m'), X.cfAiFor(fc, '4h')];
 const lf = (o) => ({series: [Object.assign({status: 'ok', horizon_label: '3분 뒤 종가', current: {hit: 0.5049315619967794, mae: 0.000321401763548984, base_mae: 0.000321533816425121}, trading: {cum_return: -0.9824011901251959}}, o)]});
 out.verdict = [X.cfAiVerdict(lf({})), X.cfAiVerdict(lf({current: {hit: 0.56, mae: 0.0003, base_mae: 0.00033}, trading: {cum_return: 0.1}})), X.cfAiVerdict(null), X.cfAiVerdict({series: [{status: 'error'}]})];
+const lines = X.cfAiLines({forecast: {horizons: [{minutes: 1, label_ko: '하락', label: '1분', direction: 'down', expected: 0.10247, base_price: 0.1025, status: 'ok'},
+  {minutes: 15, label: '15분', direction: 'up', expected: 0.1031, base_price: 0.1025, status: 'ok'}, {minutes: 60, label: '1시간', direction: 'down', expected: 0.1020, status: 'ok'},
+  {minutes: 240, label: '4시간', direction: 'flat', expected: 0.1026, status: 'ok'}, {minutes: 1440, label: '1일', direction: 'up', expected: 0.11, status: 'ok'}, {minutes: 30, status: 'insufficient'}]}}, 900, 26);
+out.lines = lines.map(l => [l.minutes, l.label, l.side, l.price, l.k, l.trail]);
+out.lines_empty = [X.cfAiLines(null, 900, 26).length, X.cfAiLines({forecast: {horizons: [{minutes: 1, expected: 0.1, status: 'ok'}]}}, 900, 26).length, X.cfAiLines({forecast: {horizons: [{minutes: 15, expected: 0.1, status: 'error'}, {minutes: 15, expected: -1, status: 'ok'}]}}, 900, 26).length];
 console.log(JSON.stringify(out));
 """
 
@@ -82,6 +87,13 @@ def test_ai_forecast_is_matched_by_horizon_and_its_verdict_warns_when_there_is_n
     assert v[0]["bad"] is True and "50.5%" in v[0]["text"] and "0.04%" in v[0]["text"] and "-98.2%" in v[0]["text"] and "우위가 확인되지 않았습니다" in v[0]["text"]
     assert v[1]["bad"] is False and "표본 밖 검증" in v[1]["text"]
     assert v[2] is None and v[3] is None
+
+
+def test_ai_forecast_lines_skip_horizons_shorter_than_a_bar_and_limit_the_trail_to_the_future_margin():
+    o = run()
+    # 15분 차트(900초): 1분 예측은 한 봉 안이라 제외, 30분은 상태가 나빠 제외, 가까운 것부터 최대 4개
+    assert o["lines"] == [[15, "15분", "long", 0.1031, 1, True], [60, "1시간", "short", 0.102, 4, True], [240, "4시간", None, 0.1026, 16, True], [1440, "1일", "long", 0.11, 96, False]]
+    assert o["lines_empty"] == [0, 0, 0]                                                   # 데이터 없음·너무 짧음·오류/잘못된 가격은 그리지 않는다
 
 
 def test_confluence_clusters_group_nearby_entries_of_the_same_side():

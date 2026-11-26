@@ -5,11 +5,11 @@ const CF_TFS = ['15m', '30m', '1h', '4h', '1d'];
 const CF_KO = {'15m': '15분', '30m': '30분', '1h': '1시간', '4h': '4시간', '1d': '1일'};
 const CF_RULE = {reachAtr: 3.0, minStopAtr: 0.8, maxStopAtr: 3.5, maxStopPct: 0.10, tpAtr: 4.5, minRR: 1.2, reachPct: 0.08, clusterPct: 0.006};
 const CF_MIN = {'15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440};
-const CF = {ai: null, aiLearn: null, aiAt: 0, aiBusy: false, levels: null, levelsAt: 0, busy: false, collapsed: false, lineOn: false, loaded: false, box: null, lines: [], key: '', last: null};
+const CF = {aiOn: true, aiLines: [], aiSeries: [], ai: null, aiLearn: null, aiAt: 0, aiBusy: false, levels: null, levelsAt: 0, busy: false, collapsed: false, lineOn: false, loaded: false, box: null, lines: [], key: '', last: null};
 function cfStore() {
   try {
-    if (!CF.loaded) { CF.loaded = true; const v = JSON.parse(localStorage.getItem('ena_confluence_v1') || '{}'); if (typeof v.collapsed === 'boolean') CF.collapsed = v.collapsed; if (typeof v.lineOn === 'boolean') CF.lineOn = v.lineOn; }
-    else localStorage.setItem('ena_confluence_v1', JSON.stringify({collapsed: CF.collapsed, lineOn: CF.lineOn}));
+    if (!CF.loaded) { CF.loaded = true; const v = JSON.parse(localStorage.getItem('ena_confluence_v1') || '{}'); if (typeof v.collapsed === 'boolean') CF.collapsed = v.collapsed; if (typeof v.lineOn === 'boolean') CF.lineOn = v.lineOn; if (typeof v.aiOn === 'boolean') CF.aiOn = v.aiOn; }
+    else localStorage.setItem('ena_confluence_v1', JSON.stringify({collapsed: CF.collapsed, lineOn: CF.lineOn, aiOn: CF.aiOn}));
   } catch (e) { /* 기억하지 못해도 동작한다 */ }
 }
 // 공통 현실성 규칙. raw = {side, lo, hi, stop, targets[]} → {ok, ...} 또는 {ok:false, why}. atr 이 없으면(1일봉 등) 퍼센트 한도만 쓴다.
@@ -86,6 +86,36 @@ function cfAiVerdict(lf) {
   text += bad ? ' → 우위가 확인되지 않았습니다. 방향 일치의 근거로 쓰지 마세요.' : ' → 기준선보다 낫지만 표본 밖 검증을 계속 확인하세요.';
   return {text, bad};
 }
+// 차트에 점선으로 그릴 AI 예측: 차트 봉 하나보다 짧은 예측(1분 예측 등)은 한 봉 안에서 보이지 않으니 빼고, 가까운 것부터 최대 4개.
+// k = 마지막 봉에서 몇 봉 뒤인지(예측 길이 ÷ 봉 길이). k 가 미래 여백(futureBars)보다 크면 궤적 선은 생략하고 가격선만 그린다.
+function cfAiLines(fc, mainSec, futureBars) {
+  const hs = fc && fc.forecast && Array.isArray(fc.forecast.horizons) ? fc.forecast.horizons : []; const out = [];
+  for (const h of hs) {
+    if (!h || (h.status && h.status !== 'ok') || !(h.expected > 0) || !(h.minutes > 0) || h.minutes * 60 < mainSec * 0.99) continue;
+    const side = h.direction === 'up' ? 'long' : h.direction === 'down' ? 'short' : null, k = Math.max(1, Math.round(h.minutes * 60 / mainSec));
+    out.push({minutes: h.minutes, label: h.label || h.minutes + '분', side, price: h.expected, base: h.base_price > 0 ? h.base_price : null, k, trail: k <= futureBars - 1});
+  }
+  return out.sort((a, b) => a.minutes - b.minutes).slice(0, 4);
+}
+function cfAiClear() {
+  for (const l of CF.aiLines) { try { candle.removePriceLine(l); } catch (e) { /* 이미 없음 */ } } CF.aiLines = [];
+  for (const sr of CF.aiSeries) { try { chart.removeSeries(sr); } catch (e) { /* 이미 없음 */ } } CF.aiSeries = [];
+}
+function cfAiDraw() {
+  cfAiClear();
+  if (!CF.aiOn || !CF.ai || typeof bars === 'undefined' || !bars.length) return;
+  const mainSec = typeof barSec === 'function' ? barSec() : (bars.length > 1 ? bars[1].time - bars[0].time : 0); if (!mainSec) return;
+  const fut = typeof FUTURE !== 'undefined' ? FUTURE : 0, last = bars[bars.length - 1];
+  for (const x of cfAiLines(CF.ai, mainSec, fut)) {
+    const color = x.side === 'long' ? '#66bb6a' : x.side === 'short' ? '#ef5350' : '#9aa3b5', mark = x.side === 'long' ? '▲' : x.side === 'short' ? '▼' : '−';
+    CF.aiLines.push(candle.createPriceLine({price: x.price, color, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: 'AI ' + x.label + ' ' + mark}));
+    if (x.trail && typeof timeAt === 'function') {
+      const t1 = timeAt(bars.length - 1 + x.k); if (!(t1 > last.time)) continue;
+      const sr = chart.addLineSeries({color, lineWidth: 1, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false});
+      sr.setData([{time: last.time, value: last.close}, {time: t1, value: x.price}]); CF.aiSeries.push(sr);
+    }
+  }
+}
 async function cfLoadAi() {
   if (CF.aiBusy || Date.now() - CF.aiAt < 60000) return;
   CF.aiBusy = true;
@@ -134,10 +164,10 @@ function cfDraw() {
     cfStore(); const price = cfPrice(); if (!price) return;
     cfLoadLevels(); cfLoadAi();
     const res = cfBuild(price); CF.last = res;
-    const key = JSON.stringify([price.toFixed(5), CF.collapsed, CF.lineOn, res.rows.map(r => r.ai ? [r.ai.side, r.ai.score] : null), !!CF.aiLearn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
+    const key = JSON.stringify([price.toFixed(5), CF.collapsed, CF.lineOn, CF.aiOn, (CF.ai && CF.ai.forecast && CF.ai.forecast.horizons || []).map(h => h && [h.minutes, h.expected]), bars.length, res.rows.map(r => r.ai ? [r.ai.side, r.ai.score] : null), !!CF.aiLearn, res.rows.map(r => Object.keys(r.cells).map(k => r.cells[k].ok ? r.cells[k].mid.toFixed(5) : r.cells[k].why))]);
     if (key === CF.key) return; CF.key = key;
     cfBox(res, price);
-    cfClearLines();
+    cfClearLines(); cfAiDraw();
     if (CF.lineOn && typeof candle !== 'undefined') for (const c of res.clusters.slice(0, 4)) CF.lines.push(candle.createPriceLine({price: c.mid, color: c.side === 'long' ? '#26a69a' : '#ef5350', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: '합의 ' + c.members.length + ' ' + (c.side === 'long' ? '롱' : '숏')}));
   } catch (err) { /* 종합 표 실패가 차트를 깨뜨리지 않게 한다 */ }
 }
@@ -162,6 +192,9 @@ function cfBox(res, price) {
   const lb = document.createElement('label'), cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = CF.lineOn;
   cb.onchange = () => { CF.lineOn = cb.checked; cfStore(); CF.key = ''; cfDraw(); };
   lb.appendChild(cb); lb.appendChild(document.createTextNode(' 합의 구간을 차트에 선으로')); lb.style.cursor = 'pointer'; head.appendChild(lb);
+  const la = document.createElement('label'), ca = document.createElement('input'); ca.type = 'checkbox'; ca.checked = CF.aiOn;
+  ca.onchange = () => { CF.aiOn = ca.checked; cfStore(); CF.key = ''; cfDraw(); };
+  la.appendChild(ca); la.appendChild(document.createTextNode(' AI 예측 점선')); la.style.cursor = 'pointer'; la.title = '/api/forecast 의 예측 가격을 차트에 점선(가격선 + 앞으로의 짧은 궤적)으로 그립니다. 과거 검증에서 우위가 확인되지 않은 규칙 점수입니다.'; head.appendChild(la);
   const fold = mk('span', CF.collapsed ? '▸ 펼치기' : '▾ 접기', 'margin-left:auto;cursor:pointer;opacity:.8'); fold.onclick = () => { CF.collapsed = !CF.collapsed; cfStore(); CF.key = ''; cfDraw(); }; head.appendChild(fold); box.appendChild(head);
   if (CF.collapsed) return;
   box.appendChild(mk('div', '공통 규칙 · 현재가 ' + cfFmt(price) + ' 하나로 거리를 계산 · 진입은 3 ATR(평균 변동폭의 3배) 이내 · 손절 0.8~3.5 ATR(최대 10%) · 목표는 4.5 ATR 이내(↧ 제한됨) · 손익비 1.2 미만은 "(낮음)" · 손절을 넓혔으면 ↔', 'opacity:.7;font-size:11px;margin-top:4px'));
