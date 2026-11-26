@@ -86,16 +86,19 @@ function cfAiVerdict(lf) {
   text += bad ? ' → 우위가 확인되지 않았습니다. 방향 일치의 근거로 쓰지 마세요.' : ' → 기준선보다 낫지만 표본 밖 검증을 계속 확인하세요.';
   return {text, bad};
 }
-// 차트에 점선으로 그릴 AI 예측: 차트 봉 하나보다 짧은 예측(1분 예측 등)은 한 봉 안에서 보이지 않으니 빼고, 가까운 것부터 최대 4개.
-// k = 마지막 봉에서 몇 봉 뒤인지(예측 길이 ÷ 봉 길이). k 가 미래 여백(futureBars)보다 크면 궤적 선은 생략하고 가격선만 그린다.
+// 차트에 점선으로 그릴 AI 예측. 차트 봉 하나보다 짧은 예측(예: 15분 차트의 1분 예측)은 한 봉 안이라 빼고, 이미 고른 가격과 0.1% 이내로 겹치는 예측은 빼서(보통 가까운 시간대 예측은 거의 같은 가격)
+// 서로 다른 가격을 가진 예측만 가까운 시간부터 최대 5개 그린다. k = 마지막 봉에서 몇 봉 뒤인지(예측 길이 ÷ 봉 길이). k 가 미래 여백(futureBars)보다 크면 궤적 선은 생략하고 가격선만 그린다.
 function cfAiLines(fc, mainSec, futureBars) {
-  const hs = fc && fc.forecast && Array.isArray(fc.forecast.horizons) ? fc.forecast.horizons : []; const out = [];
+  const hs = fc && fc.forecast && Array.isArray(fc.forecast.horizons) ? fc.forecast.horizons : []; const all = [];
   for (const h of hs) {
     if (!h || (h.status && h.status !== 'ok') || !(h.expected > 0) || !(h.minutes > 0) || h.minutes * 60 < mainSec * 0.99) continue;
     const side = h.direction === 'up' ? 'long' : h.direction === 'down' ? 'short' : null, k = Math.max(1, Math.round(h.minutes * 60 / mainSec));
-    out.push({minutes: h.minutes, label: h.label || h.minutes + '분', side, price: h.expected, base: h.base_price > 0 ? h.base_price : null, k, trail: k <= futureBars - 1});
+    all.push({minutes: h.minutes, label: h.label || h.minutes + '분', side, price: h.expected, base: h.base_price > 0 ? h.base_price : null, k, trail: k <= futureBars - 1});
   }
-  return out.sort((a, b) => a.minutes - b.minutes).slice(0, 4);
+  all.sort((a, b) => a.minutes - b.minutes);
+  const out = [];
+  for (const x of all) { if (out.length >= 5) break; if (out.every(o => Math.abs(x.price / o.price - 1) > 0.001)) out.push(x); }
+  return out;
 }
 function cfAiClear() {
   for (const l of CF.aiLines) { try { candle.removePriceLine(l); } catch (e) { /* 이미 없음 */ } } CF.aiLines = [];

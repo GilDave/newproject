@@ -48,6 +48,10 @@ const lines = X.cfAiLines({forecast: {horizons: [{minutes: 1, label_ko: '하락'
   {minutes: 15, label: '15분', direction: 'up', expected: 0.1031, base_price: 0.1025, status: 'ok'}, {minutes: 60, label: '1시간', direction: 'down', expected: 0.1020, status: 'ok'},
   {minutes: 240, label: '4시간', direction: 'flat', expected: 0.1026, status: 'ok'}, {minutes: 1440, label: '1일', direction: 'up', expected: 0.11, status: 'ok'}, {minutes: 30, status: 'insufficient'}]}}, 900, 26);
 out.lines = lines.map(l => [l.minutes, l.label, l.side, l.price, l.k, l.trail]);
+const real = ['1:1분:down:0.10243014', '3:3분:down:0.10242556', '5:5분:down:0.10242007', '15:15분:down:0.10236401', '30:30분:neutral:0.10243989', '60:1시간:neutral:0.10248999', '240:4시간:neutral:0.10250251', '1440:1일:up:0.10382156', '10080:1주:down:0.09888259', '43200:1달:down:0.09357405']
+  .map(s => { const [m, l, d, p] = s.split(':'); return {minutes: +m, label: l, direction: d, expected: +p, status: 'ok'}; });
+out.real = X.cfAiLines({forecast: {horizons: real}}, 900, 26).map(l => [l.minutes, l.side, l.k, l.trail]);
+out.real_1m = X.cfAiLines({forecast: {horizons: real}}, 60, 26).map(l => l.minutes);
 out.lines_empty = [X.cfAiLines(null, 900, 26).length, X.cfAiLines({forecast: {horizons: [{minutes: 1, expected: 0.1, status: 'ok'}]}}, 900, 26).length, X.cfAiLines({forecast: {horizons: [{minutes: 15, expected: 0.1, status: 'error'}, {minutes: 15, expected: -1, status: 'ok'}]}}, 900, 26).length];
 console.log(JSON.stringify(out));
 """
@@ -93,6 +97,9 @@ def test_ai_forecast_lines_skip_horizons_shorter_than_a_bar_and_limit_the_trail_
     o = run()
     # 15분 차트(900초): 1분 예측은 한 봉 안이라 제외, 30분은 상태가 나빠 제외, 가까운 것부터 최대 4개
     assert o["lines"] == [[15, "15분", "long", 0.1031, 1, True], [60, "1시간", "short", 0.102, 4, True], [240, "4시간", None, 0.1026, 16, True], [1440, "1일", "long", 0.11, 96, False]]
+    # 실제 ENA 응답(1·3·5·15·30분·1·4시간·1일·1주·1달): 15분 차트에서는 1분·3분·5분(한 봉보다 짧음)과, 이미 고른 가격과 0.1% 이내인 30분·4시간 예측을 빼고 5개를 그린다
+    assert o["real"] == [[15, "short", 1, True], [60, None, 4, True], [1440, "long", 96, False], [10080, "short", 672, False], [43200, "short", 2880, False]]
+    assert o["real_1m"][:3] == [1, 15, 1440]                                               # 1분 차트에서는 1분 예측부터(3·5분은 1분 예측과 같은 가격이라 제외)
     assert o["lines_empty"] == [0, 0, 0]                                                   # 데이터 없음·너무 짧음·오류/잘못된 가격은 그리지 않는다
 
 
