@@ -14,7 +14,7 @@ HARNESS = r"""
 const fs = require('fs'), vm = require('vm');
 const sb = {console, document: {}, localStorage: {getItem() { return null; }, setItem() {}}, structDraw: function () {}, setInterval() {}};
 vm.createContext(sb);
-vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfNorm, cfClusters, cfAiFor, cfAiVerdict, cfAiLines, CF_RULE, hooked: !!structDraw.__cf};', sb);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfNorm, cfClusters, cfAiFor, cfAiVerdict, cfAiLines, cfAiRange, CF_RULE, hooked: !!structDraw.__cf};', sb);
 const X = sb.X, out = {};
 const r = (v) => v === null || v === undefined ? v : Math.round(v * 10000) / 10000;
 const n = (raw, price, atr) => { const o = X.cfNorm(raw, price, atr); return o.ok ? {ok: true, side: o.side, mid: r(o.mid), stop: r(o.stop), t1: r(o.t1), t2: r(o.t2), rr: r(o.rr), poor: o.poor, widened: o.widened, capped: o.capped, inZone: o.inZone, distPct: r(o.distPct)} : o;
@@ -52,6 +52,8 @@ const real = ['1:1분:down:0.10243014', '3:3분:down:0.10242556', '5:5분:down:0
   .map(s => { const [m, l, d, p] = s.split(':'); return {minutes: +m, label: l, direction: d, expected: +p, status: 'ok'}; });
 out.real = X.cfAiLines({forecast: {horizons: real}}, 900, 26).map(l => [l.minutes, l.side, l.k, l.trail]);
 out.real_1m = X.cfAiLines({forecast: {horizons: real}}, 60, 26).map(l => l.minutes);
+out.many = X.cfAiLines({forecast: {horizons: [15, 60, 240, 1440, 10080, 43200, 129600].map((m, i) => ({minutes: m, label: m + '분', direction: 'up', expected: 0.1 * (1 + 0.01 * (i + 1)), status: 'ok'}))}}, 900, 26).map(l => l.minutes);
+out.range = [X.cfAiRange(X.cfAiLines({forecast: {horizons: real}}, 900, 26), 0.10215), X.cfAiRange([], 0.1), X.cfAiRange(null, 0.1), X.cfAiRange([{price: 0.1}], 0.1)];
 out.lines_empty = [X.cfAiLines(null, 900, 26).length, X.cfAiLines({forecast: {horizons: [{minutes: 1, expected: 0.1, status: 'ok'}]}}, 900, 26).length, X.cfAiLines({forecast: {horizons: [{minutes: 15, expected: 0.1, status: 'error'}, {minutes: 15, expected: -1, status: 'ok'}]}}, 900, 26).length];
 console.log(JSON.stringify(out));
 """
@@ -100,6 +102,9 @@ def test_ai_forecast_lines_skip_horizons_shorter_than_a_bar_and_limit_the_trail_
     # 실제 ENA 응답(1·3·5·15·30분·1·4시간·1일·1주·1달): 15분 차트에서는 1분·3분·5분(한 봉보다 짧음)과, 이미 고른 가격과 0.1% 이내인 30분·4시간 예측을 빼고 5개를 그린다
     assert o["real"] == [[15, "short", 1, True], [60, None, 4, True], [1440, "long", 96, False], [10080, "short", 672, False], [43200, "short", 2880, False]]
     assert o["real_1m"] == [1, 1440, 10080, 43200]                                         # 1분 차트: 1분 예측부터, 3·5·15·30·60분·4시간은 1분 예측과 0.1% 이내라 제외
+    assert o["many"] == [15, 60, 10080, 43200, 129600]                                      # 서로 다른 가격이 5개를 넘으면 가까운 2개 + 가장 먼 3개
+    r0 = o["range"][0]
+    assert r0["lo"] == 0.09357405 and r0["hi"] == 0.10382156 and o["range"][1:] == [None, None, None]        # 축을 넓힐 범위: 가장 낮은(1달) ~ 가장 높은(1일) 예측, 현재가 포함. 선이 없거나 범위가 0이면 없음
     assert o["lines_empty"] == [0, 0, 0]                                                   # 데이터 없음·너무 짧음·오류/잘못된 가격은 그리지 않는다
 
 
