@@ -115,9 +115,11 @@ def analyze(cycles: list[dict]) -> dict:
     return out
 
 
-PROMPT = ("당신은 퀀트 트레이딩 리뷰어입니다. 아래는 ENAUSDT 추세추종 페이퍼 봇의 왕복 거래 통계(JSON)입니다. "
+PROMPT = ("당신은 퀀트 트레이딩 리뷰어입니다. 아래는 ENAUSDT 페이퍼 봇의 거래 통계(JSON)입니다. "
           "숫자는 코드가 계산한 사실입니다. 규칙: ①통계에 없는 숫자를 만들지 말 것 ②원인을 단정하지 말고 '가설'로 표시 "
-          "③매매 지시나 가격 예측은 하지 말 것 ④한국어로, 관찰 3~5개와 가설 2~3개, 추가로 확인할 데이터 1~2개만. 표본이 작으면 그 점을 먼저 밝힐 것.\n\n")
+          "③매매 지시, 전략 변경 권고, 가격 예측은 하지 말 것 ④한국어로, 첫 문장은 반드시 표본 크기(거래 건수·기간)와 통계적 신뢰도의 한계 "
+          "⑤같은 사실을 다른 이름으로 두 번 세지 말 것(reading_notes 참고) ⑥reading_notes 의 읽기 규칙을 반드시 따를 것 "
+          "⑦관찰 3~5개, 가설 2~3개(근거가 통계에 있는 것만), 추가로 확인할 데이터 1~2개만.\n\n")
 
 
 def ask_ollama(stats: dict, model: str, host: str, timeout: int = 300) -> str:
@@ -204,6 +206,13 @@ def analyze_v1(trades: list[dict]) -> dict:
         "avg_win_pnl": round(st.mean(t["pnl"] for t in wins), 3) if wins else None,
         "avg_loss_pnl": round(st.mean(t["pnl"] for t in losses), 3) if losses else None,
         "longest_loss_streak": best,
+        "breakeven_win_rate_pct": round(abs(st.mean(t["pnl"] for t in losses)) / (st.mean(t["pnl"] for t in wins) + abs(st.mean(t["pnl"] for t in losses))) * 100, 1) if wins and losses else None,
+        "reading_notes": [
+            "by_bars_held: 손절에 빨리 걸린 거래는 정의상 짧은 구간에 몰린다. '오래 보유하면 좋다'는 인과로 읽지 말 것(생존 편향).",
+            "by_side 와 by_signal 은 같은 거래를 다른 이름으로 센 것이다(롱=ema_cross_up, 숏=ema_cross_down). 하나의 발견으로 합칠 것.",
+            "한 구간이 전체 거래의 대부분을 차지하면 그 구간의 효과가 아니라 전체 표본의 성격이다.",
+            "win_rate_pct 와 breakeven_win_rate_pct 의 차이가 손익을 결정한다. 기간이 짧고 시장 국면이 하나라 방향별 차이는 국면 영향일 수 있다.",
+        ],
         "median_stop_pct": round(st.median(t["stop_pct"] for t in trades if t["stop_pct"]), 3) if any(t["stop_pct"] for t in trades) else None,
         "by_side": _grp_v1(trades, lambda t: "롱(Buy)" if t["side"] == "Buy" else "숏(Sell)"),
         "by_signal": _grp_v1(trades, lambda t: t["signal"].split(" ")[0] or "?"),
@@ -220,6 +229,7 @@ def render_v1(s: dict) -> str:
     if not s.get("trades"):
         return "분석할 entry/trade_closed 기록이 없습니다."
     L = [f"[3분봉 엔진 v1] 기간 {s['period'][0]} ~ {s['period'][1]} · 거래 {s['trades']}건 · 승 {s['wins']} / 패 {s['losses']} (승률 {s['win_rate_pct']}%)",
+         f"손익분기 승률 {s['breakeven_win_rate_pct']}% (실제 {s['win_rate_pct']}%)",
          f"손익 합계 {s['total_pnl']} USDT · 평균 이익 {s['avg_win_pnl']} · 평균 손실 {s['avg_loss_pnl']} · 최장 연패 {s['longest_loss_streak']} · 손절폭 중앙값 {s['median_stop_pct']}%", ""]
     for title, k in (("방향별", "by_side"), ("신호별", "by_signal"), ("진입 시 RSI별", "by_rsi"), ("보유 봉수별", "by_bars_held"),
                      ("진입 시간대별", "by_hour_block"), ("날짜별", "by_day")):

@@ -60,5 +60,8 @@ class V1(unittest.TestCase):
         self.assertEqual(s["by_signal"]["ema_cross_up"]["n"], 1)
         self.assertEqual(s["by_rsi"]["rsi>60"]["n"], 1)
         self.assertEqual(s["median_stop_pct"], 2.0)
+        self.assertEqual(s["breakeven_win_rate_pct"], 33.3)   # 평균 이익 1.0, 평균 손실 0.5 → 0.5/1.5
+        self.assertEqual(len(s["reading_notes"]), 4)
+        self.assertIn("표본 크기", pm.PROMPT)
         self.assertIn("거래 2건", pm.render_v1(s))
         self.assertEqual(pm.render_v1(pm.analyze_v1([])), "분석할 entry/trade_closed 기록이 없습니다.")
