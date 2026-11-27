@@ -146,6 +146,8 @@ const sample = {supported: true, interval: '240', tf: '4h', horizon: '24시간(4
     {pat: 'P3', name: '삼각 수렴 상향 돌파', dir: 1, state: 'forming', idx: null, time: null, bars_ago: 0, level: 99, points: [[tt(280), 98], [tt(260), 97], [tt(270), 99], [tt(285), 96]], lines: [[[tt(260), 101], [tt(295), 99]], [[tt(260), 95], [tt(295), 98]]]},
     {pat: 'P9', name: '박스권 상향 돌파', dir: 1, state: 'forming', idx: null, time: null, bars_ago: 0, level: null, points: [], lines: []},
   ],
+  upcoming: [{pat: 'P3', name: '삼각 수렴 상향 돌파', dir: 1, nearest_atr: 0.8, imminent: true,
+    sides: [{side: 'up', level: 99.5, dist_pct: 0.5, dist_atr: 0.8, crossed: false}, {side: 'down', level: 96, dist_pct: -3, dist_atr: 2.4, crossed: false}]}],
   stats: {P0W: {events: 962, mean_net_pct: 0.09, ci95_pct: [-0.35, 0.53], verdict: '근거 없음'}},
   explain: {P0W: {bias: '롱형(상승 전환으로 해석)', shape: 's', reads: 'r', confirm: 'c', fail: 'f', caution: 'x'}, P3: {bias: '롱형', shape: 's', reads: 'r', confirm: 'c', fail: 'f', caution: 'x'}},
   glossary: '롱 = 오르면 이익 ... 추천이 아닙니다.', stats_meta: {generated: '2026-11-27', coins: 18, cost_round_trip_pct: 0.15}};
@@ -175,7 +177,7 @@ def test_overlay_really_draws_lines_and_a_table_with_explanations_in_a_fake_char
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
     assert out["series"] >= 4, out                                    # 쌍바닥(폴리라인+목선)과 삼각(점·선 2)이 실제로 차트에 만들어진다
-    for word in ("쌍바닥(W)", "교과서: 롱형", "이(가) 뭔가요?", "롱·숏이 무슨 뜻인가요?", "과거 962건", "근거 없음"):
+    for word in ("다가오는 신호", "위로 돌파하려면", "아래로 이탈하려면", "임박", "어느 쪽으로 나갈지는 알 수 없고", "쌍바닥(W)", "교과서: 롱형", "이(가) 뭔가요?", "롱·숏이 무슨 뜻인가요?", "과거 962건", "근거 없음"):
         assert word in out["boxText"], word
     assert out["afterFail"]["series"] >= 2 and out["afterFail"]["removed"] >= 1      # 실패한 패턴의 선만 걷히고 나머지는 남는다
     assert out["afterBoxFail"] >= 4                                                     # 표가 터져도 선은 지워지지 않는다

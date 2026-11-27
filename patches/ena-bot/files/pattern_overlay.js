@@ -53,13 +53,31 @@ function patBox() {
   if (!d) { box.appendChild(mk('div', '불러오는 중…', 'opacity:.7')); return; }
   if (d.error) { box.appendChild(mk('div', '패턴을 불러오지 못했습니다.', 'opacity:.7')); return; }
   if (!d.supported) { box.appendChild(mk('div', d.reason || '이 시간봉은 지원하지 않습니다.', 'opacity:.8;margin-top:4px')); return; }
-  const price = bars.length ? bars[bars.length - 1].close : null, list = (d.patterns || []).slice(0, 8);
+  const price = bars.length ? bars[bars.length - 1].close : null;
+  const freshN = d.tf === '4h' ? 6 : 12;           // 확정된 지 이만큼(봉)이 지난 신호는 '지난 신호'로 접어 둔다
+  const allPats = d.patterns || [], list = allPats.filter(g => g.state === 'confirmed' && g.bars_ago <= freshN).slice(0, 8), oldList = allPats.filter(g => g.state === 'confirmed' && g.bars_ago > freshN);
+  const soon = d.upcoming || [], sgp = (v) => (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+  const sec = mk('div', '다가오는 신호 — 형성 중인 패턴이 확정되려면 넘어야 하는 선', 'margin-top:8px;font-weight:700');
+  box.appendChild(sec);
+  if (!soon.length) box.appendChild(mk('div', '지금 ' + d.tf + '에서 선에 가까운(ATR ' + 6 + '배 이내) 형성 중 패턴이 없습니다.', 'margin:2px 0 0 4px;opacity:.8'));
+  for (const u of soon) {
+    const row = mk('div', undefined, 'margin:4px 0 0 4px;padding:4px 8px;border-left:3px solid ' + (u.imminent ? '#f5a623' : '#2a2e39'));
+    const t = mk('div', undefined, ''); t.appendChild(mk('b', u.name)); t.appendChild(document.createTextNode(' · ' + (u.dir > 0 ? '교과서: 롱형' : '교과서: 숏형') + ' · ')); t.appendChild(mk('span', u.imminent ? '임박(선까지 가까움)' : '형성 중', 'color:' + (u.imminent ? '#f5a623' : '#9aa3b5') + ';font-weight:600')); row.appendChild(t);
+    for (const sd of u.sides) {
+      const txt = (sd.side === 'up' ? '위로 돌파하려면 ' : '아래로 이탈하려면 ') + patFmt(sd.level) + ' (현재가 대비 ' + sgp(sd.dist_pct) + ' · 최근 변동폭의 ' + sd.dist_atr.toFixed(1) + '배)' + (sd.crossed ? ' — 이미 선을 넘음, 봉 마감 확인 전' : '');
+      row.appendChild(mk('div', txt, 'font-size:11px;opacity:.85;margin-left:10px'));
+    }
+    const st = patStatText((d.stats || {})[u.pat]); row.appendChild(mk('div', '이 패턴의 과거 통계: ' + st.text.replace(/^과거/, '확정 후 과거'), 'font-size:11px;margin-left:10px;color:' + (st.bad ? PAT_WARN : '#9aa3b5')));
+    box.appendChild(row);
+  }
+  box.appendChild(mk('div', '※ 선까지의 거리만 알려 줍니다. 어느 쪽으로 나갈지는 알 수 없고, 선을 넘은 뒤에도 되돌아오는 경우가 흔합니다. 돌파는 봉 종가가 선 밖에서 마감돼야 확정으로 칩니다.', 'margin:4px 0 0 4px;font-size:11px;opacity:.7'));
+  box.appendChild(mk('div', '최근 확정된 신호 (' + freshN + '봉 이내)', 'margin-top:8px;font-weight:700'));
   const addDetails = (key, title, fill) => {      // 열림 상태는 PAT.open 에 기억해 1분마다 다시 그려도 접히지 않는다
     const det = mk('details', undefined, 'margin-top:6px'); det.open = !!PAT.open[key];
     det.addEventListener('toggle', () => { PAT.open[key] = det.open; });
     det.appendChild(mk('summary', title, 'cursor:pointer;color:#9ec3ff')); fill(det); box.appendChild(det);
   };
-  if (!list.length) box.appendChild(mk('div', '지금 이 시간봉(' + d.tf + ')에서 감지된 패턴이 없습니다.', 'margin-top:4px;opacity:.85'));
+  if (!list.length) box.appendChild(mk('div', '최근 ' + freshN + '봉 안에 확정된 패턴이 없습니다.', 'margin:2px 0 0 4px;opacity:.85'));
   else {
     const tbl = mk('table', undefined, 'border-collapse:collapse;width:100%;margin-top:6px'), th = tbl.insertRow();
     for (const h of ['패턴(교과서상 방향)', '상태', '기준선(목선 등)', '이 패턴의 과거 통계 (' + (d.horizon || '24시간 뒤') + ')']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:3px 8px'));
@@ -83,6 +101,9 @@ function patBox() {
       });
     }
   }
+  if (oldList.length) addDetails('old', '지난 신호 ' + oldList.length + '개 (확정된 지 오래됨)', (det) => {
+    for (const g of oldList.slice(0, 12)) det.appendChild(mk('div', g.name + ' · 돌파 확정 ' + g.bars_ago + '봉 전 · 기준선 ' + (g.level != null ? patFmt(g.level) : '—'), 'margin:3px 0 0 14px;opacity:.8'));
+  });
   if (d.glossary) addDetails('glossary', '롱·숏이 무슨 뜻인가요? 이 패턴대로 하면 되나요?', (det) => det.appendChild(mk('div', d.glossary, 'margin:3px 0 0 14px')));
   const meta = d.stats_meta ? ' (통계 생성일 ' + (d.stats_meta.generated || '?') + ', 코인 ' + (d.stats_meta.coins || '?') + '개, 왕복 비용 ' + (d.stats_meta.cost_round_trip_pct || 0).toFixed(2) + '% 차감)' : ' (과거 통계표가 없어 통계는 표시하지 않습니다)';
   box.appendChild(mk('div', '※ 참고용입니다. 이 패턴들은 18개 코인 과거 이력 시험에서 비용을 넘는 초과 수익이 확인되지 않았습니다' + meta + '. 패턴 이름이 방향을 보장하지 않습니다. 보라색 점선 = 패턴 모양, 기준선 = 목선·추세선(마감된 봉만 사용, 돌파는 종가 기준).', 'margin-top:6px;opacity:.75;font-size:11px'));

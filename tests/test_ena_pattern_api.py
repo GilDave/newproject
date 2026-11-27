@@ -85,3 +85,14 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_upcoming_gives_distance_to_both_lines_and_flags_imminent():
+    tri = {"pat": "P3", "name": "삼각 수렴 상향 돌파", "dir": 1, "state": "forming", "level": 1.1, "lines": [[[0, 1.2], [9, 1.1]], [[0, 0.8], [9, 0.95]]]}
+    far = {"pat": "P9", "name": "박스권", "dir": 1, "state": "forming", "level": 2.0, "lines": []}
+    done = {"pat": "P7", "name": "깃발", "dir": 1, "state": "confirmed", "level": 1.0, "lines": []}
+    u = pa.upcoming([tri, far, done], 1.0, 0.05)
+    assert len(u) == 1 and u[0]["pat"] == "P3"                        # 먼 것·확정된 것 제외
+    s = {x["side"]: x for x in u[0]["sides"]}
+    assert abs(s["up"]["dist_pct"] - 10.0) < 1e-9 and abs(s["down"]["dist_atr"] - 1.0) < 1e-9 and u[0]["imminent"]
+    assert pa.upcoming([tri], 1.0, None) == [] and pa.upcoming([tri], 0, 0.05) == []
