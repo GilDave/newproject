@@ -5,6 +5,7 @@
 const HUB_TABS = [['sum', '종합'], ['ent', '진입 계획 (지표)'], ['ell', '엘리엇'], ['prc', '가격 비교 · AI']];
 const HUB_FEE = 0.00055, HUB_SLIP = 0.0001, HUB_PASS = 7, HUB_WAIT = 5, HUB_MIN_RR = 1.5, HUB_MAX_COST = 0.15;
 const HUB_FS = [12, 13, 14, 15, 16, 18, 20];   // 글자 크기 단계(px). 기본 14
+const HUB_USM = {data: null, at: 0, busy: false};
 const HUB = {tab: 'sum', acct: 1000, risk: 1, fs: 14, fitC: true, loaded: false, box: null, key: ''};
 function hubStore() {
   try {
@@ -130,6 +131,21 @@ function hubEnsure() {
   HUB.box = hub; document.getElementById('hub-pane-sum').textContent = '분석을 불러오는 중…'; hubSetTab(HUB.tab);
   return hub;
 }
+// 미국 주식(QQQ·나스닥 선물) 현황: /api/us-market 이 없거나 실패하면 조용히 건너뛴다(허브는 그대로 동작).
+async function hubUsmFetch() {
+  if (HUB_USM.busy || Date.now() - HUB_USM.at < 60000) return;
+  HUB_USM.busy = true;
+  try { const r = await fetch('/api/us-market'); HUB_USM.data = r.ok ? await r.json() : null; } catch (e) { HUB_USM.data = null; }
+  HUB_USM.at = Date.now(); HUB_USM.busy = false;
+  try { HUB.key = ''; if (typeof CF !== 'undefined' && CF.last && typeof hubRender === 'function') hubRender(CF.last, typeof cfPrice === 'function' ? cfPrice() : null); } catch (e) { /* 표시 실패는 무시 */ }
+}
+function hubUsmText(d) {
+  if (!d || !d.items || !d.items.length) return d && d.error ? '미국 주식 시세를 받지 못했습니다(' + String(d.error).slice(0, 80) + ')' : null;
+  const sg = v => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+  const parts = d.items.map(x => x.label.split('(')[0] + ' 오늘 ' + sg(x.pct_day) + (x.pct_1h != null ? '(최근 1시간 ' + sg(x.pct_1h) + ')' : ''));
+  const age = Math.max.apply(null, d.items.map(x => x.age_sec || 0)), stale = age > 900;
+  return '미국 주식(참고): ' + parts.join(' · ') + (stale ? ' · 시세가 ' + Math.round(age / 60) + '분 전 값(장이 닫혔거나 수집이 지연됨)' : '');
+}
 function hubBadge(side, text) {
   const b = document.createElement('span'); b.textContent = text !== undefined ? text : (side === 'long' ? '롱' : side === 'short' ? '숏' : '—');
   b.style.cssText = 'display:inline-block;min-width:2.4em;text-align:center;padding:0 8px;border-radius:6px;font-weight:700;color:#fff;background:' + (side === 'long' ? '#1e8e5a' : side === 'short' ? '#c62828' : '#4a5168') + (side ? '' : ';opacity:.55');
@@ -140,7 +156,7 @@ function hubRender(res, price) {
   try {
     hubEnsure(); const pane = document.getElementById('hub-pane-sum'); if (!pane || !res || !res.verdict) return;
     const ck = hubChecklist(res, price), v = res.verdict, best = ck.best;
-    const key = JSON.stringify([price.toFixed(5), v.head, !!v.shock, v.diag, v.big.sum, v.small.sum, ck.items.map(i => i.ok), best ? [best.tf, best.method, best.n.mid.toFixed(5), best.n.stop.toFixed(5)] : null, res.rows.map(r => [r.op.ind, r.op.ell, r.ai && r.ai.side, r.cells.levels && r.cells.levels.ok && r.cells.levels.side])]);
+    const key = JSON.stringify([price.toFixed(5), v.head, !!v.shock, v.diag, HUB_USM.data && HUB_USM.data.items ? HUB_USM.data.items.map(x => [x.symbol, x.pct_day, x.pct_1h]) : null, v.big.sum, v.small.sum, ck.items.map(i => i.ok), best ? [best.tf, best.method, best.n.mid.toFixed(5), best.n.stop.toFixed(5)] : null, res.rows.map(r => [r.op.ind, r.op.ell, r.ai && r.ai.side, r.cells.levels && r.cells.levels.ok && r.cells.levels.side])]);
     if (key === HUB.key && pane.firstChild && pane.firstChild.id === 'hub-sum-root') return;
     HUB.key = key; pane.textContent = '';
     const mk = (tag, text, css) => { const d = document.createElement(tag); if (text !== undefined) d.textContent = text; if (css) d.style.cssText = css; return d; };
@@ -158,6 +174,16 @@ function hubRender(res, price) {
     if (v.shock) {
       const dn = v.shock.side === 'short', nt = mk('div', undefined, 'margin:0 0 6px;padding:6px 10px;border-left:3px solid #ffb74d;background:#1d1f2b;font-size:calc(var(--hub-fs) - 1px)');
       nt.appendChild(mk('b', (dn ? '하락' : '상승') + ' 급변 중 — ', 'color:#ffb74d')); nt.appendChild(document.createTextNode('롱 근거는 가격이 부정하고 있습니다. ' + (dn ? '숏' : '롱') + ' 쪽 근거는 이 급변 하나뿐이고 지표·엘리엇으로는 확인되지 않았습니다. 이미 크게 움직인 뒤라 추격하면 손절 거리가 커지고 손익비가 나빠지기 쉽고, 급변 뒤 되돌림도 흔합니다. 급변이 가라앉아 지표·엘리엇이 다시 같은 방향을 가리킬 때 판정이 나옵니다.'.replace('롱 근거는', v.shock.side === 'short' ? '롱 근거는' : '숏 근거는'))); left.appendChild(nt);
+    }
+    hubUsmFetch();
+    const ut = hubUsmText(HUB_USM.data);
+    if (ut) {
+      left.appendChild(mk('div', ut, 'margin:0 0 6px;font-size:11px;opacity:.75'));
+      const it = HUB_USM.data && HUB_USM.data.items ? HUB_USM.data.items.find(x => x.symbol === 'QQQ') : null;
+      if (v.shock && it && (HUB_USM.data.items.every(x => (x.age_sec || 0) < 900))) {
+        const dn = v.shock.side === 'short', same = dn ? (it.pct_day <= -0.7 || (it.pct_1h != null && it.pct_1h <= -0.3)) : (it.pct_day >= 0.7 || (it.pct_1h != null && it.pct_1h >= 0.3));
+        left.appendChild(mk('div', same ? '주식(QQQ)도 같은 방향으로 움직이는 중이라 이번 급변은 주식 연동일 가능성이 있습니다(2026-11 측정: ENA–나스닥 일간 상관 전체 +0.34·최근 60일 +0.52, 대부분 BTC를 거친 연결).' : '주식(QQQ)은 이번 급변과 같은 방향으로 크게 움직이지 않았습니다. 주식 때문이라고 보기 어렵습니다.', 'margin:0 0 6px;font-size:11px;color:#9ec3ff'));
+      }
     }
     if (v.diag && v.diag.length) left.appendChild(mk('div', '급변 점검(변동폭의 3배 이상이면 급변): ' + v.diag.join(' · '), 'margin:0 0 6px;font-size:11px;opacity:.6'));
     if (ck.items.length) {

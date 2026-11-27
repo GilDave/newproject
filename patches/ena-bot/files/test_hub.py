@@ -95,3 +95,25 @@ def test_wire_script_inserts_after_confluence_updates_and_refuses_without_it(tmp
     assert "이미 최신" in wire().stdout
     (root / "tools" / "hub.js").write_text((TOOLS / "hub.js").read_text().replace("분석 허브'; ttl", "분석 허브(새)'; ttl"))
     assert "수정" in wire().stdout and "분석 허브(새)" in page.read_text() and page.read_text().count("function hubChecklist") == 1
+
+
+USM_HARNESS = r"""
+const fs = require('fs'), vm = require('vm');
+const sb = {console, document: {getElementById() { return null; }}, localStorage: {getItem() { return null; }, setItem() {}}, structDraw: function () {}, setInterval() {}, setTimeout() {}};
+vm.createContext(sb);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + '\n' + fs.readFileSync(process.argv[2], 'utf8') + ';this.X = {hubUsmText};', sb);
+const t = sb.X.hubUsmText, out = {};
+out.none = [t(null), t({items: []}), t({items: [], error: 'curl 22'})];
+out.ok = t({items: [{symbol: 'QQQ', label: 'QQQ(나스닥100 ETF)', pct_day: -1.234, pct_1h: -0.4, age_sec: 30}, {symbol: 'NQ=F', label: '나스닥100 선물', pct_day: -1.5, pct_1h: null, age_sec: 60}]});
+out.stale = t({items: [{symbol: 'QQQ', label: 'QQQ(x)', pct_day: 0.3, pct_1h: null, age_sec: 3600}]});
+console.log(JSON.stringify(out));
+"""
+
+
+def test_us_stock_line_shows_values_staleness_and_errors():
+    r = subprocess.run([NODE, "-e", USM_HARNESS, str(TOOLS / "confluence.js"), str(TOOLS / "hub.js")], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    o = json.loads(r.stdout)
+    assert o["none"][0] is None and o["none"][1] is None and "받지 못했습니다" in o["none"][2]
+    assert "QQQ 오늘 -1.23%(최근 1시간 -0.40%)" in o["ok"] and "나스닥100 선물 오늘 -1.50%" in o["ok"] and "분 전 값" not in o["ok"]
+    assert "60분 전 값" in o["stale"]
