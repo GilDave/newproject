@@ -110,3 +110,72 @@ def test_remove_flag_takes_the_overlay_out_and_leaves_a_valid_page(tmp_path):
     assert subprocess.run(["node", "--check", str(tmp_path / "m.js")]).returncode == 0      # 제거 뒤에도 페이지 스크립트가 유효하다
     r2 = subprocess.run(["python3", str(wire), str(work), "--remove"], capture_output=True, text=True)
     assert "없어" in r2.stdout                                                                 # 다시 실행해도 안전
+
+
+HARNESS = r"""
+const fs = require('fs'), vm = require('vm');
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const a = html.indexOf('// ---- 차트 패턴 감지(참고용)'), endMark = '// ---- /차트 패턴 감지 ----\n', e = html.indexOf(endMark, a);
+const block = html.slice(a, e + endMark.length);
+const created = [], removed = [];
+class El {
+  constructor(tag) { this.tag = tag; this.children = []; this.style = {cssText: ''}; this.listeners = {}; this._text = ''; this.isConnected = true; this.open = false; }
+  appendChild(c) { this.children.push(c); return c; }
+  addEventListener(n, f) { this.listeners[n] = f; }
+  insertAdjacentElement(pos, el) { return el; }
+  insertRow() { const r = new El('tr'); r.cells = []; this.children.push(r); return r; }
+  insertCell() { const c = new El('td'); (this.cells = this.cells || []).push(c); this.children.push(c); return c; }
+  set textContent(v) { this._text = v; if (v === '') this.children = []; }
+  get textContent() { return this._text + this.children.map(c => c.textContent).join(''); }
+}
+const mkSeries = (fail) => ({setData(d) { if (fail) throw new Error('boom'); this.data = d; }, setMarkers() {}, createPriceLine() {}});
+const ctx = {
+  console, bars: [], iv: '240', SYMBOL: 'ENAUSDT', structDraw() {}, fetch: async () => { throw new Error('offline'); },
+  localStorage: {getItem: () => null, setItem() {}}, fmt: (v, d) => Number(v).toFixed(d),
+  document: {createElement: (t) => new El(t), createTextNode: (t) => ({textContent: t}), getElementById: (id) => id === 'chartwrap' ? new El('div') : null},
+  chart: {addLineSeries() { const s = mkSeries(ctx.__failNext > 0 && (ctx.__failNext--, true)); created.push(s); return s; }, removeSeries(s) { removed.push(s); }},
+  __failNext: 0,
+};
+vm.createContext(ctx);
+const T0 = 1795000000;
+ctx.bars = Array.from({length: 300}, (_, i) => ({time: T0 + i * 14400, open: 1, high: 1, low: 1, close: 1}));
+const tt = (i) => (T0 + i * 14400) * 1000;
+const sample = {supported: true, interval: '240', tf: '4h', horizon: '24시간(4시간봉 6개) 뒤',
+  patterns: [
+    {pat: 'P0W', name: '쌍바닥(W)', dir: 1, state: 'confirmed', idx: 290, time: tt(290), bars_ago: 5, level: 100, points: [[tt(250), 90], [tt(265), 100], [tt(280), 90]], lines: [[[tt(250), 100], [tt(290), 100]]]},
+    {pat: 'P3', name: '삼각 수렴 상향 돌파', dir: 1, state: 'forming', idx: null, time: null, bars_ago: 0, level: 99, points: [[tt(280), 98], [tt(260), 97], [tt(270), 99], [tt(285), 96]], lines: [[[tt(260), 101], [tt(295), 99]], [[tt(260), 95], [tt(295), 98]]]},
+    {pat: 'P9', name: '박스권 상향 돌파', dir: 1, state: 'forming', idx: null, time: null, bars_ago: 0, level: null, points: [], lines: []},
+  ],
+  stats: {P0W: {events: 962, mean_net_pct: 0.09, ci95_pct: [-0.35, 0.53], verdict: '근거 없음'}},
+  explain: {P0W: {bias: '롱형(상승 전환으로 해석)', shape: 's', reads: 'r', confirm: 'c', fail: 'f', caution: 'x'}, P3: {bias: '롱형', shape: 's', reads: 'r', confirm: 'c', fail: 'f', caution: 'x'}},
+  glossary: '롱 = 오르면 이익 ... 추천이 아닙니다.', stats_meta: {generated: '2026-11-27', coins: 18, cost_round_trip_pct: 0.15}};
+const run = (code) => vm.runInContext(code, ctx);
+run(block);
+const out = {};
+ctx.PAT_SAMPLE = sample;
+run("PAT.data = PAT_SAMPLE; PAT.dataKey = SYMBOL + ':' + iv; PAT.at = Date.now();");
+run("PAT.key = ''; patDraw();");
+out.series = run('PAT.series.length');
+out.boxText = run('PAT.box ? PAT.box.textContent : null');
+// 한 패턴의 그리기가 실패해도 나머지 패턴과 차트는 그대로여야 한다
+created.length = 0; removed.length = 0; ctx.__failNext = 1;
+run("PAT.key = ''; patDraw();");
+out.afterFail = {series: run('PAT.series.length'), removed: removed.length};
+// 표(patBox)가 예외를 던져도 이미 그린 선은 지우지 않는다
+run("PAT.key = ''; const __bak = patBox; patBox = function () { throw new Error('table broke'); }; patDraw(); patBox = __bak;");
+out.afterBoxFail = run('PAT.series.length');
+console.log(JSON.stringify(out));
+"""
+
+
+def test_overlay_really_draws_lines_and_a_table_with_explanations_in_a_fake_chart(tmp_path):
+    script = tmp_path / "harness.js"
+    script.write_text(HARNESS)
+    res = subprocess.run(["node", str(script), str(PAGE)], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["series"] >= 4, out                                    # 쌍바닥(폴리라인+목선)과 삼각(점·선 2)이 실제로 차트에 만들어진다
+    for word in ("쌍바닥(W)", "교과서: 롱형", "이(가) 뭔가요?", "롱·숏이 무슨 뜻인가요?", "과거 962건", "근거 없음"):
+        assert word in out["boxText"], word
+    assert out["afterFail"]["series"] >= 2 and out["afterFail"]["removed"] >= 1      # 실패한 패턴의 선만 걷히고 나머지는 남는다
+    assert out["afterBoxFail"] >= 4                                                     # 표가 터져도 선은 지워지지 않는다

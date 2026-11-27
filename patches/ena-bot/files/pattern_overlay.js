@@ -54,6 +54,11 @@ function patBox() {
   if (d.error) { box.appendChild(mk('div', '패턴을 불러오지 못했습니다.', 'opacity:.7')); return; }
   if (!d.supported) { box.appendChild(mk('div', d.reason || '이 시간봉은 지원하지 않습니다.', 'opacity:.8;margin-top:4px')); return; }
   const price = bars.length ? bars[bars.length - 1].close : null, list = (d.patterns || []).slice(0, 8);
+  const addDetails = (key, title, fill) => {      // 열림 상태는 PAT.open 에 기억해 1분마다 다시 그려도 접히지 않는다
+    const det = mk('details', undefined, 'margin-top:6px'); det.open = !!PAT.open[key];
+    det.addEventListener('toggle', () => { PAT.open[key] = det.open; });
+    det.appendChild(mk('summary', title, 'cursor:pointer;color:#9ec3ff')); fill(det); box.appendChild(det);
+  };
   if (!list.length) box.appendChild(mk('div', '지금 이 시간봉(' + d.tf + ')에서 감지된 패턴이 없습니다.', 'margin-top:4px;opacity:.85'));
   else {
     const tbl = mk('table', undefined, 'border-collapse:collapse;width:100%;margin-top:6px'), th = tbl.insertRow();
@@ -69,11 +74,6 @@ function patBox() {
     }
     box.appendChild(tbl);
     const ex = d.explain || {}, seen = new Set();
-    const addDetails = (key, title, fill) => {
-      const det = mk('details', undefined, 'margin-top:6px'); det.open = !!PAT.open[key];
-      det.addEventListener('toggle', () => { PAT.open[key] = det.open; });
-      det.appendChild(mk('summary', title, 'cursor:pointer;color:#9ec3ff')); fill(det); box.appendChild(det);
-    };
     for (const g of list) {
       if (seen.has(g.pat) || !ex[g.pat]) continue; seen.add(g.pat); const e = ex[g.pat];
       addDetails('p:' + g.pat, g.name + '이(가) 뭔가요? · ' + e.bias, (det) => {
@@ -121,7 +121,7 @@ function patDraw() {
         }
       }
     }
-    patBox();
+    try { patBox(); } catch (e) { /* 표를 못 만들어도 차트의 선은 그대로 둔다 */ }
   } catch (e) { try { patClear(); } catch (e2) { /* 패턴 표시에 실패해도 차트는 그대로 */ } }
 }
 if (typeof structDraw === 'function' && !structDraw.__pt) { const patBase = structDraw; structDraw = function () { patBase(); patDraw(); }; structDraw.__pt = true; }
