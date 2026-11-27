@@ -110,5 +110,55 @@ class Geometry(unittest.TestCase):
         self.assertEqual(pt.scan(ts, h, l, c, recent=1, pats=["P0W"]), [])    # 오래된 이벤트는 recent 밖
 
 
+class ChartSafety(unittest.TestCase):
+    """차트 라이브러리는 시간이 엄격히 오름차순이 아니면 오류를 내 차트 전체가 깨진다(실제로 4시간 차트가 비는 문제가 있었다)."""
+
+    def test_geometry_points_and_lines_are_always_strictly_time_ordered(self):
+        t = np.arange(160.0)
+        tri = 100 + (10 - 0.1 * t) * np.sin(2 * np.pi * t / 20)
+        tri[78:] += np.minimum((t[78:] - 78) * 0.8, 12)
+        series = [tri]
+        for seed in range(6):
+            series.append(100 * np.exp(np.cumsum(np.random.default_rng(seed).normal(0, 0.01, 3000))))
+        checked = 0
+        for c in series:
+            h, l = c * 1.003, c * 0.997
+            for pat in pt.NAMES:
+                ev, fm = pt.detect(pat, h, l, c)
+                for g in ev + fm:
+                    xs = [p[0] for p in g["points"]]
+                    self.assertEqual(xs, sorted(set(xs)), f"{pat} 점이 시간순이 아닙니다")
+                    for (a, _), (b, _) in g["lines"]:
+                        self.assertLess(a, b, f"{pat} 선의 시작이 끝보다 늦습니다")
+                    checked += 1
+        self.assertGreater(checked, 50)                           # 실제로 도형이 많이 만들어졌다
+
+    def test_triangle_geometry_specifically_is_ordered(self):
+        t = np.arange(120.0)
+        c = 100 + (10 - 0.1 * t) * np.sin(2 * np.pi * t / 20)
+        c[78:] += np.minimum((t[78:] - 78) * 0.8, 12)
+        ev, _ = pt.detect("P3", c + 0.3, c - 0.3, c)
+        self.assertGreaterEqual(len(ev), 1)
+        xs = [p[0] for p in ev[0]["points"]]
+        self.assertEqual(xs, sorted(xs))
+
+
+class Explanations(unittest.TestCase):
+    def test_every_pattern_has_a_complete_plain_language_explanation(self):
+        for k in pt.NAMES:
+            e = pt.EXPLAIN[k]
+            self.assertEqual(set(e), {"bias", "shape", "reads", "confirm", "fail", "caution"}, k)
+            self.assertTrue(all(len(v) > 10 for v in e.values()), k)
+
+    def test_stated_bias_matches_the_detector_direction_and_is_never_a_recommendation(self):
+        for k, e in pt.EXPLAIN.items():
+            self.assertTrue(e["bias"].startswith("롱형" if pt.DIR[k] > 0 else "숏형"), k)
+            for banned in ("사세요", "파세요", "매수하", "매도하", "추천합니다", "수익이 납니다"):
+                self.assertNotIn(banned, " ".join(e.values()), k)
+        self.assertIn("추천이 아닙니다", pt.GLOSSARY)
+        self.assertIn("롱 =", pt.GLOSSARY)
+        self.assertIn("숏 =", pt.GLOSSARY)
+
+
 if __name__ == "__main__":
     unittest.main()

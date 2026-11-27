@@ -3,13 +3,28 @@
 (18코인 이력, 24시간 뒤, 비용 후)를 함께 보여 준다. 1시간·4시간 차트에서만 동작한다(통계를 검증한 시간봉). 신호가 아니다.
 먼저 wire_structure_chart.py 가 적용돼 있어야 한다. 이미 적용돼 있으면 새 버전으로 제자리 갱신한다.
 사용: .venv/bin/python wire_pattern_overlay.py [프로젝트 폴더]   (여러 번 실행해도 안전, 위치를 못 찾으면 아무것도 바꾸지 않음)
-되돌리려면 index.html 의 '// ---- 차트 패턴 감지' ~ '// ---- /차트 패턴 감지 ----' 를 지운다.
+되돌리려면:  .venv/bin/python wire_pattern_overlay.py --remove
 """
 import sys
 from pathlib import Path
 
-root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+args = [a for a in sys.argv[1:] if a != "--remove"]
+REMOVE = "--remove" in sys.argv[1:]
+root = Path(args[0] if args else ".")
 dash, page = root / "ena_bot/dashboard.py", root / "ena_bot/dashboard_static/index.html"
+if REMOVE:                      # 패턴 표시를 화면에서 완전히 걷어낸다(서버 쪽 /api/patterns 는 남아도 화면에 영향 없음)
+    pg = root / "ena_bot/dashboard_static/index.html"
+    t = pg.read_text(encoding="utf-8")
+    a = t.find("// ---- 차트 패턴 감지(참고용)")
+    e = t.find("// ---- /차트 패턴 감지 ----\n", a) if a != -1 else -1
+    if a == -1 or e == -1:
+        print("패턴 블록이 없어 아무것도 바꾸지 않았습니다.")
+        raise SystemExit(0)
+    tmp = pg.with_name(pg.name + ".tmp")
+    tmp.write_text(t[:a] + t[e + len("// ---- /차트 패턴 감지 ----\n"):], encoding="utf-8")
+    tmp.replace(pg)
+    print("패턴 표시를 index.html 에서 제거했습니다. 대시보드를 재시작하고 새로고침하세요.")
+    raise SystemExit(0)
 for need in ("patterns.py", "pattern_api.py"):
     if not (root / "ena_bot" / need).exists():
         raise SystemExit(f"ena_bot/{need} 가 없습니다. 먼저 내려받으세요. 아무것도 바꾸지 않았습니다.")

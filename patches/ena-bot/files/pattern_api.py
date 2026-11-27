@@ -26,7 +26,7 @@ def payload(fetch_rows, symbol: str, interval: str, now_ms: int, stats_path: Pat
     """fetch_rows(interval, limit) -> [[ts_ms, o, h, l, c, v], ...] (오래된 것부터)."""
     base = {"symbol": symbol, "interval": interval, "disclaimer": "참고용입니다. 패턴의 과거 통계에서 비용을 넘는 초과 수익은 확인되지 않았습니다. 매매 신호로 쓰지 마세요."}
     if interval not in IV_TF:
-        return {**base, "supported": False, "reason": "패턴 통계를 검증한 시간봉은 1시간·4시간뿐입니다. 그 시간봉으로 바꾸면 표시됩니다.", "patterns": [], "stats": {}}
+        return {**base, "supported": False, "reason": "패턴 통계를 검증한 시간봉은 1시간·4시간뿐입니다. 그 시간봉으로 바꾸면 표시됩니다.", "patterns": [], "stats": {}, "explain": {}, "glossary": _patterns.GLOSSARY}
     tf, step = IV_TF[interval]
     rows = [r for r in fetch_rows(interval, KLINES) if r[0] + step <= now_ms]      # 아직 닫히지 않은 마지막 봉은 쓰지 않는다
     if len(rows) < 120:
@@ -36,5 +36,7 @@ def payload(fetch_rows, symbol: str, interval: str, now_ms: int, stats_path: Pat
     found = _patterns.scan(ts, h, l, c, recent=recent)
     st = load_stats(stats_path)
     tfs = (st.get("tf") or {}).get(tf) or {}
+    explain = {g["pat"]: _patterns.EXPLAIN[g["pat"]] for g in found}
     return {**base, "supported": True, "tf": tf, "bars": len(rows), "last_ts": ts[-1], "patterns": found, "stats": tfs.get("patterns", {}),
+            "explain": explain, "glossary": _patterns.GLOSSARY,
             "horizon": tfs.get("horizon"), "stats_meta": {"generated": st.get("generated"), "coins": st.get("coins"), "cost_round_trip_pct": st.get("cost_round_trip_pct")} if st else None}

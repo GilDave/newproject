@@ -31,6 +31,7 @@ class T(unittest.TestCase):
         self.assertIn("1시간·4시간", out["reason"])
         self.assertEqual(out["patterns"], [])
         self.assertIn("신호로 쓰지", out["disclaimer"])
+        self.assertIn("롱 =", out["glossary"])                        # 지원하지 않는 시간봉에서도 용어 설명은 볼 수 있다
 
     def test_open_candle_is_never_used(self):
         rows, now = w_rows(open_candle=True)
@@ -54,6 +55,9 @@ class T(unittest.TestCase):
         self.assertEqual(len(w), 1)                                   # 심어 둔 쌍바닥을 실제로 찾는다
         self.assertEqual(w[0]["state"], "confirmed")
         self.assertTrue(all({"pat", "name", "state", "points", "lines", "dir", "bars_ago"} <= set(g) for g in out["patterns"]))
+        self.assertIn("P0W", out["explain"])                          # 감지된 패턴마다 초보자용 설명이 함께 간다
+        self.assertEqual(set(out["explain"]), {g["pat"] for g in out["patterns"]})
+        self.assertIn("추천이 아닙니다", out["glossary"])
         json.dumps(out)                                              # 응답은 그대로 JSON 으로 직렬화돼야 한다(넘파이 값이 새지 않는다)
 
     def test_missing_stats_file_still_works(self):

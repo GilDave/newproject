@@ -1,5 +1,5 @@
 // ---- 차트 패턴 감지(참고용): 쌍바닥·쌍봉·헤드앤숄더·삼각·쐐기·깃발·박스권을 차트에 겹쳐 그리고, 각 패턴의 과거 통계를 함께 보여 준다. 신호가 아니다. ----
-const PAT = {on: true, collapsed: false, loaded: false, data: null, dataKey: '', at: 0, busy: false, key: '', series: [], box: null, rev: 0};
+const PAT = {on: true, collapsed: false, loaded: false, data: null, dataKey: '', at: 0, busy: false, key: '', series: [], box: null, rev: 0, open: {}};
 const PAT_COLOR = '#ce93d8', PAT_UP = '#26a69a', PAT_DOWN = '#ef5350', PAT_NEUTRAL = '#9aa3b5', PAT_WARN = '#d4a24c';
 function patStore() {
   try {
@@ -8,6 +8,15 @@ function patStore() {
   } catch (e) { /* 기억하지 못해도 동작한다 */ }
 }
 function patFmt(v) { return typeof fmt === 'function' ? fmt(v, 5) : Number(v).toFixed(5); }
+// 차트 라이브러리는 시간이 '엄격히 오름차순'이 아니면 오류를 내 차트 전체가 깨진다. 항상 정렬하고 중복·범위 밖을 걷어낸다.
+function patSortedPts(points, tmin) {
+  const out = []; let last = -Infinity;
+  for (const p of (points || []).slice().sort((a, b) => a[0] - b[0])) {
+    const t = p[0] / 1000; if (!(t >= tmin) || !(t > last) || !Number.isFinite(p[1])) continue;
+    out.push({time: t, value: p[1]}); last = t;
+  }
+  return out;
+}
 function patClear() { for (const s of PAT.series) { try { chart.removeSeries(s); } catch (e) { /* 이미 없음 */ } } PAT.series = []; }
 async function patFetch() {
   const key = SYMBOL + ':' + iv;
@@ -52,13 +61,29 @@ function patBox() {
     for (const g of list) {
       const tr = tbl.insertRow(); tr.style.borderTop = '1px solid #2a2e39';
       const c0 = tr.insertCell(); const ar = mk('span', g.dir > 0 ? '↗ ' : '↘ ', 'font-weight:700;color:' + PAT_NEUTRAL); ar.title = '교과서에서 이 패턴이 뜻한다고 하는 방향입니다. 실제 과거 통계는 오른쪽 열을 보세요.'; c0.appendChild(ar); c0.appendChild(document.createTextNode(g.name));
+      const exg = (d.explain || {})[g.pat]; if (exg) c0.appendChild(mk('div', '교과서: ' + exg.bias, 'font-size:11px;opacity:.7'));
       tr.insertCell().textContent = g.state === 'forming' ? '형성 중(아직 돌파 전)' : '돌파 확정 · ' + g.bars_ago + '봉 전';
       tr.insertCell().textContent = g.level != null ? patFmt(g.level) + (price ? ' (현재가보다 ' + Math.abs((g.level / price - 1) * 100).toFixed(1) + '% ' + (g.level >= price ? '위' : '아래') + ')' : '') : '—';
       const st = patStatText((d.stats || {})[g.pat]), c3 = tr.insertCell(); c3.textContent = st.text; if (st.bad) c3.style.color = PAT_WARN;
       for (const td of tr.cells) td.style.cssText += ';padding:3px 8px;vertical-align:top;text-align:left';
     }
     box.appendChild(tbl);
+    const ex = d.explain || {}, seen = new Set();
+    const addDetails = (key, title, fill) => {
+      const det = mk('details', undefined, 'margin-top:6px'); det.open = !!PAT.open[key];
+      det.addEventListener('toggle', () => { PAT.open[key] = det.open; });
+      det.appendChild(mk('summary', title, 'cursor:pointer;color:#9ec3ff')); fill(det); box.appendChild(det);
+    };
+    for (const g of list) {
+      if (seen.has(g.pat) || !ex[g.pat]) continue; seen.add(g.pat); const e = ex[g.pat];
+      addDetails('p:' + g.pat, g.name + '이(가) 뭔가요? · ' + e.bias, (det) => {
+        for (const [lab, key] of [['모양', 'shape'], ['교과서 해석', 'reads'], ['확정 조건', 'confirm'], ['무효 조건', 'fail'], ['주의', 'caution']]) {
+          const row = mk('div', undefined, 'margin:3px 0 0 14px'); row.appendChild(mk('b', lab + ': ', 'color:#8a8f98')); row.appendChild(document.createTextNode(e[key])); det.appendChild(row);
+        }
+      });
+    }
   }
+  if (d.glossary) addDetails('glossary', '롱·숏이 무슨 뜻인가요? 이 패턴대로 하면 되나요?', (det) => det.appendChild(mk('div', d.glossary, 'margin:3px 0 0 14px')));
   const meta = d.stats_meta ? ' (통계 생성일 ' + (d.stats_meta.generated || '?') + ', 코인 ' + (d.stats_meta.coins || '?') + '개, 왕복 비용 ' + (d.stats_meta.cost_round_trip_pct || 0).toFixed(2) + '% 차감)' : ' (과거 통계표가 없어 통계는 표시하지 않습니다)';
   box.appendChild(mk('div', '※ 참고용입니다. 이 패턴들은 18개 코인 과거 이력 시험에서 비용을 넘는 초과 수익이 확인되지 않았습니다' + meta + '. 패턴 이름이 방향을 보장하지 않습니다. 보라색 점선 = 패턴 모양, 기준선 = 목선·추세선(마감된 봉만 사용, 돌파는 종가 기준).', 'margin-top:6px;opacity:.75;font-size:11px'));
 }
@@ -74,25 +99,30 @@ function patDraw() {
       const tmin = bars[0].time, items = (PAT.data.patterns || []).slice(0, 6);
       for (const g of items) {
         const col = g.dir > 0 ? PAT_UP : PAT_DOWN;
-        const pts = (g.points || []).filter(p => p[0] / 1000 >= tmin).map(p => ({time: p[0] / 1000, value: p[1]}));
+        const pts = patSortedPts(g.points, tmin), made = [];
+        try {
         if (pts.length >= 2) {
-          const s = chart.addLineSeries({color: PAT_COLOR, lineWidth: 2, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false}); s.setData(pts); PAT.series.push(s);
+          const s = chart.addLineSeries({color: PAT_COLOR, lineWidth: 2, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false}); made.push(s); s.setData(pts);
         }
         let marked = false;
         for (const ln of (g.lines || [])) {
           const a = {time: ln[0][0] / 1000, value: ln[0][1]}, b = {time: ln[1][0] / 1000, value: ln[1][1]};
           if (!(b.time > a.time) || b.time < tmin) continue;
           const s = chart.addLineSeries({color: '#f5a623', lineWidth: 2, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false});
-          s.setData([a, b]); PAT.series.push(s);
+          made.push(s); s.setData([a, b]);
           if (!marked && g.state === 'confirmed' && g.time && Math.abs(b.time - g.time / 1000) < 1) {
             s.setMarkers([{time: b.time, position: g.dir > 0 ? 'belowBar' : 'aboveBar', color: col, shape: g.dir > 0 ? 'arrowUp' : 'arrowDown', text: g.name + ' 돌파'}]); marked = true;
           }
           if (g.state === 'forming' && g.level != null && !marked) { s.createPriceLine({price: g.level, color: '#f5a623', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: g.name + ' 기준선'}); marked = true; }
         }
+        PAT.series.push(...made);
+        } catch (e) {        // 이 패턴을 그리다 실패하면 그 패턴의 선만 걷어낸다. 차트는 그대로 둔다.
+          for (const s of made) { try { chart.removeSeries(s); } catch (e2) { /* 이미 없음 */ } }
+        }
       }
     }
     patBox();
-  } catch (e) { /* 패턴 표시에 실패해도 차트는 그대로 */ }
+  } catch (e) { try { patClear(); } catch (e2) { /* 패턴 표시에 실패해도 차트는 그대로 */ } }
 }
 if (typeof structDraw === 'function' && !structDraw.__pt) { const patBase = structDraw; structDraw = function () { patBase(); patDraw(); }; structDraw.__pt = true; }
 // ---- /차트 패턴 감지 ----
