@@ -42,6 +42,32 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CallRecord(unittest.TestCase):
+    def test_ask_ollama_returns_text_and_call_metadata(self):
+        import io
+        from unittest import mock
+        body = json.dumps({"response": " 해설 ", "prompt_eval_count": 900, "eval_count": 410}).encode()
+        class R(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        with mock.patch.object(pm.urllib.request, "urlopen", return_value=R(body)):
+            text, meta = pm.ask_ollama({"trades": 1}, "qwen3:14b", "http://127.0.0.1:11434")
+        self.assertEqual(text, "해설")
+        self.assertEqual((meta["model"], meta["prompt_version"], meta["tokens_in"], meta["tokens_out"]), ("qwen3:14b", "postmortem-v3", 900, 410))
+        self.assertIsInstance(meta["latency_ms"], int)
+
+    def test_call_log_appends_metadata_only_and_skips_when_folder_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = pathlib.Path(d) / "llm_calls.jsonl"
+            pm.log_llm_call(p, tool="postmortem", ok=True, model="m", prompt_version="v", latency_ms=5)
+            pm.log_llm_call(p, tool="postmortem", ok=False, error="x")
+            lines = p.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertEqual(json.loads(lines[0])["tool"], "postmortem")
+            pm.log_llm_call(pathlib.Path(d) / "nodir" / "x.jsonl", tool="t")      # 폴더가 없으면 조용히 건너뜀
+            self.assertFalse((pathlib.Path(d) / "nodir").exists())
+
+
 class CheckNumbers(unittest.TestCase):
     STATS = {"trades": 34, "by_side": {"롱": {"n": 15, "win": 9, "pnl": 25.561, "avg_ret_pct": 0.219},
                                       "숏": {"n": 19, "win": 4, "pnl": -62.897, "avg_ret_pct": -0.227}},

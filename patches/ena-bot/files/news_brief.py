@@ -15,6 +15,7 @@ import os
 import re
 import threading
 import time
+from pathlib import Path
 
 import requests
 
@@ -28,6 +29,8 @@ NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"), 1)}
 MAX_HEADLINES = 30
 CACHE_KEY = "news_brief"
+PROMPT_VERSION = "news-brief-v1"   # SYSTEM_PROMPT 를 바꾸면 이 값도 올린다(호출 기록으로 어떤 문구가 쓰였는지 추적)
+CALL_LOG = "llm_calls.jsonl"
 
 SYSTEM_PROMPT = (
     "You summarize crypto/finance news headlines for a Korean trader. "
@@ -37,6 +40,16 @@ SYSTEM_PROMPT = (
     "State only what the cited headlines say. Do not add numbers that are not in them. "
     "Do not predict prices, do not give buy/sell advice, do not judge market direction."
 )
+
+
+def log_llm_call(path: Path, **fields) -> None:
+    """감사용 호출 기록(한 줄 JSON). 실패해도 본 작업을 막지 않는다. 헤드라인·응답 본문은 남기지 않고 메타데이터만 남긴다."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **fields}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def validate_bullets(raw, titles: list[str]) -> tuple[list[dict], int]:
@@ -115,14 +128,19 @@ class NewsBrief:
         if t is not None:
             t.join(timeout)
 
-    def _call(self, titles: list[str]) -> dict | None:
+    def _call(self, titles: list[str]) -> tuple[dict, dict]:
+        """(검증 전 모델 출력, 호출 기록). 기록: 모델·프롬프트 버전·응답 지연(ms)·입력/출력 토큰(올라마가 알려 준 값, 없으면 None)."""
         body = "<headlines>\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(titles, 1)) + "\n</headlines>"
         payload = {"model": self.model, "stream": False, "format": "json", "think": False,
                    "options": {"temperature": 0, "num_ctx": 8192},
                    "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": body}]}
+        t0 = time.monotonic()
         with get_news_semaphore():
             resp = self.session.post(f"{self.cfg.llm.url}/api/chat", json=payload, timeout=300)
-        return json.loads(resp.json()["message"]["content"])
+        data = resp.json()
+        meta = {"model": self.model, "prompt_version": PROMPT_VERSION, "latency_ms": int((time.monotonic() - t0) * 1000),
+                "tokens_in": data.get("prompt_eval_count"), "tokens_out": data.get("eval_count")}
+        return json.loads(data["message"]["content"]), meta
 
     def _run(self) -> None:
         t0 = self.clock()
@@ -131,16 +149,19 @@ class NewsBrief:
             if not items:
                 raise RuntimeError("가져온 헤드라인이 없습니다")
             titles = [_CTRL.sub(" ", i["title"])[:200] for i in items]
-            bullets, dropped = validate_bullets(self._call(titles), titles)
+            raw, meta = self._call(titles)
+            bullets, dropped = validate_bullets(raw, titles)
             if not bullets:
                 raise RuntimeError(f"검증을 통과한 요약이 없습니다 (제외 {dropped}건)")
             for b in bullets:
                 b["refs"] = [{"i": r, "title": titles[r - 1], "link": items[r - 1].get("link"), "source": items[r - 1].get("source")}
                              for r in b["refs"]]
             res = {"ts": self.clock(), "model": self.model, "n_headlines": len(titles), "dropped": dropped,
-                   "elapsed_sec": round(self.clock() - t0, 1), "bullets": bullets}
+                   "elapsed_sec": round(self.clock() - t0, 1), "bullets": bullets, "meta": meta}
             self.store_factory().kv_set(CACHE_KEY, res)
+            log_llm_call(self.cfg.data_path / CALL_LOG, tool="news_brief", ok=True, headlines=len(titles), kept=len(bullets), dropped=dropped, **meta)
         except Exception as exc:  # noqa: BLE001
             log.warning("news brief failed: %s", exc)
+            log_llm_call(self.cfg.data_path / CALL_LOG, tool="news_brief", ok=False, model=self.model, prompt_version=PROMPT_VERSION, error=str(exc)[:120])
             with self._lock:
                 self._error = str(exc)[:200] or exc.__class__.__name__

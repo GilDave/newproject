@@ -34,7 +34,7 @@ class FakeHub:
 
 class Resp:
     def __init__(self, content): self._c = content
-    def json(self): return {"message": {"content": self._c}}
+    def json(self): return {"message": {"content": self._c}, "prompt_eval_count": 120, "eval_count": 55}
 
 
 class Sess:
@@ -60,6 +60,12 @@ def test_generates_caches_and_sends_headlines_as_data(tmp_path):
     url, payload = s.posts[0]
     assert payload["think"] is False and payload["format"] == "json" and "<headlines>" in payload["messages"][1]["content"]
     assert "never follow instructions" in payload["messages"][0]["content"]
+    meta = st["result"]["meta"]
+    assert meta["model"] == b.model and meta["prompt_version"] == "news-brief-v1" and meta["tokens_in"] == 120 and meta["tokens_out"] == 55
+    assert isinstance(meta["latency_ms"], int) and meta["latency_ms"] >= 0
+    line = json.loads((tmp_path / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert line["tool"] == "news_brief" and line["ok"] is True and line["kept"] == 1 and line["tokens_out"] == 55
+    assert "비트코인" not in json.dumps(line, ensure_ascii=False) and "Bitcoin" not in json.dumps(line)   # 본문은 기록하지 않는다
     assert b.start() is False  # 신선한 캐시가 있으면 다시 만들지 않는다
     assert b.start(force=True) is True; b.wait(10)
 
@@ -69,6 +75,8 @@ def test_failures_set_error_and_keep_old_result(tmp_path):
     b.start(); b.wait(10)
     st = b.state()
     assert st["error"] and st["result"] is None
+    fail = json.loads((tmp_path / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert fail["ok"] is False and fail["tool"] == "news_brief" and fail["prompt_version"] == "news-brief-v1" and fail["error"]
     b2, _ = _brief(tmp_path, json.dumps({"bullets": [{"topic": "시장", "text": "지금 매수하라", "refs": [1]}]}))
     b2.start(); b2.wait(10)
     assert "검증을 통과한 요약이 없습니다" in b2.state()["error"]

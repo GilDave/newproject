@@ -18,6 +18,7 @@ import statistics as st
 import sys
 import time
 import urllib.request
+from pathlib import Path
 from collections import defaultdict
 
 
@@ -116,6 +117,9 @@ def analyze(cycles: list[dict]) -> dict:
     return out
 
 
+PROMPT_VERSION = "postmortem-v3"   # PROMPT 를 바꾸면 이 값도 올린다
+CALL_LOG = "data/llm_calls.jsonl"
+
 PROMPT = ("당신은 퀀트 트레이딩 리뷰어입니다. 아래는 ENAUSDT 페이퍼 봇의 거래 통계(JSON)입니다. "
           "숫자는 코드가 계산한 사실입니다. 규칙: ①통계에 없는 숫자를 만들지 말 것 ②원인을 단정하지 말고 '가설'로 표시 "
           "③매매 지시, 전략 변경 권고, 가격 예측은 하지 말 것 ④한국어로, 첫 문장은 반드시 표본 크기(거래 건수·기간)와 통계적 신뢰도의 한계 "
@@ -123,12 +127,29 @@ PROMPT = ("당신은 퀀트 트레이딩 리뷰어입니다. 아래는 ENAUSDT �
           "⑦관찰 3~5개, 가설 2~3개(근거가 통계에 있는 것만), 추가로 확인할 데이터 1~2개만.\n\n")
 
 
-def ask_ollama(stats: dict, model: str, host: str, timeout: int = 300) -> str:
+def log_llm_call(path, **fields) -> None:
+    """감사용 호출 기록(한 줄 JSON, 메타데이터만). 폴더가 없거나 쓸 수 없으면 조용히 건너뛴다."""
+    try:
+        p = Path(path)
+        if not p.parent.is_dir():
+            return
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **fields}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def ask_ollama(stats: dict, model: str, host: str, timeout: int = 300) -> tuple[str, dict]:
+    """(해설 본문, 호출 기록). 기록: 모델·프롬프트 버전·응답 지연(ms)·입력/출력 토큰(올라마가 알려 준 값, 없으면 None)."""
     body = json.dumps({"model": model, "prompt": PROMPT + json.dumps(stats, ensure_ascii=False, indent=1),
                        "stream": False, "think": False, "options": {"temperature": 0.2, "num_ctx": 8192}}).encode()
     req = urllib.request.Request(host.rstrip("/") + "/api/generate", body, {"Content-Type": "application/json"})
+    t0 = time.monotonic()
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())["response"].strip()
+        data = json.loads(r.read())
+    meta = {"model": model, "prompt_version": PROMPT_VERSION, "latency_ms": int((time.monotonic() - t0) * 1000),
+            "tokens_in": data.get("prompt_eval_count"), "tokens_out": data.get("eval_count")}
+    return data["response"].strip(), meta
 
 
 _NUM = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
@@ -318,12 +339,16 @@ def main(argv=None) -> int:
     if a.llm and has:
         print(f"\n[올라마 해설 · {a.model}] (가설일 뿐 사실이 아닙니다)")
         try:
-            text = ask_ollama(s, a.model, a.host)
+            text, meta = ask_ollama(s, a.model, a.host)
             print(text)
+            log_llm_call(CALL_LOG, tool="postmortem", ok=True, **meta)
+            print(f"\n[호출 기록] 모델 {meta['model']} · 프롬프트 {meta['prompt_version']} · 응답 {meta['latency_ms'] / 1000:.1f}초 · 토큰 입력/출력 "
+                  f"{meta['tokens_in'] if meta['tokens_in'] is not None else '—'}/{meta['tokens_out'] if meta['tokens_out'] is not None else '—'}")
             checked, bad = check_numbers(text, s)
             print("\n[자동 검산] " + (f"⚠ 통계에서 확인되지 않은 숫자: {', '.join(bad)} (해설의 이 부분은 믿지 마세요 · 검사 {checked}개)" if bad
                   else f"해설의 소수·% 숫자 {checked}개가 모두 통계와 일치합니다 (해석의 옳고 그름은 검사하지 않습니다)"))
         except Exception as exc:  # noqa: BLE001
+            log_llm_call(CALL_LOG, tool="postmortem", ok=False, model=a.model, prompt_version=PROMPT_VERSION, error=str(exc)[:120])
             print(f"올라마 호출 실패: {exc}", file=sys.stderr)
             return 1
     return 0
