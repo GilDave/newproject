@@ -87,5 +87,19 @@ class T(unittest.TestCase):
                 ms.fetch_fred("Y", pathlib.Path(d), fetch=lambda u: "observation_date,Y\n")
 
 
+class HttpGet(unittest.TestCase):
+    def test_uses_curl_and_reports_failure(self):
+        import subprocess
+        from unittest import mock
+        ok = subprocess.CompletedProcess(["curl"], 0, "a,b\n", "")
+        with mock.patch.object(ms.subprocess, "run", return_value=ok) as run:
+            self.assertEqual(ms.http_get("https://x"), "a,b\n")
+            self.assertEqual(run.call_args[0][0][0], "curl")
+        bad = subprocess.CompletedProcess(["curl"], 28, "", "timed out")
+        with mock.patch.object(ms.subprocess, "run", return_value=bad):
+            with self.assertRaises(OSError):
+                ms.http_get("https://x")
+
+
 if __name__ == "__main__":
     unittest.main()

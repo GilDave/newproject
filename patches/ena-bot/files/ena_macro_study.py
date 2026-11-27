@@ -15,6 +15,7 @@ import argparse
 import csv
 import datetime as dt
 import math
+import subprocess
 import time
 import urllib.request
 from pathlib import Path
@@ -47,11 +48,22 @@ def parse_fred(text: str) -> list[tuple[str, float]]:
     return rows
 
 
+def http_get(url: str, timeout: int = 30) -> str:
+    """curl 을 먼저 쓴다(이 맥에서 urllib 은 시간 초과가 나는데 curl 은 바로 열렸다). curl 이 없으면 urllib."""
+    try:
+        r = subprocess.run(["curl", "-fsSL", "-m", str(timeout), "-A", "Mozilla/5.0", url], capture_output=True, text=True, timeout=timeout + 5)
+    except FileNotFoundError:
+        return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=timeout).read().decode("utf-8")
+    if r.returncode != 0:
+        raise OSError(f"curl 종료 코드 {r.returncode}: {(r.stderr or '').strip()[:80]}")
+    return r.stdout
+
+
 def fetch_fred(sid: str, cache_dir: Path | None, use_cache: bool = True, fetch=None, ttl: float = 86400.0, now=time.time) -> list[tuple[str, float]]:
     f = cache_dir / f"{sid}.csv" if cache_dir else None
     if use_cache and f and f.exists() and now() - f.stat().st_mtime < ttl:
         return parse_fred(f.read_text(encoding="utf-8"))
-    fetch = fetch or (lambda u: urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=30).read().decode("utf-8"))
+    fetch = fetch or http_get
     text = fetch(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}")
     rows = parse_fred(text)
     if not rows:
@@ -185,6 +197,7 @@ def main(argv=None) -> int:
     print(f"ENA 시세 {len(hourly)}봉 ({dt.datetime.fromtimestamp(ts[0] / 1000, dt.timezone.utc):%Y-%m-%d} ~ {dt.datetime.fromtimestamp(ts[-1] / 1000, dt.timezone.utc):%Y-%m-%d} UTC)")
     data, errors = {}, {}
     for sid in SERIES:
+        print(f"받는 중: {SERIES[sid][0]} …", flush=True)
         try:
             data[sid] = fetch_fred(sid, Path(a.cache), use_cache=not a.no_cache)
         except Exception as exc:  # noqa: BLE001
