@@ -31,7 +31,7 @@ function hubPick(res, side) {
 // 진입 체크리스트. 판정 방향이 없으면 적용하지 않는다(관망).
 function hubChecklist(res, price) {
   const v = res.verdict, side = v.head === 'long' || v.head === 'short' ? v.head : null;
-  if (!side) return {side: null, items: [], pass: 0, total: 0, status: 'none', text: '방향 근거가 부족합니다 → 관망 (체크리스트를 적용하지 않음)', best: null};
+  if (!side) return {side: null, items: [], pass: 0, total: 0, status: 'none', text: v.shock ? '최근 가격 급변이 판정과 반대라 관망합니다 (체크리스트를 적용하지 않음)' : '방향 근거가 부족합니다 → 관망 (체크리스트를 적용하지 않음)', best: null};
   const plans = hubPlans(res, side), best = hubPick(res, side);
   const near = plans.some(p => p.n.inZone || p.n.distPct <= 0.005), cl = res.clusters.some(c => c.side === side && c.kinds.length >= 2);
   const items = [
@@ -140,7 +140,7 @@ function hubRender(res, price) {
   try {
     hubEnsure(); const pane = document.getElementById('hub-pane-sum'); if (!pane || !res || !res.verdict) return;
     const ck = hubChecklist(res, price), v = res.verdict, best = ck.best;
-    const key = JSON.stringify([price.toFixed(5), v.head, v.big.sum, v.small.sum, ck.items.map(i => i.ok), best ? [best.tf, best.method, best.n.mid.toFixed(5), best.n.stop.toFixed(5)] : null, res.rows.map(r => [r.op.ind, r.op.ell, r.ai && r.ai.side, r.cells.levels && r.cells.levels.ok && r.cells.levels.side])]);
+    const key = JSON.stringify([price.toFixed(5), v.head, !!v.shock, v.big.sum, v.small.sum, ck.items.map(i => i.ok), best ? [best.tf, best.method, best.n.mid.toFixed(5), best.n.stop.toFixed(5)] : null, res.rows.map(r => [r.op.ind, r.op.ell, r.ai && r.ai.side, r.cells.levels && r.cells.levels.ok && r.cells.levels.side])]);
     if (key === HUB.key && pane.firstChild && pane.firstChild.id === 'hub-sum-root') return;
     HUB.key = key; pane.textContent = '';
     const mk = (tag, text, css) => { const d = document.createElement(tag); if (text !== undefined) d.textContent = text; if (css) d.style.cssText = css; return d; };

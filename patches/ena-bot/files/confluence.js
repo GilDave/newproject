@@ -43,7 +43,25 @@ function cfGroup(rows, tfs) {
   for (const r of rows) if (tfs.indexOf(r.tf) >= 0 && r.side) { sum += (r.side === 'long' ? 1 : -1) * r.unit * (CF_W[r.tf] || 1); n++; }
   return {sum, n, side: Math.abs(sum) >= CF_TH ? (sum > 0 ? 'long' : 'short') : 'wait'};
 }
-function cfVerdict(items) {
+// 급변 감지: 방향 의견(지표·엘리엇)은 느리게 바뀌므로, 가격이 방금 그 반대로 크게 움직였는데도 '우세'로 보이는 일이 생긴다.
+// 최근 1시간(15분봉 4개)·4시간(1시간봉 4개)의 가격 이동이 그 시간봉 ATR 의 3배 이상이면 '급변'으로 본다(18코인 1시간봉에서 4봉 이동이 3ATR 이상인 경우는 약 2.5%로 드물다).
+// 급변 방향이 판정 방향과 반대면 판정을 관망으로 낮춘다. 급변이 이어질지는 예측하지 않는다(과거에도 같은 방향 이어짐은 +0.05% 수준으로 약했다).
+const CF_SHOCK_ATR = 3.0;
+function cfMomentum() {
+  const out = {fires: [], side: null};
+  try {
+    for (const [name, label] of [['15m', '최근 1시간'], ['1h', '최근 4시간']]) {
+      const d = typeof FRC !== 'undefined' && FRC.data ? FRC.data[name] : null; if (!d || !d.bars || d.bars.length < 30) continue;
+      const b = d.bars, n = b.length - 1, a = stAtr(b.map(x => x.high), b.map(x => x.low), b.map(x => x.close)), atr = a[n];
+      const move = b[n].close - b[n - 4].close; if (!(atr > 0) || !(b[n - 4].close > 0)) continue;
+      const z = move / atr; if (Math.abs(z) >= CF_SHOCK_ATR) out.fires.push({tf: name, label, z, pct: move / b[n - 4].close * 100, side: z > 0 ? 'long' : 'short'});
+    }
+  } catch (e) { return {fires: [], side: null}; }
+  if (out.fires.length) out.side = out.fires.slice().sort((x, y) => Math.abs(y.z) - Math.abs(x.z))[0].side;
+  return out;
+}
+function cfShockText(m) { return m.fires.map(f => f.label + ' ' + (f.pct > 0 ? '+' : '') + f.pct.toFixed(1) + '%(변동폭의 ' + Math.abs(f.z).toFixed(1) + '배 ' + (f.z > 0 ? '상승' : '하락') + ')').join(' · '); }
+function cfVerdict(items, mom) {
   const rows = items.map(it => Object.assign({tf: it.tf, ind: it.ind || null, ell: it.ell || null}, cfTfState(it.ind || null, it.ell || null)));
   const big = cfGroup(rows, CF_BIG), small = cfGroup(rows, CF_SMALL), conflicts = rows.filter(r => r.state === 'conflict');
   let text;
@@ -52,8 +70,14 @@ function cfVerdict(items) {
   else if (small.side === 'wait') text = '큰 흐름 ' + cfSideKo(big.side) + ', 단타는 대기 → 단기 파동이 정리되길 기다림';
   else if (small.side === big.side) text = cfSideKo(big.side) + ' 우세 — 큰 흐름과 단타가 같은 방향(눌림·되돌림 뒤 ' + cfSideKo(big.side) + ' 재개를 관찰)';
   else text = '큰 흐름 ' + cfSideKo(big.side) + ', 단타 ' + cfSideKo(small.side) + '(역추세) → 단타 ' + cfSideKo(small.side) + '은 짧게, 그 움직임이 끝나는 자리에서 ' + cfSideKo(big.side) + ' 재개를 관찰';
-  const head = big.side !== 'wait' ? big.side : small.side;
-  return {rows, big, small, conflicts, text, head};
+  let head = big.side !== 'wait' ? big.side : small.side, shock = null;
+  if (mom && mom.fires && mom.fires.length) {
+    if (head !== 'wait' && mom.side !== head) {
+      shock = mom; text = '지표·엘리엇은 ' + cfSideKo(head) + ' 쪽이지만 가격이 방금 반대로 급변했습니다(' + cfShockText(mom) + ') → 방향 근거가 충돌하므로 관망, 급변이 가라앉은 뒤 다시 판정';
+      head = 'wait';
+    } else text += ' [참고: 급변 ' + cfShockText(mom) + ']';
+  }
+  return {rows, big, small, conflicts, text, head, shock};
 }
 function cfVerdictFill(el, v) {
   el.textContent = '';
@@ -64,7 +88,7 @@ function cfVerdictFill(el, v) {
   l1.appendChild(mk('b', '종합 판정 (지표 + 엘리엇, 한 규칙)')); l1.appendChild(badge(v.head, v.head === 'wait' ? '관망' : cfSideKo(v.head) + ' 우세', true));
   l1.appendChild(document.createTextNode('큰 흐름 1일·4시간·1시간')); l1.appendChild(badge(v.big.side)); l1.appendChild(document.createTextNode('단타 30분·15분')); l1.appendChild(badge(v.small.side));
   el.appendChild(l1);
-  el.appendChild(mk('div', v.text, 'margin-top:3px;font-weight:600'));
+  el.appendChild(mk('div', v.text, 'margin-top:3px;font-weight:600' + (v.shock ? ';color:#ffb74d' : '')));
   const tbl = mk('table', undefined, 'border-collapse:collapse;margin-top:5px;font-size:12px'), th = tbl.insertRow();
   for (const h of ['시간봉', '지표(진입 계획)', '엘리엇', '판정']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:1px 14px 1px 0'));
   const KO = {'1d': '1일', '4h': '4시간', '1h': '1시간', '30m': '30분', '15m': '15분'}, ST = {agree: '일치', single: '한쪽만', conflict: '충돌', none: '의견 없음'};
@@ -275,7 +299,7 @@ function cfBuild(price) {
     row.agree = !sides.length ? null : sides.every(s => s === sides[0]) ? {side: sides[0], n: sides.length} : {mixed: true, long: sides.filter(s => s === 'long').length, short: sides.filter(s => s === 'short').length};
     rows.push(row);
   }
-  return {rows, clusters: cfClusters(all, price), verdict: cfVerdict(rows.map(r => r.op))};
+  return {rows, clusters: cfClusters(all, price), verdict: cfVerdict(rows.map(r => r.op), cfMomentum())};
 }
 function cfDraw() {
   try {

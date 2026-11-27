@@ -157,3 +157,36 @@ def test_wire_script_requires_fractal_and_entry_blocks_then_inserts_and_updates(
     assert "이미 최신" in run_wire().stdout
     (root / "tools" / "confluence.js").write_text(JS.read_text().replace("가격 종합 — 지표", "가격 종합(새) — 지표"))
     assert "수정" in run_wire().stdout and "가격 종합(새)" in page.read_text() and page.read_text().count("function cfNorm") == 1
+
+
+SHOCK_HARNESS = r"""
+const fs = require('fs'), vm = require('vm');
+const sb = {console, document: {}, localStorage: {getItem() { return null; }, setItem() {}}, structDraw: function () {}, setInterval() {}};
+sb.stAtr = (h, l, c) => h.map((x, i) => x - l[i]);               // 시험용: 봉의 고저 폭을 ATR 로
+vm.createContext(sb);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8') + ';this.X = {cfVerdict, cfMomentum};', sb);
+const mk = (closes, rng) => closes.map(c => ({time: 0, open: c, high: c + rng / 2, low: c - rng / 2, close: c}));
+const flat = Array(40).fill(100);
+const set = (m15, h1) => { sb.FRC = {data: {'15m': {bars: m15}, '1h': {bars: h1}}}; return sb.X.cfMomentum(); };
+const rows = [{tf: '4h', ind: 'long', ell: 'long'}, {tf: '1h', ind: 'long', ell: null}, {tf: '15m', ind: null, ell: null}];
+const out = {};
+let m = set(mk(flat, 1), mk(flat, 1)); out.calm = [m.fires.length, m.side, sb.X.cfVerdict(rows, m).head];
+const crash = flat.slice(0, 36).concat([99, 97, 95, 93]);                                  // 4봉 -7 → ATR(=1)의 7배 하락
+m = set(mk(crash, 1), mk(flat, 1)); let v = sb.X.cfVerdict(rows, m); out.crash = [m.fires.length, m.side, v.head, !!v.shock, v.text.includes('관망')];
+const rally = flat.slice(0, 36).concat([101, 103, 105, 107]);
+m = set(mk(rally, 1), mk(flat, 1)); v = sb.X.cfVerdict(rows, m); out.rally = [m.side, v.head, !!v.shock, v.text.includes('참고: 급변')];   // 같은 방향 급변은 판정을 바꾸지 않는다
+m = set(mk(crash, 1), mk(flat, 1)); v = sb.X.cfVerdict([{tf: '4h', ind: 'short', ell: 'short'}], m); out.same_dir = [v.head, !!v.shock];
+sb.FRC = {data: {}}; out.nodata = sb.X.cfMomentum().fires.length; out.legacy = sb.X.cfVerdict(rows).head;
+console.log(JSON.stringify(out));
+"""
+
+
+def test_price_shock_against_the_verdict_downgrades_it_to_wait():
+    r = subprocess.run([NODE, "-e", SHOCK_HARNESS, str(JS)], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["calm"] == [0, None, "long"]
+    assert out["crash"] == [1, "short", "wait", True, True]        # 롱 판정인데 1시간에 7ATR 하락 → 관망
+    assert out["rally"] == ["long", "long", False, True]
+    assert out["same_dir"] == ["short", False]                       # 숏 판정 + 급락은 충돌이 아니다
+    assert out["nodata"] == 0 and out["legacy"] == "long"
