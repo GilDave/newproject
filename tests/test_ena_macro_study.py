@@ -97,6 +97,7 @@ class HttpGet(unittest.TestCase):
             self.assertEqual(ms.http_get("https://x"), "a,b\n")
             self.assertEqual(run.call_args[0][0][0], "curl")
             self.assertIn("--http1.1", run.call_args[0][0])
+            self.assertNotIn("-A", run.call_args[0][0])
         with mock.patch.object(ms.subprocess, "run", side_effect=subprocess.TimeoutExpired("curl", 35)):
             with self.assertRaises(OSError) as cm:
                 ms.http_get("https://x")

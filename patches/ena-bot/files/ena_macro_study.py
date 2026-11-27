@@ -49,13 +49,13 @@ def parse_fred(text: str) -> list[tuple[str, float]]:
 
 
 def http_get(url: str, timeout: int = 30) -> str:
-    """curl 을 먼저 쓴다(이 맥에서 urllib 은 시간 초과). FRED 는 HTTP/2 로 받으면 'stream not closed cleanly'(curl 92)가 나서 HTTP/1.1 로 고정한다. curl 이 없으면 urllib."""
+    """curl 을 먼저 쓴다(이 맥에서 urllib 은 시간 초과). FRED 는 HTTP/2 로 받으면 'stream not closed cleanly'(curl 92)가 나서 HTTP/1.1 로 고정하고, 브라우저인 척하는 식별자(Mozilla/5.0)를 붙이면 응답이 오지 않아 curl 기본 식별자를 쓴다(추정). curl 이 없으면 urllib."""
     try:
-        r = subprocess.run(["curl", "--http1.1", "-fsSL", "-m", str(timeout), "-A", "Mozilla/5.0", url], capture_output=True, text=True, timeout=timeout + 5)
+        r = subprocess.run(["curl", "--http1.1", "-fsSL", "-m", str(timeout), url], capture_output=True, text=True, timeout=timeout + 5)
     except subprocess.TimeoutExpired:
         raise OSError(f"{timeout}초 안에 받지 못했습니다") from None
     except FileNotFoundError:
-        return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=timeout).read().decode("utf-8")
+        return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "curl/8.0"}), timeout=timeout).read().decode("utf-8")
     if r.returncode != 0:
         raise OSError(f"curl 종료 코드 {r.returncode}: {(r.stderr or '').strip()[:80]}")
     return r.stdout
