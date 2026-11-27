@@ -140,7 +140,7 @@ function hubRender(res, price) {
   try {
     hubEnsure(); const pane = document.getElementById('hub-pane-sum'); if (!pane || !res || !res.verdict) return;
     const ck = hubChecklist(res, price), v = res.verdict, best = ck.best;
-    const key = JSON.stringify([price.toFixed(5), v.head, !!v.shock, v.big.sum, v.small.sum, ck.items.map(i => i.ok), best ? [best.tf, best.method, best.n.mid.toFixed(5), best.n.stop.toFixed(5)] : null, res.rows.map(r => [r.op.ind, r.op.ell, r.ai && r.ai.side, r.cells.levels && r.cells.levels.ok && r.cells.levels.side])]);
+    const key = JSON.stringify([price.toFixed(5), v.head, !!v.shock, v.diag, v.big.sum, v.small.sum, ck.items.map(i => i.ok), best ? [best.tf, best.method, best.n.mid.toFixed(5), best.n.stop.toFixed(5)] : null, res.rows.map(r => [r.op.ind, r.op.ell, r.ai && r.ai.side, r.cells.levels && r.cells.levels.ok && r.cells.levels.side])]);
     if (key === HUB.key && pane.firstChild && pane.firstChild.id === 'hub-sum-root') return;
     HUB.key = key; pane.textContent = '';
     const mk = (tag, text, css) => { const d = document.createElement(tag); if (text !== undefined) d.textContent = text; if (css) d.style.cssText = css; return d; };
@@ -155,6 +155,7 @@ function hubRender(res, price) {
     const stc = ck.status === 'ready' ? '#66bb6a' : ck.status === 'wait' ? '#ffb74d' : '#9aa3b5';
     left.appendChild(mk('div', ck.text, 'margin-top:6px;font-weight:700;font-size:calc(var(--hub-fs) + 1px);color:' + stc));
     left.appendChild(mk('div', v.text, 'margin:2px 0 6px;opacity:.9'));
+    if (v.diag && v.diag.length) left.appendChild(mk('div', '급변 점검(변동폭의 3배 이상이면 급변): ' + v.diag.join(' · '), 'margin:0 0 6px;font-size:11px;opacity:.6'));
     if (ck.items.length) {
       const ul = mk('div', undefined, 'margin-top:6px;display:grid;gap:2px');
       for (const it of ck.items) { const li = mk('div', undefined, 'display:flex;gap:6px'); li.appendChild(mk('span', it.ok ? '✓' : '✗', 'width:1.2em;font-weight:700;color:' + (it.ok ? '#66bb6a' : '#ef5350'))); li.appendChild(mk('span', it.label + (it.note ? ' — ' + it.note : ''), it.ok ? '' : 'color:#ffb74d')); ul.appendChild(li); }
