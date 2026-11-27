@@ -28,16 +28,25 @@ class MarketContext:
 '''
 C_EDITS = [("MarketContext 클래스 앞", "class MarketContext:\n", PLUS), ("기본 조회 함수", '            "calendar": fetch_calendar,\n', '            "calendar": _calendar_plus,\n')]
 D_OLD = "        market = MarketContext(client, news)\n"
-D_NEW = D_OLD + "    from . import econ_calendar as _ec\n    _ec.configure(cfg.data_path)\n"
+CFG_OLD = "    _ec.configure(cfg.data_path)\n"
+CFG_NEW = ("    _ec.configure(cfg.data_path, reaction_fetch=lambda sym, end, n: klines_payload(client, sym, '1', n, end))\n")
+D_NEW = D_OLD + "    from . import econ_calendar as _ec\n" + CFG_NEW
 
 JS = r"""/* ECON-TODAY-START: 오늘의 지표 발표·이번 주 남은 일정·수집 상태 */
 const ECON_DT = new Intl.DateTimeFormat('ko-KR', {timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false});
+function econReact(x) {
+  const r = x.reaction; if (!r || !r.ena) return '';
+  const p = v => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%';
+  const e = r.ena, b = r.btc;
+  return `<div class="ms" data-role="econreact" style="margin-left:14px">발표 후 ENA 5분 ${p(e.ret5)} · 15분 ${p(e.ret15)} · 60분 ${p(e.ret60)} · 1시간 고저폭 ${p(e.range)}`
+    + (e.ratio_range != null ? ` (평소의 ${e.ratio_range.toFixed(1)}배)` : '') + (b ? ` · BTC 15분 ${p(b.ret15)}` : '') + '</div>';
+}
 function econRow(x, withDate) {
   const imp = {high: ['#ef5350', '높음'], medium: ['#f5a623', '보통'], low: ['#7d8597', '낮음']}[x.impact] || ['#7d8597', ''];
   const when = withDate ? ECON_DT.format(x.ts) : kstHM(x.ts);
   const actual = x.actual ? '<b>' + escH(x.actual) + '</b>' : (x.ts <= Date.now() ? '<i>발표 대기</i>' : '대기');
   return `<div class="mi" data-role="econrow">${when} <span style="color:${imp[0]}" title="중요도 ${imp[1]}">●</span> ${escH(x.name)}${x.manual ? ' <span class="ms">(수동)</span>' : ''} `
-    + `<span class="ms">이전 ${escH(x.previous || '—')} · 예상 ${escH(x.forecast || '—')} · 발표 ${actual}</span></div>`;
+    + `<span class="ms">이전 ${escH(x.previous || '—')} · 예상 ${escH(x.forecast || '—')} · 발표 ${actual}</span></div>` + econReact(x);
 }
 function econTodayHtml(c) {
   const e = c.econ; if (!e) return '';
@@ -48,6 +57,7 @@ function econTodayHtml(c) {
   h += e.fetched_at
     ? `<div class="ms" data-role="econstatus">지표 피드 수집 ${kst(e.fetched_at)} · ${e.count}건${e.manual ? ' · 수동 ' + e.manual + '건' : ''}${e.error ? ' · <span style="color:#ff8a80">최근 갱신 실패: ' + escH(e.error) + '</span>' : ''}</div>`
     : `<div class="ms" data-role="econstatus" style="color:#ff8a80">${escH(e.note || e.error || '지표 피드를 아직 받지 못했습니다')}</div>`;
+  if (e.reactions != null) h += `<div class="ms" data-role="econrx">발표 반응 기록 ${e.reactions}건 (발표 약 1시간 뒤부터 자동 기록)</div>`;
   return h + '<div class="ms" style="opacity:.7">피드에 없는 지표는 data/econ_manual.json 에 직접 추가할 수 있습니다.</div>';
 }
 /* ECON-TODAY-END */
@@ -63,6 +73,8 @@ if "_calendar_plus" not in ncx:
         if ncx.count(old) != 1:
             raise SystemExit(f"dashboard_market_context.py 에서 {name} 위치를 찾지 못했습니다({ncx.count(old)}곳). 아무것도 바꾸지 않았습니다.")
         ncx = ncx.replace(old, new, 1)
+if "econ_calendar as _ec" in ndx and CFG_OLD in ndx:          # 이전 판(반응 기록 없음)을 올린다
+    ndx = ndx.replace(CFG_OLD, CFG_NEW, 1)
 if "econ_calendar as _ec" not in ndx:
     if ndx.count(D_OLD) != 1:
         raise SystemExit(f"dashboard.py 에서 MarketContext 생성 위치를 찾지 못했습니다({ndx.count(D_OLD)}곳). 아무것도 바꾸지 않았습니다.")

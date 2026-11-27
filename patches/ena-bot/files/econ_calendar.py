@@ -149,8 +149,10 @@ def merge(feed: list[dict], manual: list[dict]) -> list[dict]:
 
 # ------------------------------------------------------------------ 캐시·수집기
 class Collector:
-    def __init__(self, data_dir: Path | str = "data", fetch=http_get, urls=FEED_URLS, clock=time.time, network: bool | None = None):
+    def __init__(self, data_dir: Path | str = "data", fetch=http_get, urls=FEED_URLS, clock=time.time, network: bool | None = None, reaction_fetch=None):
         self.dir, self.fetch, self.urls, self.clock = Path(data_dir), fetch, urls, clock
+        self.reaction_fetch = reaction_fetch                    # (심볼, 끝 시각 ms, 개수) -> 1분봉. 없으면 반응을 기록하지 않는다
+        self._last_rec = 0.0
         self.network = (not os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("ENA_ECON_NETWORK") == "1") if network is None else network
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -214,24 +216,50 @@ class Collector:
         self.error = "; ".join(errs) or "받은 일정이 없습니다"
         return {"ok": False, "count": 0, "errors": errs}
 
+    @property
+    def reactions(self):
+        from .econ_reaction import ReactionStore
+        return ReactionStore(self.dir / "econ_reactions.jsonl")
+
+    def _work(self, do_refresh: bool) -> None:
+        if do_refresh:
+            self.refresh()
+        if self.reaction_fetch is not None:
+            try:
+                from .econ_reaction import record_new
+                record_new(self.events(), int(self.clock() * 1000), self.reaction_fetch, self.reactions)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("econ reaction record failed: %s", exc)
+
     def poke(self) -> None:
-        """필요하면 백그라운드에서 한 번 갱신을 시작한다(요청을 막지 않는다)."""
+        """필요하면 백그라운드에서 한 번 갱신·기록을 시작한다(요청을 막지 않는다)."""
         if not self.network:
             return
         with self._lock:
-            if (self._thread is not None and self._thread.is_alive()) or not self.due(int(self.clock() * 1000)):
+            if self._thread is not None and self._thread.is_alive():
                 return
-            self._thread = threading.Thread(target=self.refresh, daemon=True)
-            self._last_try = self.clock()
+            now = self.clock()
+            refresh = self.due(int(now * 1000))
+            record = False
+            if self.reaction_fetch is not None and now - self._last_rec >= 300:       # 반응 기록은 5분에 한 번만 시도한다
+                from .econ_reaction import pending
+                record = bool(pending(self.events(), int(now * 1000), self.reactions))
+            if not refresh and not record:
+                return
+            if refresh:
+                self._last_try = now
+            if record:
+                self._last_rec = now
+            self._thread = threading.Thread(target=self._work, args=(refresh,), daemon=True)
             self._thread.start()
 
 
 COLLECTOR = Collector()
 
 
-def configure(data_dir) -> None:
+def configure(data_dir, reaction_fetch=None) -> None:
     global COLLECTOR
-    COLLECTOR = Collector(data_dir)
+    COLLECTOR = Collector(data_dir, reaction_fetch=reaction_fetch)
 
 
 def day_str(ms: int, tz: str = KST) -> str:
@@ -250,10 +278,13 @@ def fetch_calendar_plus(now_ms: int, base: dict, collector: Collector | None = N
     static_days = {(e["date"], e["name"]) for e in base.get("events", [])}          # events.py 가 이미 그린 (날짜, FOMC|CPI|NFP)
     grid = [e for e in evs if IMPACT_RANK.get(e["impact"], 1) >= 3 and (day_str(e["ts"], tz), e["category"]) not in static_days]
     out["events"] = list(base.get("events", [])) + [{"name": e["name"], "ts": e["ts"], "date": day_str(e["ts"], tz), "source": "지표 피드"} for e in grid]
-    out["today"] = [e for e in evs if day_str(e["ts"], tz) == today]
+    from .econ_reaction import brief
+    rx = c.reactions.load()
+    attach = lambda e: dict(e, reaction=brief(rx.get((e["ts"], e["name_en"]))))
+    out["today"] = [attach(e) for e in evs if day_str(e["ts"], tz) == today]
     out["upcoming_econ"] = [e for e in evs if e["ts"] > now_ms and day_str(e["ts"], tz) != today][:8]
     fetched = cache.get("fetched_at")
-    out["econ"] = {"fetched_at": fetched, "count": len(cache.get("events", [])), "manual": len(c.manual()), "error": c.error,
+    out["econ"] = {"fetched_at": fetched, "count": len(cache.get("events", [])), "manual": len(c.manual()), "error": c.error, "reactions": len(rx),
                    "source": cache.get("source", "nfs.faireconomy.media"), "network": c.network}
     if fetched:
         out["updated_at"] = int(fetched)
@@ -296,6 +327,7 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check", help="피드를 받아 오늘(한국 시간) 일정을 출력")
     sub.add_parser("list", help="캐시와 수동 입력을 합친 앞으로 일정 출력")
+    sub.add_parser("reactions", help="기록된 발표 직후 ENA·BTC 가격 반응 출력")
     a = sub.add_parser("add", help="피드에 없는 지표를 직접 추가")
     a.add_argument("name"); a.add_argument("when", help="한국 시간 'YYYY-MM-DD HH:MM'"); a.add_argument("--previous", default=""); a.add_argument("--forecast", default="")
     a.add_argument("--actual", default=""); a.add_argument("--impact", default="low", choices=["high", "medium", "low"])
@@ -314,6 +346,20 @@ def main(argv=None) -> int:
         if r["ok"] and not any(day_str(e["ts"]) == today for e in c.events()):
             print("  오늘(한국 시간) 일정이 피드에 없습니다. 'add' 로 직접 추가하세요.")
         return 0 if r["ok"] else 1
+    if args.cmd == "reactions":
+        recs = sorted(c.reactions.load().values(), key=lambda r: r["ts"])
+        if not recs:
+            print("아직 기록이 없습니다. 발표 후 약 1시간이 지나면 대시보드가 켜져 있는 동안 자동으로 쌓입니다.")
+            return 0
+        pc = lambda v: "   —  " if v is None else f"{v * 100:+6.2f}%"
+        print(f"{'발표(KST)':11s} {'지표':26s} {'중요':5s} {'놀람':>7s} | ENA 5분  15분   60분  고저폭 | 평소대비 | BTC 15분")
+        for r in recs:
+            e, b = r["ena"], r.get("btc") or {}
+            t = datetime.fromtimestamp(r["ts"] / 1000, ZoneInfo(KST)).strftime("%m-%d %H:%M")
+            sp = "  —  " if r.get("surprise") is None else f"{r['surprise']:+.2g}"
+            print(f"{t:11s} {r['name'][:26]:26s} {r['impact']:5s} {sp:>7s} | {pc(e['ret5'])} {pc(e['ret15'])} {pc(e['ret60'])} {pc(e['range'])} | "
+                  f"{('—' if e.get('ratio_range') is None else format(e['ratio_range'], '.1f') + '배'):>7s} | {pc(b.get('ret15'))}")
+        return 0
     if args.cmd == "list":
         for e in c.events():
             if e["ts"] >= now_ms - 86_400_000:
