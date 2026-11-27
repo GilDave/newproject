@@ -12,52 +12,65 @@ from ena_bot import us_market as um
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def yahoo(last=100.0, prev=101.0, n=30, drop_last=0.6):
-    ts = [1_700_000_000 + 300 * i for i in range(n)]
-    close = [100.0] * (n - 1) + [100.0 * (1 - drop_last / 100)]
-    return json.dumps({"chart": {"result": [{"meta": {"regularMarketPrice": last, "chartPreviousClose": prev, "regularMarketTime": ts[-1]}, "timestamp": ts, "indicators": {"quote": [{"close": close}]}}]}})
+CNBC = json.dumps({"FormattedQuoteResult": {"FormattedQuote": [
+    {"symbol": "QQQ", "last": "645.26", "last_time": "2026-11-27T11:06:10.047-0500", "change": "+10.87", "change_pct": "+1.71%"},
+    {"symbol": ".IXIC", "last": "23,100.50", "last_time": "2026-11-27T11:06:10.047-0500", "change": "-100.5", "change_pct": "-0.43%"}]}})
+NASDAQ = json.dumps({"data": {"symbol": "QQQ", "primaryData": {"lastSalePrice": "$644.80", "netChange": "+10.87", "percentageChange": "+1.71%", "deltaIndicator": "up"}}})
 
 
-def test_parse_yahoo_gives_day_and_one_hour_change():
-    r = um.parse_yahoo(yahoo(last=99.0, prev=100.0), "QQQ")
-    assert abs(r["pct_day"] + 1.0) < 1e-9 and r["pct_1h"] is not None and abs(r["pct_1h"] + 0.6) < 1e-6 and r["source"] == "yahoo"
-    for bad in ("{}", json.dumps({"chart": {"result": None}}), "not json"):
+def test_parse_cnbc_and_nasdaq_pick_the_right_symbol_and_values():
+    q = um.parse_cnbc(CNBC, "QQQ")
+    assert abs(q["last"] - 645.26) < 1e-9 and abs(q["pct_day"] - 1.71) < 1e-9 and q["source"] == "cnbc" and q["ts"] > 1_700_000_000_000
+    i = um.parse_cnbc(CNBC, ".IXIC")
+    assert abs(i["last"] - 23100.5) < 1e-9 and i["pct_day"] < 0
+    n = um.parse_nasdaq(NASDAQ, "QQQ")
+    assert abs(n["last"] - 644.8) < 1e-9 and abs(n["pct_day"] - 1.71) < 1e-9
+    down = um.parse_nasdaq(NASDAQ.replace("+1.71%", "1.71%").replace('"up"', '"down"'), "QQQ")
+    assert down["pct_day"] < 0                                              # 부호 없이 내려옴 표기
+    for bad in ("{}", json.dumps({"FormattedQuoteResult": {"FormattedQuote": []}}), "not json"):
         with pytest.raises(Exception):
-            um.parse_yahoo(bad, "QQQ")
-
-
-def test_parse_stooq_and_garbage():
-    r = um.parse_stooq("Symbol,Date,Time,Open,High,Low,Close,Volume\nQQQ.US,2026-11-27,22:00:00,500,505,498,495,1000\n", "QQQ")
-    assert abs(r["pct_day"] + 1.0) < 1e-9
+            um.parse_cnbc(bad, "QQQ")
     with pytest.raises(ValueError):
-        um.parse_stooq("Symbol,Date\nQQQ,N/D\n", "QQQ")
+        um.parse_nasdaq(json.dumps({"data": {"primaryData": {}}}), "QQQ")
+    no_pct = json.dumps({"FormattedQuoteResult": {"FormattedQuote": [{"symbol": "QQQ", "last": "110", "change": "10"}]}})
+    assert abs(um.parse_cnbc(no_pct, "QQQ")["pct_day"] - 10.0) < 1e-9       # 등락률이 없으면 변화량으로 계산
 
 
-def test_falls_back_to_second_user_agent_then_stooq_and_keeps_old_values_on_failure(tmp_path):
+def test_chain_tries_safari_first_falls_back_to_nasdaq_and_keeps_old_values(tmp_path):
     calls = []
     def fetch(url, ua=None):
-        calls.append((url.split("/")[2], ua))
-        if "yahoo" in url:
+        calls.append((url.split("/")[2], bool(ua)))
+        if "cnbc" in url:
             if ua is None:
-                raise OSError("403")
-            return yahoo()
-        raise OSError("down")
-    c = um.Collector(tmp_path, fetch=fetch, clock=lambda: 1_700_000_100, network=True)
+                raise OSError("HTTP 403")
+            return CNBC
+        return NASDAQ
+    c = um.Collector(tmp_path, fetch=fetch, clock=lambda: 1_800_000_000, network=True)
     r = c.refresh()
-    assert r["ok"] and r["items"] == 2 and ("query1.finance.yahoo.com", None) in calls
-    def dead(url, ua=None):
-        raise OSError("blocked")
-    c2 = um.Collector(tmp_path, fetch=dead, clock=lambda: 1_700_020_000, network=True)
+    assert r["ok"] and r["items"] == 2 and calls[0] == ("quote.cnbc.com", True)
+    def cnbc_down(url, ua=None):
+        if "cnbc" in url:
+            raise OSError("HTTP 429")
+        return NASDAQ
+    c2 = um.Collector(tmp_path, fetch=cnbc_down, clock=lambda: 1_800_000_900, network=True)
     r2 = c2.refresh()
-    assert not r2["ok"] and r2["items"] == 2 and "QQQ" in r2["error"]                    # 마지막 성공 값은 남기고 오류를 알린다
+    assert not r2["ok"] and r2["items"] == 2 and ".IXIC" in r2["error"]            # QQQ 는 Nasdaq.com 으로, 지수는 이전 값 유지
+    assert c2.load()["items"][0]["source"] in ("nasdaq.com", "cnbc")
     p = c2.payload()
-    assert p["ok"] and p["items"][0]["age_sec"] > 0 and p["error"]
-    def stooq_only(url, ua=None):
-        if "stooq" in url:
-            return "Symbol,Date,Time,Open,High,Low,Close,Volume\nX,2026-11-27,22:00:00,100,101,99,98,1\n"
-        raise OSError("yahoo down")
-    c3 = um.Collector(tmp_path / "s", fetch=stooq_only, network=True)
-    assert c3.refresh()["ok"] and c3.load()["items"][0]["source"].startswith("stooq")
+    assert p["ok"] and p["error"] and all(x["age_sec"] >= 0 for x in p["items"])
+
+
+def test_one_hour_change_is_computed_from_our_own_samples(tmp_path):
+    t = [1_800_000_000.0]
+    price = [100.0]
+    def fetch(url, ua=None):
+        return json.dumps({"FormattedQuoteResult": {"FormattedQuote": [{"symbol": s, "last": str(price[0]), "change_pct": "0.5%", "last_time": "2026-11-27T11:06:10.047-0500"} for s in ("QQQ", ".IXIC")]}})
+    c = um.Collector(tmp_path, fetch=fetch, clock=lambda: t[0], network=True)
+    c.refresh()
+    assert c.load()["items"][0]["pct_1h"] is None                                    # 아직 1시간 전 기록이 없다
+    t[0] += 3600; price[0] = 99.0
+    c.refresh()
+    assert abs(c.load()["items"][0]["pct_1h"] + 1.0) < 1e-6
 
 
 def test_no_network_during_tests_and_wire_is_idempotent(tmp_path):
