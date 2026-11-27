@@ -2,6 +2,7 @@
 무료 공개 시세만 쓴다: 1순위 Yahoo Finance 차트(5분봉, 장중 등락과 최근 1시간 변화까지), 실패하면 Stooq 지연 시세(일간 등락만).
 공개 서비스는 예고 없이 막히거나 바뀔 수 있다. 실패하면 마지막 성공 값을 '오래됨'으로 표시하고 오류를 알린다. 매매에는 쓰지 않는다.
 사용: python -m ena_bot.us_market check     (Mac 에서 실제로 받아지는지 확인)
+      python -m ena_bot.us_market probe     (후보 출처별 상태와 응답 앞부분 진단)
 """
 from __future__ import annotations
 
@@ -17,19 +18,46 @@ SYMBOLS = {"QQQ": ("QQQ(나스닥100 ETF)", "qqq.us"), "NQ=F": ("나스닥100 �
 YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=5m&range=1d"
 STOOQ = "https://stooq.com/q/l/?s={sym}&f=sd2t2ohlcv&h&e=csv"
 UAS = (None, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
+PROBE_URLS = (
+    "https://query1.finance.yahoo.com/v8/finance/chart/QQQ?interval=5m&range=1d",
+    "https://query2.finance.yahoo.com/v8/finance/chart/QQQ?interval=5m&range=1d",
+    "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=QQQ%7C.IXIC&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json&events=1",
+    "https://api.nasdaq.com/api/quote/QQQ/info?assetclass=etf",
+    "https://stooq.com/q/d/l/?s=qqq.us&i=d",
+    "https://fred.stlouisfed.org/graph/fredgraph.csv?id=NASDAQ100&cosd=2026-11-01",
+)
 TTL = 60
+BACKOFF_429 = 600                    # HTTP 429(요청 제한)를 받으면 이 시간(초) 동안 다시 시도하지 않는다
 STALE_AFTER = 15 * 60
 
 
 def http_get(url: str, ua: str | None = None, timeout: int = 15) -> str:
-    cmd = ["curl", "--http1.1", "-fsSL", "-m", str(timeout)] + (["-A", ua] if ua else []) + [url]
+    """HTTP 상태 코드를 함께 확인한다(오류 메시지에 429·403·404 가 그대로 보이게)."""
+    cmd = ["curl", "--http1.1", "-sL", "-m", str(timeout), "-w", "\n%{http_code}"] + (["-A", ua] if ua else []) + [url]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
     except subprocess.TimeoutExpired:
         raise OSError(f"{timeout}초 안에 받지 못했습니다") from None
+    body, _, code = r.stdout.rpartition("\n")
     if r.returncode != 0:
-        raise OSError(f"curl 종료 코드 {r.returncode}: {(r.stderr or '').strip()[:60]}")
-    return r.stdout
+        raise OSError(f"curl 종료 코드 {r.returncode}")
+    if not code.startswith("2"):
+        raise OSError(f"HTTP {code}")
+    return body
+
+
+def probe(urls=None, fetch=None) -> list[tuple[str, str, str]]:
+    """후보 주소마다 (주소, 상태, 응답 앞부분)을 돌려준다. 실제로 어떤 출처가 받아지는지 확인하고 응답 모양을 보기 위한 진단용."""
+    out = []
+    for u in urls or PROBE_URLS:
+        for ua in UAS:
+            try:
+                body = (fetch or http_get)(u, ua)
+                out.append((u, "성공" + (" (Safari UA)" if ua else " (기본 UA)"), body[:300].replace("\n", " ⏎ ")))
+                break
+            except Exception as exc:  # noqa: BLE001
+                out.append((u, f"실패 {exc}" + (" (Safari UA)" if ua else " (기본 UA)"), ""))
+    return out
 
 
 def parse_yahoo(text: str, symbol: str) -> dict:
@@ -120,7 +148,8 @@ class Collector:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return
-            if self.clock() - self._last_try < TTL:
+            wait = BACKOFF_429 if "429" in (self.error or "") else TTL
+            if self.clock() - self._last_try < wait:
                 return
             self._last_try = self.clock()
             self._thread = threading.Thread(target=self.refresh, daemon=True)
@@ -148,9 +177,13 @@ def configure(data_dir) -> None:
 def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["check"])
+    ap.add_argument("cmd", choices=["check", "probe"])
     ap.add_argument("--data", default="data")
     a = ap.parse_args(argv)
+    if a.cmd == "probe":
+        for u, st, head in probe():
+            print(f"{st}\n  {u}" + (f"\n  응답: {head}" if head else ""))
+        return 0
     c = Collector(a.data, network=True)
     r = c.refresh()
     for x in c.load().get("items", []):

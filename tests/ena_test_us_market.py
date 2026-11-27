@@ -72,3 +72,26 @@ def test_no_network_during_tests_and_wire_is_idempotent(tmp_path):
     assert "/api/us-market" in src and "us_market.configure(cfg.data_path)" in src
     compile(src, "dashboard.py", "exec")
     assert "이미" in subprocess.run(["python3", str(wire), str(tmp_path)], capture_output=True, text=True).stdout
+
+
+def test_probe_reports_each_candidate_with_status_and_head():
+    def fetch(url, ua=None):
+        if "yahoo" in url:
+            raise OSError("HTTP 429")
+        return '{"a": 1}\n{"b": 2}'
+    rows = um.probe(["https://query1.finance.yahoo.com/x", "https://example.com/y"], fetch=fetch)
+    assert any("HTTP 429" in st for _, st, _ in rows) and any(st.startswith("성공") and "⏎" in head for _, st, head in rows)
+
+
+def test_rate_limit_backs_off_longer(tmp_path):
+    t = [1000.0]
+    c = um.Collector(tmp_path, fetch=lambda u, ua=None: (_ for _ in ()).throw(OSError("HTTP 429")), clock=lambda: t[0], network=True)
+    c.poke(); c._thread.join(3)
+    assert "429" in c.error
+    t[0] += 120
+    c._thread = None
+    c.poke()
+    assert c._thread is None                                         # 2분 뒤에도 쉬는 중
+    t[0] += 600
+    c.poke()
+    assert c._thread is not None
