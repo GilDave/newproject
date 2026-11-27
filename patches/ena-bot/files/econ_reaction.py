@@ -112,6 +112,35 @@ class ReactionStore:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+def _fill(self, events) -> int:
+    """기록 당시 발표값이 비어 있던 줄에, 나중에 들어온 발표값과 놀람 값을 채운다."""
+    by = {(e["ts"], e["name_en"]): e for e in events if e.get("actual")}
+    try:
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    n, out = 0, []
+    for line in lines:
+        try:
+            r = json.loads(line)
+            e = by.get((int(r["ts"]), r["name_en"]))
+            if e and not r.get("actual"):
+                r["actual"], r["forecast"] = e["actual"], e.get("forecast", r.get("forecast"))
+                r["surprise"] = surprise(r["actual"], r["forecast"])
+                line, n = json.dumps(r, ensure_ascii=False), n + 1
+        except (ValueError, KeyError):
+            pass
+        out.append(line)
+    if n:
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+        tmp.replace(self.path)
+    return n
+
+
+ReactionStore.fill_actuals = _fill
+
+
 def pending(events, now_ms: int, store: ReactionStore, delay_min: int = DELAY_MIN, max_age_days: int = MAX_AGE_DAYS):
     have = store.load()
     return [e for e in events if e["ts"] + delay_min * MIN <= now_ms <= e["ts"] + max_age_days * 86_400_000 and (e["ts"], e["name_en"]) not in have]

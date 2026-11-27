@@ -84,3 +84,26 @@ def test_collector_records_in_background_and_calendar_attaches_it(tmp_path):
     out = ec.fetch_calendar_plus(now, {"items": [], "updated_at": now}, collector=c)
     rows = [e for e in out["today"] if e["name_en"] == "CPI m/m"]
     assert rows and rows[0]["reaction"]["ena"]["ret15"] is not None and out["econ"]["reactions"] == 1
+
+
+def test_late_actual_is_filled_into_existing_record(tmp_path):
+    store = er.ReactionStore(tmp_path / "r.jsonl")
+    e = ev(); e["actual"] = ""
+    er.record_new([e], T + 65 * MIN, make_fetch(), store)
+    assert json.loads(store.path.read_text().splitlines()[0])["surprise"] is None
+    assert store.fill_actuals([ev()]) == 1
+    assert abs(json.loads(store.path.read_text().splitlines()[0])["surprise"] - 0.1) < 1e-9
+    assert store.fill_actuals([ev()]) == 0
+
+
+def test_polls_every_two_minutes_while_actual_is_missing(tmp_path):
+    feed = json.dumps([{"title": "CPI m/m", "country": "USD", "date": "2026-11-27T08:30:00-05:00", "impact": "High", "forecast": "0.3%", "previous": "0.2%"}])
+    now = [T + 10 * MIN]
+    c = ec.Collector(tmp_path, fetch=lambda u: feed, clock=lambda: now[0] / 1000, network=True)
+    c.refresh()
+    now[0] += 3 * MIN
+    assert c.due(now[0])
+    c2 = ec.Collector(tmp_path, fetch=lambda u: feed.replace('"previous"', '"actual": "0.4%", "previous"'), clock=lambda: now[0] / 1000, network=True)
+    c2.refresh()
+    now[0] += 3 * MIN
+    assert not c2.due(now[0])

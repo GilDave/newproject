@@ -24,6 +24,8 @@ KST = "Asia/Seoul"
 FEED_URLS = ("https://nfs.faireconomy.media/ff_calendar_thisweek.json", "https://nfs.faireconomy.media/ff_calendar_nextweek.json")
 COUNTRIES = ("USD",)
 IMPACT_RANK = {"high": 3, "medium": 2, "low": 1, "holiday": 0}
+TTL_AWAIT = 120                                           # 발표 후 발표값이 아직 비어 있으면 2분마다 다시 받는다
+AWAIT_AFTER = 3 * 3600                                    # 발표 후 3시간까지
 TTL_NORMAL, TTL_NEAR, TTL_RETRY = 3600, 600, 600          # 평소 / 발표 직전·직후 / 실패 뒤 재시도 (초)
 NEAR_BEFORE, NEAR_AFTER = 20 * 60, 90 * 60                # 발표 20분 전부터 90분 뒤까지 '가까움'
 STATIC_KEYS = ("FOMC", "CPI", "NFP")                       # events.py 가 이미 달력에 그리는 종류(중복 표시 방지)
@@ -186,11 +188,12 @@ class Collector:
         cache = self.load_cache()
         fetched = cache.get("fetched_at", 0)
         near = any(e["ts"] - NEAR_BEFORE * 1000 <= now_ms <= e["ts"] + NEAR_AFTER * 1000 for e in cache.get("events", []))
-        ttl = TTL_NEAR if near else TTL_NORMAL
+        waiting = any(e["ts"] <= now_ms <= e["ts"] + AWAIT_AFTER * 1000 and not e.get("actual") for e in cache.get("events", []))
+        ttl = TTL_AWAIT if waiting else (TTL_NEAR if near else TTL_NORMAL)
         since_try = (now_ms - self._last_try * 1000) / 1000
         if not fetched:
             return since_try >= TTL_RETRY or self._last_try == 0
-        if self.error and since_try < TTL_RETRY:       # 실패한 뒤에는 잠시 쉰다
+        if self.error and since_try < (TTL_AWAIT if waiting else TTL_RETRY):       # 실패한 뒤에는 잠시 쉰다
             return False
         return (now_ms - fetched) / 1000 >= ttl
 
@@ -227,7 +230,9 @@ class Collector:
         if self.reaction_fetch is not None:
             try:
                 from .econ_reaction import record_new
-                record_new(self.events(), int(self.clock() * 1000), self.reaction_fetch, self.reactions)
+                evs = self.events()
+                self.reactions.fill_actuals(evs)
+                record_new(evs, int(self.clock() * 1000), self.reaction_fetch, self.reactions)
             except Exception as exc:  # noqa: BLE001
                 log.warning("econ reaction record failed: %s", exc)
 
