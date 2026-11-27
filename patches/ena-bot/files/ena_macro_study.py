@@ -49,9 +49,9 @@ def parse_fred(text: str) -> list[tuple[str, float]]:
 
 
 def http_get(url: str, timeout: int = 30) -> str:
-    """curl 을 먼저 쓴다(이 맥에서 urllib 은 시간 초과가 나는데 curl 은 바로 열렸다). curl 이 없으면 urllib."""
+    """curl 을 먼저 쓴다(이 맥에서 urllib 은 시간 초과). FRED 는 HTTP/2 로 받으면 'stream not closed cleanly'(curl 92)가 나서 HTTP/1.1 로 고정한다. curl 이 없으면 urllib."""
     try:
-        r = subprocess.run(["curl", "-fsSL", "-m", str(timeout), "-A", "Mozilla/5.0", url], capture_output=True, text=True, timeout=timeout + 5)
+        r = subprocess.run(["curl", "--http1.1", "--retry", "2", "-fsSL", "-m", str(timeout), "-A", "Mozilla/5.0", url], capture_output=True, text=True, timeout=timeout + 5)
     except FileNotFoundError:
         return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=timeout).read().decode("utf-8")
     if r.returncode != 0:

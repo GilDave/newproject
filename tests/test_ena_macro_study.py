@@ -95,6 +95,7 @@ class HttpGet(unittest.TestCase):
         with mock.patch.object(ms.subprocess, "run", return_value=ok) as run:
             self.assertEqual(ms.http_get("https://x"), "a,b\n")
             self.assertEqual(run.call_args[0][0][0], "curl")
+            self.assertIn("--http1.1", run.call_args[0][0])
         bad = subprocess.CompletedProcess(["curl"], 28, "", "timed out")
         with mock.patch.object(ms.subprocess, "run", return_value=bad):
             with self.assertRaises(OSError):
