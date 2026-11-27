@@ -3,6 +3,7 @@
 
   .venv/bin/python ena_usde_forward.py --log     오늘까지의 새 날짜를 기록 (여러 번 실행해도 안전, 매일 또는 주 1회)
   .venv/bin/python ena_usde_forward.py --eval    기록 시작일 이후 ENA 기준 전략 vs 신호 적용 전략 비교
+  .venv/bin/python ena_usde_forward.py --daily   기록 + ENA 시세 갱신 + 평가를 한 번에 하고 data/forward/usde_eval.txt 에 저장 (launchd 가 매일 실행)
 같은 폴더에 ena_altdata_lab.py · ena_idea_lab.py · ena_macro_study.py 가 있어야 한다.
 """
 from __future__ import annotations
@@ -21,6 +22,7 @@ import ena_altdata_lab as al  # noqa: E402
 import ena_idea_lab as lab  # noqa: E402
 
 LOG = Path("data/forward/usde_log.csv")
+EVAL_OUT = Path("data/forward/usde_eval.txt")
 FIELDS = ["date", "usde_supply", "usde_30d", "usde_flag", "tvl", "tvl_30d", "tvl_flag"]
 DAY = al.DAY
 MID_DAYS, FINAL_DAYS = 90, 180
@@ -85,6 +87,28 @@ def cmd_log(alt_cache="data/alt_cache", fetch=None, path: Path = LOG, today=None
     return 0
 
 
+def refresh_ena(cache_dir="data/learn_cache", client=None, now_ms=None, max_age_hours=8) -> tuple[bool, str]:
+    """평가에 쓰는 ENA 시세 캐시를 이어받기로 갱신한다(공개 API, 키 불필요). 갱신 함수가 요청 실패를 삼켜도 알 수 있도록,
+    갱신 뒤 마지막 1시간봉이 max_age_hours 이내인지 확인한다. 실패해도 평가는 기존 캐시로 계속한다."""
+    try:
+        import time
+        import numpy as np
+        from ena_bot.exchange import MAINNET, BybitClient
+        from ena_bot.learn_data import update_symbol
+        cache = Path(cache_dir)
+        update_symbol(client or BybitClient(MAINNET), "ENAUSDT", cache)
+        f = cache / "ENAUSDT_k60.npy"
+        if not f.exists():
+            return False, "시세 캐시가 없습니다"
+        a = np.load(f)
+        if len(a) == 0:
+            return False, "시세 캐시가 비어 있습니다"
+        age_h = ((now_ms if now_ms is not None else time.time() * 1000) - float(a[-1, 0])) / 3_600_000
+        return (True, "") if age_h <= max_age_hours else (False, f"마지막 시세 봉이 {age_h:.0f}시간 전입니다")
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)[:120]
+
+
 def evaluate(path: Path = LOG, cache_dir="data/learn_cache", log=print) -> dict:
     from ena_bot.config import Config
     from ena_bot.learn_data import load_coin
@@ -143,11 +167,30 @@ def render(out: dict) -> str:
     return "\n".join(L)
 
 
+def cmd_daily(path: Path = LOG, out: Path = EVAL_OUT, fetch=None, refresh=refresh_ena, evaluate_fn=None, today=None, alt_cache="data/alt_cache") -> int:
+    """기록 → ENA 시세 갱신 → 평가를 순서대로 하고 평가 결과를 파일에 덮어쓴다. 기록에 실패하면(출처 장애 등) 평가하지 않고 1 을 돌려준다."""
+    rc = cmd_log(alt_cache=alt_cache, fetch=fetch, path=path, today=today)
+    if rc:
+        return rc
+    ok, why = refresh()
+    res = (evaluate_fn or evaluate)(path)
+    text = render(res)
+    stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    note = "" if ok else f"\n⚠ ENA 시세 갱신 실패({why}) — 기존 캐시로 평가했습니다. 위의 'ENA 시세 마지막 봉'을 확인하세요."
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(f"[{stamp} 갱신]\n{text}{note}\n", encoding="utf-8")
+    print(text + note)
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--log", action="store_true")
     ap.add_argument("--eval", action="store_true")
+    ap.add_argument("--daily", action="store_true")
     a = ap.parse_args(argv)
+    if a.daily:
+        return cmd_daily()
     if a.log:
         return cmd_log()
     if a.eval:
