@@ -155,6 +155,10 @@ function hubRender(res, price) {
     const stc = ck.status === 'ready' ? '#66bb6a' : ck.status === 'wait' ? '#ffb74d' : '#9aa3b5';
     left.appendChild(mk('div', ck.text, 'margin-top:6px;font-weight:700;font-size:calc(var(--hub-fs) + 1px);color:' + stc));
     left.appendChild(mk('div', v.text, 'margin:2px 0 6px;opacity:.9'));
+    if (v.shock) {
+      const dn = v.shock.side === 'short', nt = mk('div', undefined, 'margin:0 0 6px;padding:6px 10px;border-left:3px solid #ffb74d;background:#1d1f2b;font-size:calc(var(--hub-fs) - 1px)');
+      nt.appendChild(mk('b', (dn ? '하락' : '상승') + ' 급변 중 — ', 'color:#ffb74d')); nt.appendChild(document.createTextNode('롱 근거는 가격이 부정하고 있습니다. ' + (dn ? '숏' : '롱') + ' 쪽 근거는 이 급변 하나뿐이고 지표·엘리엇으로는 확인되지 않았습니다. 이미 크게 움직인 뒤라 추격하면 손절 거리가 커지고 손익비가 나빠지기 쉽고, 급변 뒤 되돌림도 흔합니다. 급변이 가라앉아 지표·엘리엇이 다시 같은 방향을 가리킬 때 판정이 나옵니다.'.replace('롱 근거는', v.shock.side === 'short' ? '롱 근거는' : '숏 근거는'))); left.appendChild(nt);
+    }
     if (v.diag && v.diag.length) left.appendChild(mk('div', '급변 점검(변동폭의 3배 이상이면 급변): ' + v.diag.join(' · '), 'margin:0 0 6px;font-size:11px;opacity:.6'));
     if (ck.items.length) {
       const ul = mk('div', undefined, 'margin-top:6px;display:grid;gap:2px');
@@ -190,7 +194,7 @@ function hubRender(res, price) {
     const right = mk('div');
     right.appendChild(mk('b', '시간봉 × 방법 한눈에', 'font-size:calc(var(--hub-fs) + 1px)'));
     const tbl = mk('table', undefined, 'border-collapse:collapse;margin-top:6px;width:100%;max-width:640px'), th = tbl.insertRow();
-    for (const h of ['시간봉', '지표', '엘리엇', '거래량(참고)', 'AI(참고)', '판정']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:2px 10px 4px 0;white-space:nowrap'));
+    for (const h of ['시간봉', '지표', '엘리엇', '거래량(참고)', '가격 움직임(참고)', 'AI(참고)', '판정']) th.appendChild(mk('th', h, 'text-align:left;color:#8a8f98;font-weight:600;padding:2px 10px 4px 0;white-space:nowrap'));
     const KO = {'1d': '1일', '4h': '4시간', '1h': '1시간', '30m': '30분', '15m': '15분'}, ST = {agree: '일치', single: '한쪽만', conflict: '충돌', none: '—'};
     for (const tf of ['1d', '4h', '1h', '30m', '15m']) {
       const r = res.rows.find(x => x.tf === tf), vr = v.rows.find(x => x.tf === tf); if (!r || !vr) continue;
@@ -198,12 +202,14 @@ function hubRender(res, price) {
       tr.insertCell().appendChild(hubBadge(r.op.ind)); tr.insertCell().appendChild(hubBadge(r.op.ell));
       const lv = [r.cells.levels, r.cells.levels2].filter(c => c && c.ok).map(c => c.side), lc = tr.insertCell();
       if (lv.length) lv.forEach((sd, i) => { const b = hubBadge(sd); b.style.marginRight = '3px'; b.style.opacity = '.7'; lc.appendChild(b); }); else lc.appendChild(hubBadge(null));
+      const pm = v.mom && v.mom.perTf ? v.mom.perTf[tf] : null, pc = tr.insertCell();
+      if (pm) { const strong = Math.abs(pm.z) >= 3; pc.textContent = (pm.pct >= 0 ? '▲ +' : '▼ ') + pm.pct.toFixed(1) + '%'; pc.style.color = strong ? (pm.pct >= 0 ? '#66bb6a' : '#ef5350') : '#8a8f98'; pc.style.fontWeight = strong ? '700' : '400'; pc.title = '최근 4봉 동안 가격 이동. 변동폭의 ' + Math.abs(pm.z).toFixed(1) + '배(3배 이상이면 급변)'; } else { pc.textContent = '—'; pc.style.color = '#8a8f98'; }
       const ab = hubBadge(r.ai && r.ai.side ? r.ai.side : null); ab.style.opacity = '.7'; tr.insertCell().appendChild(ab);
       const jd = tr.insertCell(); jd.textContent = ST[vr.state] + (vr.side ? ' · ' + (vr.side === 'long' ? '롱' : '숏') : ''); jd.style.color = vr.state === 'conflict' ? '#ffb74d' : vr.state === 'none' ? '#8a8f98' : '';
       for (const td of tr.cells) { td.style.padding = '3px 10px 3px 0'; td.style.whiteSpace = 'nowrap'; td.style.textAlign = 'left'; }
     }
     right.appendChild(tbl);
-    right.appendChild(mk('div', '판정에는 지표와 엘리엇만 반영합니다(같은 시간봉에서 일치 2점·한쪽만 1점·충돌 0점 × 시간봉 무게). 거래량 구간은 가격 근거, AI는 검증상 우위가 없어 참고로만 표시합니다. 자세한 가격과 근거는 위 탭에서 봅니다.', 'margin-top:6px;opacity:.65;font-size:calc(var(--hub-fs) - 2px);max-width:640px'));
+    right.appendChild(mk('div', '판정에는 지표와 엘리엇만 반영합니다(같은 시간봉에서 일치 2점·한쪽만 1점·충돌 0점 × 시간봉 무게). 가격 움직임은 최근 4봉의 실제 이동이며(변동폭 3배 이상이면 굵게), 판정과 반대로 급변하면 관망으로 낮추는 데만 씁니다. 거래량 구간은 가격 근거, AI는 검증상 우위가 없어 참고로만 표시합니다. 자세한 가격과 근거는 위 탭에서 봅니다.', 'margin-top:6px;opacity:.65;font-size:calc(var(--hub-fs) - 2px);max-width:640px'));
     root.appendChild(right); pane.appendChild(root);
     pane.appendChild(mk('div', '이 허브는 분석을 한 곳에 모은 것이지 매매 신호가 아닙니다. 판정 규칙·체크리스트 기준·위험 %는 과거 통계로 검증되지 않았습니다. 큰 시간봉이 방향을 정하고 작은 시간봉은 진입 시점만 정하는 top-down 순서로 읽고, 시간봉을 바꿔 가며 내 생각에 맞는 답을 찾는 것(확증 편향)은 피하세요.', 'margin-top:12px;opacity:.6;font-size:calc(var(--hub-fs) - 2px)'));
   } catch (err) { /* 허브 표시 실패가 차트를 깨뜨리지 않게 한다 */ }

@@ -176,6 +176,7 @@ m = set(mk(crash, 1), mk(flat, 1)); let v = sb.X.cfVerdict(rows, m); out.crash =
 const rally = flat.slice(0, 36).concat([101, 103, 105, 107]);
 m = set(mk(rally, 1), mk(flat, 1)); v = sb.X.cfVerdict(rows, m); out.rally = [m.side, v.head, !!v.shock, v.text.includes('참고: 급변')];   // 같은 방향 급변은 판정을 바꾸지 않는다
 m = set(mk(crash, 1), mk(flat, 1)); v = sb.X.cfVerdict([{tf: '4h', ind: 'short', ell: 'short'}], m); out.same_dir = [v.head, !!v.shock];
+out.pertf = Object.keys(sb.X.cfMomentum().perTf).sort();
 sb.FRC = {data: {}}; out.nodata = sb.X.cfMomentum().fires.length; out.legacy = sb.X.cfVerdict(rows).head;
 console.log(JSON.stringify(out));
 """
@@ -189,4 +190,5 @@ def test_price_shock_against_the_verdict_downgrades_it_to_wait():
     assert out["crash"] == [1, "short", "wait", True, True]        # 롱 판정인데 1시간에 7ATR 하락 → 관망
     assert out["rally"] == ["long", "long", False, True]
     assert out["same_dir"] == ["short", False]                       # 숏 판정 + 급락은 충돌이 아니다
+    assert out["pertf"] == ["15m", "1h"]                             # 데이터가 있는 시간봉만 화면 표에 나온다
     assert out["nodata"] == 0 and out["legacy"] == "long"

@@ -48,15 +48,20 @@ function cfGroup(rows, tfs) {
 // 급변 방향이 판정 방향과 반대면 판정을 관망으로 낮춘다. 급변이 이어질지는 예측하지 않는다(과거에도 같은 방향 이어짐은 +0.05% 수준으로 약했다).
 const CF_SHOCK_ATR = 3.0;
 function cfMomentum() {
-  const out = {fires: [], side: null, diag: []};
+  const out = {fires: [], side: null, diag: [], perTf: {}};
   try {
+    for (const name of ['15m', '30m', '1h', '4h']) {          // 화면 표용: 시간봉별로 최근 4봉 동안의 가격 이동(변동폭 배수). 판정에는 아래 두 개(1시간·4시간)만 쓴다
+      const d = typeof FRC !== 'undefined' && FRC.data ? FRC.data[name] : null; if (!d || !d.bars || d.bars.length < 30) continue;
+      const b = d.bars, n = b.length - 1, a = stAtr(b.map(x => x.high), b.map(x => x.low), b.map(x => x.close));
+      if (a[n] > 0 && b[n - 4].close > 0) out.perTf[name] = {pct: (b[n].close - b[n - 4].close) / b[n - 4].close * 100, z: (b[n].close - b[n - 4].close) / a[n]};
+    }
     for (const [name, label] of [['15m', '최근 1시간'], ['1h', '최근 4시간']]) {
       const d = typeof FRC !== 'undefined' && FRC.data ? FRC.data[name] : null; if (!d || !d.bars || d.bars.length < 30) { out.diag.push(label + ': ' + name + '봉 데이터 없음(엘리엇의 ' + name + ' 시간봉이 꺼졌거나 아직 불러오지 못함)'); continue; }
       const b = d.bars, n = b.length - 1, a = stAtr(b.map(x => x.high), b.map(x => x.low), b.map(x => x.close)), atr = a[n];
       const move = b[n].close - b[n - 4].close; if (!(atr > 0) || !(b[n - 4].close > 0)) continue;
       const z = move / atr; out.diag.push(label + ' ' + (move > 0 ? '+' : '') + (move / b[n - 4].close * 100).toFixed(1) + '% (변동폭의 ' + Math.abs(z).toFixed(1) + '배)'); if (Math.abs(z) >= CF_SHOCK_ATR) out.fires.push({tf: name, label, z, pct: move / b[n - 4].close * 100, side: z > 0 ? 'long' : 'short'});
     }
-  } catch (e) { return {fires: [], side: null, diag: ['급변 점검 오류']}; }
+  } catch (e) { return {fires: [], side: null, diag: ['급변 점검 오류'], perTf: {}}; }
   if (out.fires.length) out.side = out.fires.slice().sort((x, y) => Math.abs(y.z) - Math.abs(x.z))[0].side;
   return out;
 }
@@ -77,7 +82,7 @@ function cfVerdict(items, mom) {
       head = 'wait';
     } else text += ' [참고: 급변 ' + cfShockText(mom) + ']';
   }
-  return {rows, big, small, conflicts, text, head, shock, diag: mom && mom.diag ? mom.diag : []};
+  return {rows, big, small, conflicts, text, head, shock, diag: mom && mom.diag ? mom.diag : [], mom: mom || null};
 }
 function cfVerdictFill(el, v) {
   el.textContent = '';
