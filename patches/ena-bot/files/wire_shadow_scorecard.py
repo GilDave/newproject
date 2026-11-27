@@ -37,13 +37,17 @@ BLOCK = """<!-- SHADOW-CMP-START -->
   const sg = v => v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
   const kd = ms => { try { return new Intl.DateTimeFormat('ko-KR', {timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit'}).format(ms); } catch (e) { return ''; } };
   function chart(r){
-    const W = 640, H = 190, P = 8, all = r.accounts.flatMap(a => a.curve);
+    const W = 640, H = 200, PL = 46, PR = 8, PT = 8, PB = 8, all = r.accounts.flatMap(a => a.curve);
     if (all.length < 2) return '';
     const t0 = r.start_ms, t1 = r.end_ms || t0 + 1, ys = all.map(p => p[1]), lo = Math.min(...ys, 100), hi = Math.max(...ys, 100), pad = (hi - lo) * 0.08 || 1;
-    const X = t => P + (t - t0) / ((t1 - t0) || 1) * (W - 2 * P), Y = v => H - P - (v - (lo - pad)) / ((hi - lo) + 2 * pad) * (H - 2 * P);
+    const ymin = lo - pad, ymax = hi + pad;
+    const X = t => PL + (t - t0) / ((t1 - t0) || 1) * (W - PL - PR), Y = v => H - PB - (v - ymin) / (ymax - ymin) * (H - PT - PB);
     const lines = r.accounts.map(a => '<polyline fill="none" stroke="' + (COL[a.key] || '#9aa3b5') + '" stroke-width="2" points="' + a.curve.map(p => X(p[0]).toFixed(1) + ',' + Y(p[1]).toFixed(1)).join(' ') + '"/>').join('');
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:760px;height:auto;background:#131722;border:1px solid #2a2e39;border-radius:8px"><line x1="' + P + '" x2="' + (W - P) + '" y1="' + Y(100).toFixed(1) + '" y2="' + Y(100).toFixed(1) + '" stroke="#7d8597" stroke-dasharray="4 4"/>' + lines + '</svg>' +
-      '<div style="font-size:11px;color:var(--mute);margin-top:2px">첫 시점 = 100 · ' + kd(r.start_ms) + ' ~ ' + kd(r.end_ms) + ' · 점선은 100(본전)</div>';
+    const ticks = [ymax, (ymax + ymin) / 2, ymin].map(v => '<text x="' + (PL - 5) + '" y="' + (Y(v) + 4).toFixed(1) + '" text-anchor="end" font-size="11" fill="#7d8597">' + v.toFixed(1) + '</text>').join('');
+    const legend = r.accounts.map(a => '<span style="margin-right:12px"><span style="color:' + (COL[a.key] || '#9aa3b5') + '">●</span> ' + esc(a.label) + '</span>').join('');
+    return '<div style="font-size:12px;margin:2px 0 4px">' + legend + '</div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:760px;height:auto;background:#131722;border:1px solid #2a2e39;border-radius:8px">' + ticks + '<line x1="' + PL + '" x2="' + (W - PR) + '" y1="' + Y(100).toFixed(1) + '" y2="' + Y(100).toFixed(1) + '" stroke="#7d8597" stroke-dasharray="4 4"/>' + lines + '</svg>' +
+      '<div style="font-size:11px;color:var(--mute);margin-top:2px">첫 시점 = 100 · ' + kd(r.start_ms) + ' ~ ' + kd(r.end_ms) + ' · 점선은 100(본전) · 선이 겹치면 가장 위 색만 보입니다</div>';
   }
   function draw(box, r){
     if (!r.ok) { box.innerHTML = '<div class="note">계좌 비교를 불러오지 못했습니다: ' + esc(r.error || '') + '</div>'; return; }

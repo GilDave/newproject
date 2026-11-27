@@ -8,9 +8,12 @@ import sys
 from pathlib import Path
 
 page = Path(sys.argv[1] if len(sys.argv) > 1 else ".") / "ena_bot/dashboard_static/index.html"
+STATE_OLD = "    STATE = j; $('#banner').style.display = 'none';"
+STATE_NEW = "    STATE = j; try { if (LAST_MK) renderMarket(LAST_MK); } catch (e) {} $('#banner').style.display = 'none';"   # 상태가 늦게 와도 캘린더 머리줄을 바로 채운다
 EDITS = [
     ("카드 목록", "const ORDER = ['risk', 'health', 'trend', 'reversal', 'volatility', 'btc_regime', 'news', 'funding', 'calendar'];",
      "const ORDER = ['risk', 'health', 'trend', 'reversal', 'volatility', 'btc_regime', 'news', 'funding'];"),
+    ("상태 갱신 뒤 캘린더 다시 그리기", STATE_OLD, STATE_NEW),
     ("월간 캘린더 머리줄",
      "      + (k === 'calendar' && c.as_of != null ? `<div class=\"ms\">다음 일정 예정 시각 ${kst(c.as_of)}</div>` : '')\n",
      "      + (k === 'calendar' && c.as_of != null ? `<div class=\"ms\">다음 일정 예정 시각 ${kst(c.as_of)}</div>` : '')\n"

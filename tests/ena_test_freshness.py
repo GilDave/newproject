@@ -16,6 +16,7 @@ PAGE = Path(__file__).resolve().parents[1] / "ena_bot/dashboard_static/index.htm
 
 def test_state_sources_carry_staleness_and_input_counts(tmp_path):
     cfg, cl, hub, st = _setup(tmp_path)
+    st.log("trend_cycle", ts=1, price=0.1, equity=1000.0, qty=0.0, delta=0.0)            # 봇이 한 번 판단한 기록
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg, cl, hub, store_factory=lambda: st))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
@@ -23,9 +24,12 @@ def test_state_sources_carry_staleness_and_input_counts(tmp_path):
     finally:
         srv.shutdown()
     s = j["sources"]
+    for k in ("risk", "learning", "health"):                                              # 봇 마지막 판단 시각 기준
+        assert isinstance(s[k]["updated_at"], int) and s[k]["stale_after"] == 15000 and "봇 마지막 판단" in s[k]["source"]
+    assert s["learning2"]["updated_at"] is None                                           # 수동 학습 리포트는 시각을 알 수 없다
     assert s["trend"]["stale_after"] == 300 and s["trend"]["inputs"] == {"ok": 1, "total": 1}
     assert s["news"]["stale_after"] == 21600 and set(s["news"]["inputs"]) == {"ok", "total"}
-    assert "stale_after" not in s["calendar"] and "inputs" not in s["calendar"]       # 알 수 없는 칸에는 억지로 붙이지 않는다
+    assert s["calendar"]["updated_at"] is None and "stale_after" not in s["calendar"] and "inputs" not in s["calendar"]       # 알 수 없는 칸에는 억지로 붙이지 않는다
     assert {"source", "updated_at"} <= set(s["trend"])                                  # 기존 필드 유지
 
 
@@ -55,3 +59,14 @@ console.log(JSON.stringify(out));
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
     assert out[:3] == ["fresh", "late", "old"] and out[3] == "2.0시간 전 · 오래됨" and out[4] == "null" and out[5].endswith("초 전 · 신선")
+
+
+def test_no_cycle_record_keeps_bot_cards_unknown(tmp_path):
+    cfg, cl, hub, st = _setup(tmp_path)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg, cl, hub, store_factory=lambda: st))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        j = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{srv.server_address[1]}/api/state").read())
+    finally:
+        srv.shutdown()
+    assert j["sources"]["risk"]["updated_at"] is None          # 판단 기록이 없으면 억지로 시각을 만들지 않는다
