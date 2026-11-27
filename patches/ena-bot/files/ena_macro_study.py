@@ -51,7 +51,9 @@ def parse_fred(text: str) -> list[tuple[str, float]]:
 def http_get(url: str, timeout: int = 30) -> str:
     """curl 을 먼저 쓴다(이 맥에서 urllib 은 시간 초과). FRED 는 HTTP/2 로 받으면 'stream not closed cleanly'(curl 92)가 나서 HTTP/1.1 로 고정한다. curl 이 없으면 urllib."""
     try:
-        r = subprocess.run(["curl", "--http1.1", "--retry", "2", "-fsSL", "-m", str(timeout), "-A", "Mozilla/5.0", url], capture_output=True, text=True, timeout=timeout + 5)
+        r = subprocess.run(["curl", "--http1.1", "-fsSL", "-m", str(timeout), "-A", "Mozilla/5.0", url], capture_output=True, text=True, timeout=timeout + 5)
+    except subprocess.TimeoutExpired:
+        raise OSError(f"{timeout}초 안에 받지 못했습니다") from None
     except FileNotFoundError:
         return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=timeout).read().decode("utf-8")
     if r.returncode != 0:
@@ -59,12 +61,15 @@ def http_get(url: str, timeout: int = 30) -> str:
     return r.stdout
 
 
-def fetch_fred(sid: str, cache_dir: Path | None, use_cache: bool = True, fetch=None, ttl: float = 86400.0, now=time.time) -> list[tuple[str, float]]:
+START = "2024-03-01"  # ENA 상장(2024-04) 직전부터만 받는다: 전체 이력(1971~)은 응답이 커서 이 맥에서 중간에 멈췄다
+
+
+def fetch_fred(sid: str, cache_dir: Path | None, use_cache: bool = True, fetch=None, ttl: float = 86400.0, now=time.time, start: str = START) -> list[tuple[str, float]]:
     f = cache_dir / f"{sid}.csv" if cache_dir else None
     if use_cache and f and f.exists() and now() - f.stat().st_mtime < ttl:
         return parse_fred(f.read_text(encoding="utf-8"))
     fetch = fetch or http_get
-    text = fetch(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}")
+    text = fetch(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}&cosd={start}")
     rows = parse_fred(text)
     if not rows:
         raise ValueError(f"{sid}: 읽을 수 있는 데이터가 없습니다")

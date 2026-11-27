@@ -83,6 +83,7 @@ class T(unittest.TestCase):
             ms.fetch_fred("X", pathlib.Path(d), fetch=fetch)
             ms.fetch_fred("X", pathlib.Path(d), fetch=fetch)
             self.assertEqual(len(calls), 1)
+            self.assertTrue(calls[0].endswith("id=X&cosd=" + ms.START))   # 전체 이력이 아니라 최근 구간만 요청
             with self.assertRaises(ValueError):
                 ms.fetch_fred("Y", pathlib.Path(d), fetch=lambda u: "observation_date,Y\n")
 
@@ -96,6 +97,10 @@ class HttpGet(unittest.TestCase):
             self.assertEqual(ms.http_get("https://x"), "a,b\n")
             self.assertEqual(run.call_args[0][0][0], "curl")
             self.assertIn("--http1.1", run.call_args[0][0])
+        with mock.patch.object(ms.subprocess, "run", side_effect=subprocess.TimeoutExpired("curl", 35)):
+            with self.assertRaises(OSError) as cm:
+                ms.http_get("https://x")
+            self.assertIn("받지 못했습니다", str(cm.exception))
         bad = subprocess.CompletedProcess(["curl"], 28, "", "timed out")
         with mock.patch.object(ms.subprocess, "run", return_value=bad):
             with self.assertRaises(OSError):
