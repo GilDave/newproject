@@ -61,6 +61,15 @@ class T(unittest.TestCase):
         self.assertGreater(res["r_fwd"], 0.3)
         self.assertTrue(res["worth"])
 
+    def test_shorter_horizon_and_multiple_test_correction(self):
+        hourly = hourly_walk(1, "2025-01-01T00:00:00", 600)
+        rows = index_from(hourly, weekdays("2025-01-06", 380), mix=1.0, seed=2)
+        r24 = ms.study(hourly, {"NASDAQCOM": rows}, 24)["NASDAQCOM"]
+        r4 = ms.study(hourly, {"NASDAQCOM": rows}, 4, n_tests=15)["NASDAQCOM"]
+        self.assertGreater(r24["r_fwd"], r4["r_fwd"])               # 24시간 선행으로 심은 관계는 4시간에는 약하다
+        self.assertEqual(r4["p_adj"], min(1.0, r4["p"] * 15))      # 보정 횟수가 반영된다
+        self.assertIn("4시간", ms.render({"NASDAQCOM": r4}, hours=4, n_tests=15))
+
     def test_random_index_is_not_flagged(self):
         hourly = hourly_walk(3, "2025-01-01T00:00:00", 600)
         dates = weekdays("2025-01-06", 380)

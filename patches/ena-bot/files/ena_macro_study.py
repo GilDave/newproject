@@ -106,13 +106,13 @@ def price_at(hourly: dict[int, float], t_ms: int) -> float | None:
     return hourly.get(t_ms // HOUR * HOUR - HOUR)
 
 
-def build_pairs(index_rows: list[tuple[str, float]], kind: str, hourly: dict[int, float]) -> list[dict]:
+def build_pairs(index_rows: list[tuple[str, float]], kind: str, hourly: dict[int, float], hours: int = 24) -> list[dict]:
     out = []
     for (d0, v0), (d1, v1) in zip(index_rows, index_rows[1:]):
         if v0 == 0:
             continue
         t0, t1 = us_close_ms(d0), us_close_ms(d1)
-        p0, p1, pf = price_at(hourly, t0), price_at(hourly, t1), price_at(hourly, t1 + 24 * HOUR)
+        p0, p1, pf = price_at(hourly, t0), price_at(hourly, t1), price_at(hourly, t1 + hours * HOUR)
         if not (p0 and p1 and pf):
             continue
         idx = (v1 / v0 - 1) * 100 if kind == "pct" else (v1 - v0)
@@ -154,18 +154,18 @@ def analyze_series(pairs: list[dict], n_tests: int) -> dict:
     return {"n": n, "r_same": r_same, "r_fwd": r_fwd, "p": p, "p_adj": adj, "r_first": r1, "r_second": r2, "stable": stable, "worth": worth}
 
 
-def study(hourly: dict[int, float], data: dict[str, list[tuple[str, float]]]) -> dict:
-    n_tests = max(1, len(data))
+def study(hourly: dict[int, float], data: dict[str, list[tuple[str, float]]], hours: int = 24, n_tests: int | None = None) -> dict:
+    n_tests = n_tests or max(1, len(data))
     res = {}
     for sid, rows in data.items():
-        pairs = build_pairs(rows, SERIES[sid][1], hourly)
+        pairs = build_pairs(rows, SERIES[sid][1], hourly, hours)
         res[sid] = {"label": SERIES[sid][0], **analyze_series(pairs, n_tests)} if pairs else {"label": SERIES[sid][0], "n": 0}
     return res
 
 
-def render(res: dict, errors: dict | None = None) -> str:
+def render(res: dict, errors: dict | None = None, hours: int = 24, n_tests: int | None = None) -> str:
     f = lambda v: "  —  " if v is None else f"{v:+.3f}"
-    L = ["지표별 관계 (같은 날 상관 = 설명, 선행 상관 = 그날 종가 이후 ENA 24시간 수익률과의 상관 → 예측에 쓸 수 있는지)", "",
+    L = [f"지표별 관계 (같은 날 상관 = 설명, 선행 상관 = 그날 종가 이후 ENA {hours}시간 수익률과의 상관 → 예측에 쓸 수 있는지)" + (f"  [다중검정 {n_tests}건 보정]" if n_tests else ""), "",
          f"{'지표':22s} {'표본':>5s} {'같은 날':>8s} {'선행':>8s} {'p(보정)':>8s} {'전반':>8s} {'후반':>8s}  판정"]
     for sid, r in res.items():
         if not r.get("n"):
@@ -190,6 +190,7 @@ def main(argv=None) -> int:
     ap.add_argument("--csv", default="data/ENAUSDT_60m.csv")
     ap.add_argument("--cache", default="data/macro_cache")
     ap.add_argument("--no-cache", action="store_true")
+    ap.add_argument("--horizons", default="24,12,8,4", help="종가 이후 선행 시간(쉼표 구분). 구간이 늘수록 다중검정 보정이 엄격해진다")
     a = ap.parse_args(argv)
     if not Path(a.csv).is_file():
         print(f"ENA 시세 파일이 없습니다: {a.csv}")
@@ -210,7 +211,11 @@ def main(argv=None) -> int:
     if not data:
         print("지표를 하나도 받지 못했습니다:", errors)
         return 1
-    print(render(study(hourly, data), errors))
+    hs = [int(x) for x in a.horizons.split(",") if x.strip()]
+    n_tests = len(data) * len(hs)
+    for h in hs:
+        print()
+        print(render(study(hourly, data, h, n_tests), errors if h == hs[0] else None, h, n_tests))
     return 0
 
 
