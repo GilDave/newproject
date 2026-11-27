@@ -52,3 +52,18 @@ def test_each_source_may_fail_independently():
         raise OSError("blocked")
     series, errors = al.fetch_all(None, use_cache=False, fetch=fetch)
     assert "fng" in series and {"stable_total", "usde", "ethena_tvl"} <= set(errors)
+
+
+def test_permutation_test_separates_a_real_signal_from_chance():
+    rng = np.random.default_rng(2)
+    n = 6000
+    c = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
+    base = np.ones(n)                                                    # 항상 롱
+    ret = np.r_[0.0, np.diff(c) / c[:-1]]
+    m = np.where(np.r_[ret[1:], 0.0] < 0, 0.5, 1.0)                      # 다음 봉이 하락일 때 노출을 줄이는(미래를 아는) 신호
+    mask = np.ones(n, dtype=bool)
+    a, mean, p = al.perm_test(c, base, m, mask, 0.0007, 0.0, 2190.0, n=100)
+    assert a > 1.0 and p <= 0.02                                         # 진짜 신호는 순열 분포 밖
+    chance = np.where(rng.random(n) < 0.5, 0.5, 1.0)
+    a2, mean2, p2 = al.perm_test(c, base, chance, mask, 0.0007, 0.0, 2190.0, n=100)
+    assert p2 > 0.05                                                     # 무작위 신호는 구분되지 않는다

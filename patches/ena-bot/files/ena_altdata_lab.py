@@ -127,6 +127,23 @@ def multipliers(idea: str, series: dict, ts: np.ndarray):
     return m, m
 
 
+def perm_test(c, base, m, mask, cost, fund, bpy, n=300, seed=0, min_shift_bars=540):
+    """ENA 단독 순열 검정: 노출 배수 m(구간 구조 유지)을 무작위로 순환 이동해, 우연히 이만큼 샤프가 좋아질 확률을 구한다.
+    반환 (실제 ΔSharpe, 순열 ΔSharpe 평균, p = 순열 중 실제 이상인 비율)."""
+    def sharpe(mult):
+        net = lab.coin_net(c, base * mult, cost, fund)[mask]
+        return lab.stats(net, bpy)["sharpe"]
+    b = sharpe(np.ones(len(c)))
+    actual = sharpe(m) - b
+    rng = np.random.default_rng(seed)
+    d = []
+    for _ in range(n):
+        k = int(rng.integers(min_shift_bars, len(m) - min_shift_bars))
+        d.append(sharpe(np.roll(m, k)) - b)
+    d = np.array(d)
+    return float(actual), float(d.mean()), float((d >= actual).mean())
+
+
 # ------------------------------------------------------------------ 시험
 def run(cache_dir="data/learn_cache", alt_cache="data/alt_cache", use_cache=True, log=print, fetch=None) -> dict:
     cfg = Config()
@@ -159,6 +176,7 @@ def run(cache_dir="data/learn_cache", alt_cache="data/alt_cache", use_cache=True
                 ena[k] = lab.coin_net(c, pos, cost, fund)
             ena["base"] = lab.coin_net(c, base, cost, fund)
             ena["ts"] = ts
+            ena["_inputs"] = (c, base, ts)
     ports = {k: lab.portfolio(nets[k]) for k in nets}
     allts = ports["base"][0]
     periods = {"full": allts >= (2021.0 - 1970) * lab.YEAR_MS, "hold": allts >= (2025.5 - 1970) * lab.YEAR_MS}
@@ -176,6 +194,12 @@ def run(cache_dir="data/learn_cache", alt_cache="data/alt_cache", use_cache=True
         m = ena["ts"] >= ENA_START_MS
         out["ena_only"] = {k: lab.stats(ena[k][m], bpy) for k in ("base", "A4", "A5") if k in ena}
         out["ena_only"]["n_bars"] = int(m.sum())
+        c_, base_, ts_ = ena["_inputs"]
+        out["ena_perm"] = {}
+        for k in [x for x in ("A4", "A5") if x in ena]:
+            ml, ms2 = multipliers(k, series, ts_)
+            a_, mean_, p_ = perm_test(c_, base_, ml, m, cost, fund, bpy)
+            out["ena_perm"][k] = {"actual_dSharpe": a_, "perm_mean_dSharpe": mean_, "p": p_}
     return out
 
 
@@ -198,6 +222,8 @@ def render(out: dict) -> str:
         for k in ("A4", "A5"):
             if k in e:
                 L.append(f"  {k} {IDEAS[k]}: 샤프 {e[k]['sharpe']:.2f} (기준 {e['base']['sharpe']:.2f}) · CAGR {e[k]['cagr']:.1f}% (기준 {e['base']['cagr']:.1f}%) · 낙폭 {e[k]['mdd']:.1f}% (기준 {e['base']['mdd']:.1f}%)")
+        for k, x in out.get("ena_perm", {}).items():
+            L.append(f"  {k} 순열 검정(300회, 구간 구조 유지): 실제 ΔSharpe {x['actual_dSharpe']:+.2f} · 무작위 평균 {x['perm_mean_dSharpe']:+.2f} · 우연히 이만큼 좋아질 확률 p = {x['p']:.3f}")
     keep = [k for k, v in out["verdict"].items() if v["point_pass"]]
     L += ["", "통과한 후보(포트폴리오): " + (", ".join(keep) if keep else "없음 — 모두 폐기"),
           "주의: 시험 3건(A1~A3)은 합격 기준이 idea lab 과 같습니다. ENA 단독(A4·A5)은 표본이 작아 참고로만 봅니다."]
