@@ -30,7 +30,7 @@ def _flip(h, l, c):
 
 
 # ------------------------------------------------------------------ 상승(롱) 쪽 감지기. 하락 쪽은 가격을 뒤집어서 같은 코드를 쓴다.
-def det_inv_hs(h, l, c, k=4):
+def det_inv_hs(h, l, c, k=4, s=1.0):
     a, pv = atr(h, l, c), confirmed_pivots(h, l, k)
     lows, highs, armed, events, last, ptr = [], [], [], [], -10**9, 0
     for i in range(len(c)):
@@ -44,7 +44,7 @@ def det_inv_hs(h, l, c, k=4):
                 if len(lows) >= 3 and np.isfinite(a[conf]):
                     (pa, va), (pb, vb), (pc, vc) = lows[-3:]
                     A = a[conf]
-                    if pb - pa >= 5 and pc - pb >= 5 and pc - pa <= 150 and min(va, vc) - vb >= 1.5 * A and abs(va - vc) <= 1.0 * A:
+                    if pb - pa >= 5 and pc - pb >= 5 and pc - pa <= 150 and min(va, vc) - vb >= 1.5 / s * A and abs(va - vc) <= 1.0 * s * A:
                         c1 = [x for x in highs if pa < x[0] < pb]
                         c2 = [x for x in highs if pb < x[0] < pc]
                         if c1 and c2:
@@ -67,7 +67,7 @@ def det_inv_hs(h, l, c, k=4):
     return events
 
 
-def det_lines(h, l, c, mode: str, k=4):
+def det_lines(h, l, c, mode: str, k=4, s=1.0):
     """mode='tri' 삼각 수렴(저항 기울기 ≤ 0 ≤ 지지 기울기), 'wedge' 하락 쐐기(저항·지지 모두 하락, 저항이 더 가파름). 상향 돌파 신호."""
     a, pv = atr(h, l, c), confirmed_pivots(h, l, k)
     highs, lows, events, last, ptr, lastconf = [], [], [], -10**9, 0, -10**9
@@ -89,13 +89,13 @@ def det_lines(h, l, c, mode: str, k=4):
             continue
         if mode == "tri" and not (rs <= 0 <= ss):
             continue
-        if mode == "wedge" and not (rs < 0 and ss <= -0.03 * A):
+        if mode == "wedge" and not (rs < 0 and ss <= -0.03 / s * A):
             continue
         res = lambda t_: v2 + rs * (t_ - p2_)
         sup = lambda t_: w2 + ss * (t_ - q2)
         width_i = res(i) - sup(i)
         width_s = (v1 + rs * (start - p1_)) - (w1 + ss * (start - q1))
-        if width_i < 1.5 * A or width_s < 1.6 * width_i:
+        if width_i < 1.5 / s * A or width_s < 1.6 * width_i:
             continue
         if c[i] > res(i) and c[i - 1] <= res(i - 1) and c[i] >= sup(i):
             events.append(i)
@@ -103,7 +103,7 @@ def det_lines(h, l, c, mode: str, k=4):
     return events
 
 
-def det_flag(h, l, c, k=4):
+def det_flag(h, l, c, k=4, s=1.0):
     a, pv = atr(h, l, c), confirmed_pivots(h, l, k)
     highs, events, last, ptr = [], [], -10**9, 0
     for i in range(1, len(c)):
@@ -118,44 +118,44 @@ def det_flag(h, l, c, k=4):
             if not 8 <= i - p <= 40 or not np.isfinite(a[p]):
                 continue
             impulse = h[p] - l[max(0, p - 12):p + 1].min()
-            if impulse < 4 * a[p]:
+            if impulse < 4 / s * a[p]:
                 continue
             retrace = (h[p] - l[p:i].min()) / impulse
-            if retrace <= 0.5 and c[i] > h[p] and c[i - 1] <= h[p]:
+            if retrace <= min(0.8, 0.5 * s) and c[i] > h[p] and c[i - 1] <= h[p]:
                 events.append(i)
                 last = i
                 break
     return events
 
 
-def det_range(h, l, c, n=48):
+def det_range(h, l, c, n=48, s=1.0):
     a = atr(h, l, c)
     events, last = [], -10**9
     for i in range(n + 1, len(c)):
         if i - last <= COOLDOWN or not np.isfinite(a[i - 1]):
             continue
         hi, lo = h[i - n:i].max(), l[i - n:i].min()
-        if hi - lo <= 5 * a[i - 1] and c[i] > hi and c[i - 1] <= hi:
+        if hi - lo <= 5 * s * a[i - 1] and c[i] > hi and c[i - 1] <= hi:
             events.append(i)
             last = i
     return events
 
 
-def bullish_events(code: str, h, l, c):
-    return {"P1": lambda: det_inv_hs(h, l, c), "P3": lambda: det_lines(h, l, c, "tri"), "P5": lambda: det_lines(h, l, c, "wedge"),
-            "P7": lambda: det_flag(h, l, c), "P9": lambda: det_range(h, l, c)}[code]()
+def bullish_events(code: str, h, l, c, k=4, s=1.0):
+    return {"P1": lambda: det_inv_hs(h, l, c, k, s), "P3": lambda: det_lines(h, l, c, "tri", k, s), "P5": lambda: det_lines(h, l, c, "wedge", k, s),
+            "P7": lambda: det_flag(h, l, c, k, s), "P9": lambda: det_range(h, l, c, 48, s)}[code]()
 
 
-def events_for(pat: str, h, l, c) -> list[int]:
+def events_for(pat: str, h, l, c, k: int = 4, s: float = 1.0) -> list[int]:
     if pat == "P0W":
-        return p1.find_events(h, l, c, "W")
+        return p1.find_events(h, l, c, "W", k, s)
     if pat == "P0M":
-        return p1.find_events(h, l, c, "M")
+        return p1.find_events(h, l, c, "M", k, s)
     n = int(pat[1:])
     if n % 2 == 1:                                  # 홀수 = 상승(롱)
-        return bullish_events(pat, h, l, c)
+        return bullish_events(pat, h, l, c, k, s)
     fh, fl, fc = _flip(h, l, c)                     # 짝수 = 하락(숏): 뒤집은 가격에서 같은 감지기를 쓴다
-    return bullish_events(f"P{n - 1}", fh, fl, fc)
+    return bullish_events(f"P{n - 1}", fh, fl, fc, k, s)
 
 
 # ------------------------------------------------------------------ 평가

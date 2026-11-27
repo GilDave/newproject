@@ -40,13 +40,13 @@ def confirmed_pivots(h, l, k=K):
     return out
 
 
-def find_events(h, l, c, kind: str) -> list[int]:
-    """kind='W'(롱 신호) 또는 'M'(숏 신호). 돌파가 일어난 봉의 인덱스 목록(그 봉 종가에 진입)."""
+def find_events(h, l, c, kind: str, k: int = K, s: float = 1.0) -> list[int]:
+    """kind='W'(롱 신호) 또는 'M'(숏 신호). 돌파가 일어난 봉의 인덱스 목록(그 봉 종가에 진입). k = 피벗 좌우 봉 수, s = 허용도 배율(클수록 완화)."""
     a = atr(h, l, c)
     sign = 1 if kind == "W" else -1
     ext, opp = ("L", "H") if kind == "W" else ("H", "L")
     px = l if kind == "W" else h          # 바닥(꼭대기) 가격
-    pv = confirmed_pivots(h, l)
+    pv = confirmed_pivots(h, l, k)
     events, armed, last_ext, seen_opp = [], [], None, []   # armed: dict(neck, lo, until, start)
     ptr = 0
     for i in range(len(c)):
@@ -64,7 +64,7 @@ def find_events(h, l, c, kind: str) -> list[int]:
                         neck = max(mids) if kind == "W" else min(mids)
                         e1, e2 = px[p1], px[p]
                         near = max(e1, e2) if kind == "W" else min(e1, e2)
-                        if abs(e1 - e2) <= 0.6 * a[conf] and sign * (neck - near) >= 2 * a[conf]:
+                        if abs(e1 - e2) <= 0.6 * s * a[conf] and sign * (neck - near) >= 2 / s * a[conf]:
                             armed.append({"neck": neck, "bad": (min(e1, e2) - 0.5 * a[conf]) if kind == "W" else (max(e1, e2) + 0.5 * a[conf]),
                                           "until": conf + 48, "from": conf})
                 last_ext = p

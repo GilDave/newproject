@@ -136,8 +136,11 @@ def overlays_for(sym, cd, base, cfg, ctx):
     out["C9"] = (m9, m9)
     for k, flag in ctx["macro"].items():                            # 거시: 이미 마감한 미국장 종가 기준 플래그
         v = asof(ctx["macro_close_ms"], flag, ts + BAR_MS)
-        m = np.where(np.nan_to_num(v, nan=0.0) > 0, HALF, 1.0)
-        out[k] = (m, m)
+        on = np.nan_to_num(v, nan=0.0) > 0
+        out[k] = (np.where(on, HALF, 1.0), np.where(on, HALF, 1.0))
+        if ctx.get("overlap"):                                      # BTC 필터 조건 또는 거시 조건이면 ×0.5 (중복 시험)
+            u = np.where(f | on, HALF, 1.0)
+            out[f"C1+{k}"] = (u, u)
     return out
 
 
@@ -214,7 +217,7 @@ def macro_flags(cache: Path):
     return flags, close_ms
 
 
-def run(use_macro: bool = True, cache_dir: str = "data/learn_cache", macro_cache: str = "data/macro_cache", log=print) -> dict:
+def run(use_macro: bool = True, cache_dir: str = "data/learn_cache", macro_cache: str = "data/macro_cache", log=print, overlap: bool = False) -> dict:
     cfg = Config()
     t = cfg.trend
     bpy = 365 * 24 * 60 / t.trend_interval_min
@@ -237,7 +240,8 @@ def run(use_macro: bool = True, cache_dir: str = "data/learn_cache", macro_cache
             log("거시 후보 건너뜀:", exc)
     else:
         skipped = {k: "--no-macro" for k in MACRO}
-    names = ["base"] + list(CRYPTO) + [k for k in MACRO if k not in skipped]
+    ctx["overlap"] = bool(overlap and ctx["macro"])
+    names = ["base"] + list(CRYPTO) + [k for k in MACRO if k not in skipped] + ([f"C1+{k}" for k in MACRO if k in ctx["macro"]] if ctx["overlap"] else [])
     series = {k: {} for k in names}
     for s, cd in pool.items():
         e = cd.bars
@@ -260,8 +264,19 @@ def run(use_macro: bool = True, cache_dir: str = "data/learn_cache", macro_cache
     if not ok:
         return out
     for k in names[1:]:
-        ci = {p: boot(allts, ports["base"][1], ports[k][1], periods[p], bpy) for p in periods}
-        out["verdict"][k] = judge(res["base"], res[k], ci)
+        ref = "C1" if k.startswith("C1+") else "base"             # 중복 시험은 BTC 필터(C1)를 새 기준으로 삼는다
+        ci = {p: boot(allts, ports[ref][1], ports[k][1], periods[p], bpy) for p in periods}
+        out["verdict"][k] = {**judge(res[ref], res[k], ci), "ref": ref}
+    if ctx["overlap"]:
+        btc_ts = ctx["btc_ts"]
+        c1 = np.nan_to_num(ctx["btc_below"], nan=0.0) > 0
+        ov = {"c1_on_pct": float(c1.mean() * 100), "flags": {}}
+        for k, flag in ctx["macro"].items():
+            m = np.nan_to_num(asof(ctx["macro_close_ms"], flag, btc_ts + BAR_MS), nan=0.0) > 0
+            both = float((m & c1).sum())
+            ov["flags"][k] = {"on_pct": float(m.mean() * 100), "p_given_c1_pct": float(both / c1.sum() * 100) if c1.sum() else None,
+                              "phi": float(np.corrcoef(m.astype(float), c1.astype(float))[0, 1]) if m.std() > 0 and c1.std() > 0 else None}
+        out["overlap"] = ov
     return out
 
 
@@ -274,13 +289,28 @@ def render(out: dict) -> str:
     L.append(f"{'후보':26s} {'전체 샤프':>9s} {'ΔS':>6s} {'ΔMDD':>6s} | {'홀드 샤프':>9s} {'ΔS':>6s} {'ΔMDD':>6s} | 판정")
     b = r["base"]
     L.append(f"{'기준(현재 전략)':26s} {b['full']['sharpe']:9.2f} {'':6s} {'':6s} | {b['hold']['sharpe']:9.2f} {'':6s} {'':6s} |")
-    names = {**CRYPTO, **MACRO}
+    names = {**CRYPTO, **MACRO, **{f"C1+{k}": f"BTC 필터 + {v}" for k, v in MACRO.items()}}
     for k, v in out["verdict"].items():
+        if v.get("ref") == "C1":
+            continue
         f, h = r[k]["full"], r[k]["hold"]
         L.append(f"{k + ' ' + names[k]:26s} {f['sharpe']:9.2f} {v['dSharpe']['full']:+6.2f} {v['dMDD']['full']:+6.1f} | {h['sharpe']:9.2f} {v['dSharpe']['hold']:+6.2f} {v['dMDD']['hold']:+6.1f} | {v['verdict']}")
     for k, why in out["skipped"].items():
         L.append(f"{k + ' ' + names[k]:26s} 건너뜀: {why}")
-    keep = [k for k, v in out["verdict"].items() if v["point_pass"]]
+    ov_rows = [(k, v) for k, v in out["verdict"].items() if v.get("ref") == "C1"]
+    if ov_rows:
+        c1 = r["C1"]
+        L += ["", f"[BTC 필터(C1)와의 중복] BTC 필터가 켜져 있는 시간 {out['overlap']['c1_on_pct']:.1f}%",
+              f"  {'거시 플래그':22s} {'켜짐%':>6s} {'C1 켜졌을 때 %':>14s} {'상관(phi)':>9s}"]
+        for k, o in out["overlap"]["flags"].items():
+            f2 = lambda v: "  —  " if v is None else f"{v:6.1f}"
+            L.append(f"  {k + ' ' + MACRO[k]:22s} {o['on_pct']:6.1f} {f2(o['p_given_c1_pct']):>14s} {('  —  ' if o['phi'] is None else format(o['phi'], '+.2f')):>9s}")
+        L.append(f"  기준 C1 단독: 전체 샤프 {c1['full']['sharpe']:.2f} · 홀드아웃 {c1['hold']['sharpe']:.2f} (낙폭 {c1['full']['mdd']:.1f}% / {c1['hold']['mdd']:.1f}%)")
+        for k, v in ov_rows:
+            f, h = r[k]["full"], r[k]["hold"]
+            L.append(f"  {names[k]:26s} 전체 {f['sharpe']:.2f} (C1 대비 {v['dSharpe']['full']:+.2f}) · 홀드 {h['sharpe']:.2f} ({v['dSharpe']['hold']:+.2f}) · 낙폭 {v['dMDD']['full']:+.1f}/{v['dMDD']['hold']:+.1f} | {'C1 위에 추가 가치(보류)' if v['point_pass'] else '중복/무의미 — 폐기'}")
+        L.append("  판정: C1 보다 샤프가 +0.10 이상(전체·홀드아웃 모두) 좋아지지 않으면 거시 지표는 BTC 필터와 겹치는 것으로 봅니다.")
+    keep = [k for k, v in out["verdict"].items() if v["point_pass"] and v.get("ref") != "C1"]
     L += ["", "통과한 후보: " + (", ".join(keep) if keep else "없음 — 모두 폐기"),
           "주의: 후보 13개를 동시에 시험했으니 통과한 것이 있어도 우연일 수 있습니다. 그림자 계좌로 전진검증하기 전에는 본 계좌에 연결하지 않습니다."]
     return "\n".join(L)
@@ -289,11 +319,12 @@ def render(out: dict) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--no-macro", action="store_true")
+    ap.add_argument("--overlap", action="store_true", help="BTC 필터(C1)와 거시 지표의 겹침을 보고, C1 위에 거시 조건을 더한 조합을 시험한다")
     ap.add_argument("--cache", default="data/learn_cache")
     ap.add_argument("--macro-cache", default="data/macro_cache")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    out = run(not a.no_macro, a.cache, a.macro_cache)
+    out = run(not a.no_macro, a.cache, a.macro_cache, overlap=a.overlap)
     print(render(out))
     if a.out:
         Path(a.out).write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
